@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"io"
+	"strings"
 	"testing"
 	"time"
 )
@@ -37,5 +38,31 @@ func TestStandaloneRenderers(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("xlsx sheet missing")
+	}
+}
+
+func TestRenderCSVCampaignReportIncludesCommercialPoolsAndWarnings(t *testing.T) {
+	report := CampaignReport{
+		CampaignID:  "c1",
+		Name:        "National campaign",
+		Status:      "COMPLETED_WITH_EXCEPTIONS",
+		Audience:    map[string]int64{"authorised": 2000000},
+		Delivery:    map[string]int64{"delivered": 1900000},
+		Engagement:  map[string]int64{"optOuts": 1500},
+		Exceptions:  map[string]int64{"unknown": 25},
+		Commercial:  CampaignCommercialReport{Status: "APPROVED", QuotationReference: "QUO-1", InvoiceReference: "INV-1", Currency: "NGN", ApprovedRecipients: 2000000, TotalAmountMinor: 100000000},
+		Pools:       []CampaignPoolReport{{SenderPoolID: "p1", SenderPoolName: "Nigeria WWebJS A", GatewayPoolID: "g1", Provider: "OPENWA", Engine: "WHATSAPP_WEB_JS", ReservedMessagesPerMinute: 500, Recipients: map[string]int64{"delivered": 950000, "unknown": 10}}},
+		Warnings:    []string{"UNKNOWN_OUTCOMES_REQUIRE_RECONCILIATION"},
+		GeneratedAt: time.Now(),
+	}
+	payload, err := renderCSV(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(payload)
+	for _, expected := range []string{"commercial,status,APPROVED", "commercial,quotationReference,QUO-1", "pool:Nigeria WWebJS A,engine,WHATSAPP_WEB_JS", "pool:Nigeria WWebJS A,reservedMessagesPerMinute,500", "warning,UNKNOWN_OUTCOMES_REQUIRE_RECONCILIATION,1"} {
+		if !strings.Contains(text, expected) {
+			t.Fatalf("expected CSV to contain %q; got %s", expected, text)
+		}
 	}
 }

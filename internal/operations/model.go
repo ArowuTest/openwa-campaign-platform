@@ -62,19 +62,48 @@ type DeliveryException struct {
 	UpdatedAt         time.Time `json:"updatedAt"`
 }
 
+type CampaignPoolReport struct {
+	SenderPoolID              string           `json:"senderPoolId"`
+	SenderPoolName            string           `json:"senderPoolName"`
+	GatewayPoolID             string           `json:"gatewayPoolId"`
+	Provider                  string           `json:"provider"`
+	Engine                    string           `json:"engine"`
+	MaximumRecipients         int64            `json:"maximumRecipients"`
+	ReservedMessagesPerMinute int64            `json:"reservedMessagesPerMinute"`
+	ReservedHourlyUnits       int64            `json:"reservedHourlyUnits"`
+	ReservedDailyUnits        int64            `json:"reservedDailyUnits"`
+	Recipients                map[string]int64 `json:"recipients"`
+}
+
+type CampaignCommercialReport struct {
+	Status             string     `json:"status"`
+	QuotationReference string     `json:"quotationReference,omitempty"`
+	InvoiceReference   string     `json:"invoiceReference,omitempty"`
+	Currency           string     `json:"currency,omitempty"`
+	ApprovedRecipients int64      `json:"approvedRecipients"`
+	UnitPriceMinor     int64      `json:"unitPriceMinor"`
+	ManagementFeeMinor int64      `json:"managementFeeMinor"`
+	TotalAmountMinor   int64      `json:"totalAmountMinor"`
+	PaymentReference   string     `json:"paymentReference,omitempty"`
+	PaymentReceivedAt  *time.Time `json:"paymentReceivedAt,omitempty"`
+}
+
 type CampaignReport struct {
-	CampaignID     string           `json:"campaignId"`
-	OrganisationID string           `json:"organisationId"`
-	Name           string           `json:"name"`
-	Purpose        string           `json:"purpose"`
-	Status         string           `json:"status"`
-	Audience       map[string]int64 `json:"audience"`
-	Delivery       map[string]int64 `json:"delivery"`
-	Engagement     map[string]int64 `json:"engagement"`
-	Exceptions     map[string]int64 `json:"exceptions"`
-	StartedAt      *time.Time       `json:"startedAt,omitempty"`
-	CompletedAt    *time.Time       `json:"completedAt,omitempty"`
-	GeneratedAt    time.Time        `json:"generatedAt"`
+	CampaignID     string                   `json:"campaignId"`
+	OrganisationID string                   `json:"organisationId"`
+	Name           string                   `json:"name"`
+	Purpose        string                   `json:"purpose"`
+	Status         string                   `json:"status"`
+	Audience       map[string]int64         `json:"audience"`
+	Delivery       map[string]int64         `json:"delivery"`
+	Engagement     map[string]int64         `json:"engagement"`
+	Exceptions     map[string]int64         `json:"exceptions"`
+	Commercial     CampaignCommercialReport `json:"commercial"`
+	Pools          []CampaignPoolReport     `json:"pools"`
+	Warnings       []string                 `json:"warnings"`
+	StartedAt      *time.Time               `json:"startedAt,omitempty"`
+	CompletedAt    *time.Time               `json:"completedAt,omitempty"`
+	GeneratedAt    time.Time                `json:"generatedAt"`
 }
 type ExportStatus string
 

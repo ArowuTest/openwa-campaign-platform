@@ -120,20 +120,75 @@ func (r *PostgreSQLRepository) UpdateIncident(ctx context.Context, v Incident, e
 func (r *PostgreSQLRepository) CampaignReport(ctx context.Context, id string, now time.Time) (CampaignReport, error) {
 	var v CampaignReport
 	var started, completed sql.NullTime
-	err := r.DB.QueryRowContext(ctx, `SELECT c.id::text,c.organisation_id::text,c.name,cp.name,c.status,c.execution_started_at,c.execution_completed_at,coalesce(cm.authorised_total,0),coalesce(cm.queued_total,0),coalesce(cm.submitted_total,0),coalesce(cm.sent_total,0),coalesce(cm.delivered_total,0),coalesce(cm.read_total,0),coalesce(cm.failed_total,0),coalesce(cm.unknown_total,0),coalesce(cm.suppressed_total,0),coalesce(cm.opt_out_total,0) FROM campaigns c JOIN consent_purposes cp ON cp.id=c.purpose_id LEFT JOIN campaign_metrics cm ON cm.campaign_id=c.id WHERE c.id=$1::uuid`, id).Scan(&v.CampaignID, &v.OrganisationID, &v.Name, &v.Purpose, &v.Status, &started, &completed, new(int64), new(int64), new(int64), new(int64), new(int64), new(int64), new(int64), new(int64), new(int64), new(int64))
+	err := r.DB.QueryRowContext(ctx, `SELECT c.id::text,c.organisation_id::text,c.name,cp.name,c.status,c.execution_started_at,c.execution_completed_at FROM campaigns c JOIN consent_purposes cp ON cp.id=c.purpose_id WHERE c.id=$1::uuid`, id).Scan(&v.CampaignID, &v.OrganisationID, &v.Name, &v.Purpose, &v.Status, &started, &completed)
 	if errors.Is(err, sql.ErrNoRows) {
 		return v, ErrNotFound
 	}
 	if err != nil {
 		return v, err
 	}
-	// query metrics separately for clear mapping
 	var a, q, sub, sent, del, read, fail, unk, supp, opt int64
 	_ = r.DB.QueryRowContext(ctx, `SELECT authorised_total,queued_total,submitted_total,sent_total,delivered_total,read_total,failed_total,unknown_total,suppressed_total,opt_out_total FROM campaign_metrics WHERE campaign_id=$1::uuid`, id).Scan(&a, &q, &sub, &sent, &del, &read, &fail, &unk, &supp, &opt)
 	v.Audience = map[string]int64{"authorised": a, "suppressed": supp}
 	v.Delivery = map[string]int64{"queued": q, "submitted": sub, "sent": sent, "delivered": del, "read": read}
 	v.Engagement = map[string]int64{"optOuts": opt}
 	v.Exceptions = map[string]int64{"failed": fail, "unknown": unk}
+	v.Pools = []CampaignPoolReport{}
+	v.Warnings = []string{}
+	var paymentAt sql.NullTime
+	commercialErr := r.DB.QueryRowContext(ctx, `SELECT status,quotation_reference,invoice_reference,currency,approved_recipients,unit_price_minor,management_fee_minor,total_amount_minor,coalesce(payment_reference,''),payment_received_at FROM campaign_commercial_approvals WHERE campaign_id=$1::uuid`, id).Scan(&v.Commercial.Status, &v.Commercial.QuotationReference, &v.Commercial.InvoiceReference, &v.Commercial.Currency, &v.Commercial.ApprovedRecipients, &v.Commercial.UnitPriceMinor, &v.Commercial.ManagementFeeMinor, &v.Commercial.TotalAmountMinor, &v.Commercial.PaymentReference, &paymentAt)
+	if commercialErr != nil && !errors.Is(commercialErr, sql.ErrNoRows) {
+		return v, commercialErr
+	}
+	if paymentAt.Valid {
+		t := paymentAt.Time.UTC()
+		v.Commercial.PaymentReceivedAt = &t
+	}
+	rows, err := r.DB.QueryContext(ctx, `
+WITH latest_plan AS (
+ SELECT id FROM campaign_routing_plans WHERE campaign_id=$1::uuid ORDER BY plan_version DESC,approved_at DESC LIMIT 1
+)
+SELECT p.sender_pool_id::text,sp.name,p.gateway_pool_id::text,p.provider,p.engine,p.maximum_recipients,p.reserved_messages_per_minute,p.reserved_hourly_units,p.reserved_daily_units,
+ count(cr.id) FILTER (WHERE cr.id IS NOT NULL),
+ count(cr.id) FILTER (WHERE cr.status IN('AUTHORISED','QUEUED','CLAIMED')),
+ count(cr.id) FILTER (WHERE cr.status IN('SUBMITTING','GATEWAY_ACCEPTED')),
+ count(cr.id) FILTER (WHERE cr.status='SENT'),
+ count(cr.id) FILTER (WHERE cr.status='DELIVERED'),
+ count(cr.id) FILTER (WHERE cr.status='READ'),
+ count(cr.id) FILTER (WHERE cr.status IN('FAILED_RETRYABLE','FAILED_PERMANENT')),
+ count(cr.id) FILTER (WHERE cr.status='UNKNOWN')
+FROM latest_plan lp
+JOIN campaign_routing_plan_pools p ON p.routing_plan_id=lp.id
+JOIN sender_pools sp ON sp.id=p.sender_pool_id
+LEFT JOIN sender_sessions ss ON ss.sender_pool_id=p.sender_pool_id
+LEFT JOIN campaign_recipients cr ON cr.campaign_id=$1::uuid AND cr.assigned_session_id=ss.id
+GROUP BY p.sender_pool_id,sp.name,p.gateway_pool_id,p.provider,p.engine,p.maximum_recipients,p.reserved_messages_per_minute,p.reserved_hourly_units,p.reserved_daily_units
+ORDER BY sp.name,p.sender_pool_id`, id)
+	if err != nil {
+		return v, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var pool CampaignPoolReport
+		var total, queued, submitted, psent, pdelivered, pread, pfailed, punknown int64
+		if err := rows.Scan(&pool.SenderPoolID, &pool.SenderPoolName, &pool.GatewayPoolID, &pool.Provider, &pool.Engine, &pool.MaximumRecipients, &pool.ReservedMessagesPerMinute, &pool.ReservedHourlyUnits, &pool.ReservedDailyUnits, &total, &queued, &submitted, &psent, &pdelivered, &pread, &pfailed, &punknown); err != nil {
+			return v, err
+		}
+		pool.Recipients = map[string]int64{"total": total, "queued": queued, "submittedOrAccepted": submitted, "sent": psent, "delivered": pdelivered, "read": pread, "failed": pfailed, "unknown": punknown}
+		v.Pools = append(v.Pools, pool)
+	}
+	if err := rows.Err(); err != nil {
+		return v, err
+	}
+	if v.Commercial.Status == "" {
+		v.Warnings = append(v.Warnings, "COMMERCIAL_EVIDENCE_UNAVAILABLE")
+	}
+	if len(v.Pools) == 0 {
+		v.Warnings = append(v.Warnings, "ROUTING_PLAN_UNAVAILABLE")
+	}
+	if unk > 0 {
+		v.Warnings = append(v.Warnings, "UNKNOWN_OUTCOMES_REQUIRE_RECONCILIATION")
+	}
 	v.GeneratedAt = now
 	if started.Valid {
 		t := started.Time
@@ -145,6 +200,7 @@ func (r *PostgreSQLRepository) CampaignReport(ctx context.Context, id string, no
 	}
 	return v, nil
 }
+
 func scanExport(s interface{ Scan(...any) error }) (ExportRequest, error) {
 	var v ExportRequest
 	var exp sql.NullTime

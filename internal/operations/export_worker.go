@@ -147,6 +147,12 @@ func renderCSV(value any) ([]byte, error) {
 		_ = wr.Write([]string{"campaign", "id", v.CampaignID})
 		_ = wr.Write([]string{"campaign", "name", v.Name})
 		_ = wr.Write([]string{"campaign", "status", v.Status})
+		_ = wr.Write([]string{"commercial", "status", v.Commercial.Status})
+		_ = wr.Write([]string{"commercial", "quotationReference", v.Commercial.QuotationReference})
+		_ = wr.Write([]string{"commercial", "invoiceReference", v.Commercial.InvoiceReference})
+		_ = wr.Write([]string{"commercial", "currency", v.Commercial.Currency})
+		_ = wr.Write([]string{"commercial", "approvedRecipients", fmt.Sprint(v.Commercial.ApprovedRecipients)})
+		_ = wr.Write([]string{"commercial", "totalAmountMinor", fmt.Sprint(v.Commercial.TotalAmountMinor)})
 		maps := []struct {
 			name string
 			m    map[string]int64
@@ -160,6 +166,23 @@ func renderCSV(value any) ([]byte, error) {
 			for _, k := range keys {
 				_ = wr.Write([]string{group.name, k, fmt.Sprint(group.m[k])})
 			}
+		}
+		for _, pool := range v.Pools {
+			prefix := "pool:" + pool.SenderPoolName
+			_ = wr.Write([]string{prefix, "engine", pool.Engine})
+			_ = wr.Write([]string{prefix, "gatewayPoolId", pool.GatewayPoolID})
+			_ = wr.Write([]string{prefix, "reservedMessagesPerMinute", fmt.Sprint(pool.ReservedMessagesPerMinute)})
+			keys := make([]string, 0, len(pool.Recipients))
+			for k := range pool.Recipients {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				_ = wr.Write([]string{prefix, k, fmt.Sprint(pool.Recipients[k])})
+			}
+		}
+		for _, warning := range v.Warnings {
+			_ = wr.Write([]string{"warning", warning, "1"})
 		}
 	case []audit.Event:
 		_ = wr.Write([]string{"sequence", "occurred_at", "actor_type", "actor_id", "action", "object_type", "object_id", "reason", "correlation_id", "hash"})

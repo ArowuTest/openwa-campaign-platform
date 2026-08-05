@@ -31,13 +31,13 @@ This first audit pass reviewed repository recoverability, build coverage, organi
 ### AUD-004 — Suspended-organisation release enforcement incomplete
 
 - Severity: High
-- Status: Open
+- Status: Closed in 0.8.4
 - Finding: organisations can now be governed as suspended, under review or closed, but campaign creation/release and final eligibility do not yet all fail closed on that status.
-- Required remediation: bind organisation status checks into campaign pre-flight, consent-review selection, import approval and release execution. Retain an immutable reason in release evidence.
+- Remediation: organisation status is rechecked during campaign creation and progression, consent review, audience import approval and final release. Safety actions remain available after suspension.
 
 ### AUD-005 — Organisation restrictions remain unstructured
 
 - Severity: Medium
-- Status: Open
+- Status: Closed in 0.8.6
 - Finding: free-text internal notes do not fully satisfy organisation-specific permitted/prohibited purposes, retention and report-branding requirements.
-- Required remediation: add governed organisation policy versions rather than expanding an unstructured organisation row.
+- Remediation: effective-dated maker-checker organisation policy versions now govern allowed/prohibited purposes, retention periods and report-branding metadata; campaign creation enforces the active purpose policy.

@@ -1,6 +1,6 @@
 # Current status
 
-Version `0.8.4` is the latest backend-remediation checkpoint on branch `work/backend-adversarial-remediation`.
+Version `0.8.6` is the latest backend-remediation checkpoint on branch `work/backend-adversarial-remediation-iii`.
 
 Completed capability milestones in the actual repository history:
 
@@ -12,6 +12,8 @@ Completed capability milestones in the actual repository history:
 - 0.8.2 programme governance, independent-audit plan and machine-readable release gates.
 - 0.8.3 organisation lifecycle administration and initial audit remediation.
 - 0.8.4 organisation fail-closed enforcement, OpenAPI route reconciliation and mandatory worker topology.
+- 0.8.5 governed audience merge conflicts and source-trust controls.
+- 0.8.6 governed organisation purpose, retention and report-branding policy versions.
 
 The repository remains pre-production. The generated SRS traceability matrix currently contains many `NOT_STARTED` requirements, and the hard release gate intentionally remains open. Live PostgreSQL migration execution, dependency-resolved OpenWA builds, genuine WhatsApp sessions, production-scale performance evidence, frontend completion, security assurance and disaster-recovery evidence are outstanding.
 

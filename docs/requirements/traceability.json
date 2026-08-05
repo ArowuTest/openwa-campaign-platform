@@ -525,9 +525,15 @@
     "requirement": "Record organisation-level restrictions and prohibited purposes.",
     "priority": "Must",
     "acceptance": "Ineligible campaign purpose is blocked.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/organisation/policy.go",
+      "internal/organisation/policy_test.go",
+      "internal/persistence/postgres/organisation_policy.go",
+      "database/migrations/0038_organisation_policy_governance.sql",
+      "internal/platform/httpserver/server.go"
+    ],
+    "notes": "Organisation-specific allowed and prohibited campaign purposes are governed through versioned maker-checker policy records and enforced during campaign creation."
   },
   {
     "id": "ORG-006",
@@ -581,9 +587,14 @@
     "requirement": "Support organisation-specific data-retention and report branding settings.",
     "priority": "Must",
     "acceptance": "Generated report uses approved configuration version.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/organisation/policy.go",
+      "internal/organisation/policy_test.go",
+      "internal/persistence/postgres/organisation_policy.go",
+      "database/migrations/0038_organisation_policy_governance.sql"
+    ],
+    "notes": "Effective-dated organisation policy versions govern contact/campaign retention periods and report branding metadata."
   },
   {
     "id": "CRV-001",
@@ -3243,13 +3254,16 @@
     "requirement": "A suspended organisation or sender cannot be selected for a new release.",
     "priority": "Must",
     "acceptance": "See acceptance criteria and linked tests.",
-    "status": "PARTIAL",
+    "status": "IMPLEMENTED_TESTED",
     "evidence": [
-      "internal/organisation/model.go",
       "internal/organisation/service.go",
-      "database/migrations/0036_organisation_lifecycle_governance.sql"
+      "internal/campaign/service.go",
+      "internal/consent/review.go",
+      "internal/audience/importer/import.go",
+      "internal/orchestration/release.go",
+      "internal/campaign/organisation_policy_test.go"
     ],
-    "notes": "Organisation suspension and closure are governed. Campaign release/pre-flight enforcement against suspended organisations remains to be wired."
+    "notes": "Inactive organisations fail closed across campaign creation/progression, consent review, import approval and release; safety actions such as pause/cancel remain available."
   },
   {
     "id": "BR-030",

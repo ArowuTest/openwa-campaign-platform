@@ -1055,6 +1055,66 @@ paths:
         '400': { description: Invalid request }
         '401': { description: Authentication required }
         '403': { description: Permission denied }
+  /organisations/{id}/policies:
+    get:
+      summary: List governed organisation policy versions
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Organisation policy versions }
+    post:
+      summary: Create a draft organisation policy version
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OrganisationPolicyDraft' }
+      responses:
+        '201': { description: Draft created }
+  /organisation-policies/{id}/submit:
+    post:
+      summary: Submit an organisation policy for independent approval
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VersionedReason' }
+      responses:
+        '200': { description: Submitted }
+  /organisation-policies/{id}/decision:
+    post:
+      summary: Approve or reject a governed organisation policy
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expectedVersion, approve, reason]
+              properties:
+                expectedVersion: { type: integer, format: int64, minimum: 1 }
+                approve: { type: boolean }
+                reason: { type: string, minLength: 5 }
+      responses:
+        '200': { description: Decision recorded }
 components:
   securitySchemes:
     internalSession:
@@ -1073,6 +1133,28 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
   schemas:
+    VersionedReason:
+      type: object
+      required: [expectedVersion, reason]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 1 }
+        reason: { type: string, minLength: 5 }
+    OrganisationPolicyDraft:
+      type: object
+      required: [contactRetentionDays, campaignRetentionDays, effectiveFrom, reason]
+      properties:
+        allowedPurposeIds:
+          type: array
+          items: { type: string }
+        prohibitedPurposeIds:
+          type: array
+          items: { type: string }
+        contactRetentionDays: { type: integer, minimum: 1, maximum: 3650 }
+        campaignRetentionDays: { type: integer, minimum: 30, maximum: 3650 }
+        reportBrandName: { type: string, maxLength: 160 }
+        reportFooter: { type: string, maxLength: 500 }
+        effectiveFrom: { type: string, format: date-time }
+        reason: { type: string, minLength: 5 }
     LoginRequest:
       type: object
       required: [email, password]

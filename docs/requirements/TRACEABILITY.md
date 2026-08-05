@@ -6,10 +6,10 @@ Total requirements: **398**
 
 | Status | Count |
 |---|---:|
-| IMPLEMENTED_TESTED | 37 |
-| PARTIAL | 32 |
+| IMPLEMENTED_TESTED | 40 |
+| PARTIAL | 31 |
 | BLOCKED_EXTERNAL | 0 |
-| NOT_STARTED | 329 |
+| NOT_STARTED | 327 |
 
 | ID | Priority | Status | Requirement | Evidence / notes |
 |---|---|---|---|---|
@@ -63,12 +63,12 @@ Total requirements: **398**
 | ORG-002 | Must | NOT_STARTED | Store legal/trading name, country, registration reference, industry and status. |  |
 | ORG-003 | Must | NOT_STARTED | Store one or more internal and external contacts with role and communication details. |  |
 | ORG-004 | Must | NOT_STARTED | Record controller, processor or joint-controller role where known. |  |
-| ORG-005 | Must | NOT_STARTED | Record organisation-level restrictions and prohibited purposes. |  |
+| ORG-005 | Must | IMPLEMENTED_TESTED | Record organisation-level restrictions and prohibited purposes. | `internal/organisation/policy.go`, `internal/organisation/policy_test.go`, `internal/persistence/postgres/organisation_policy.go`, `database/migrations/0038_organisation_policy_governance.sql`, `internal/platform/httpserver/server.go` — Organisation-specific allowed and prohibited campaign purposes are governed through versioned maker-checker policy records and enforced during campaign creation. |
 | ORG-006 | Must | NOT_STARTED | Support active, suspended, under-review and closed status. |  |
 | ORG-007 | Must | NOT_STARTED | Record commercial references such as quote, invoice and payment status. |  |
 | ORG-008 | Must | IMPLEMENTED_TESTED | Retain an audit history of organisation changes. | `internal/organisation/service.go`, `internal/persistence/postgres/organisation.go`, `database/migrations/0036_organisation_lifecycle_governance.sql`, `internal/organisation/lifecycle_test.go`, `internal/platform/httpserver/server_test.go` — Material profile and lifecycle changes create immutable versioned organisation events with actor, reason and before/after status evidence. |
 | ORG-009 | Must | IMPLEMENTED_TESTED | Prevent accidental duplicate organisation creation. | `internal/organisation/service.go`, `internal/persistence/postgres/organisation.go`, `database/migrations/0036_organisation_lifecycle_governance.sql`, `internal/organisation/lifecycle_test.go` — Active organisations are protected by a normalised legal-name and country uniqueness rule in both memory and PostgreSQL repositories. |
-| ORG-010 | Must | NOT_STARTED | Support organisation-specific data-retention and report branding settings. |  |
+| ORG-010 | Must | IMPLEMENTED_TESTED | Support organisation-specific data-retention and report branding settings. | `internal/organisation/policy.go`, `internal/organisation/policy_test.go`, `internal/persistence/postgres/organisation_policy.go`, `database/migrations/0038_organisation_policy_governance.sql` — Effective-dated organisation policy versions govern contact/campaign retention periods and report branding metadata. |
 | CRV-001 | Must | NOT_STARTED | Create a consent review at organisation, source or campaign scope. |  |
 | CRV-002 | Must | NOT_STARTED | Record consent collection method, source system, URL/form identifier and date range. |  |
 | CRV-003 | Must | NOT_STARTED | Record the consent wording or an immutable reference and wording version. |  |
@@ -346,7 +346,7 @@ Total requirements: **398**
 | BR-026 | Must | NOT_STARTED | Configuration used for consent, segmentation, dispatch and reporting is versioned and retained with the campaign. |  |
 | BR-027 | Must | NOT_STARTED | Small demographic report cells are suppressed or grouped according to privacy threshold. |  |
 | BR-028 | Must | NOT_STARTED | Campaign evidence and source files are retained or deleted only according to approved retention rules. |  |
-| BR-029 | Must | PARTIAL | A suspended organisation or sender cannot be selected for a new release. | `internal/organisation/model.go`, `internal/organisation/service.go`, `database/migrations/0036_organisation_lifecycle_governance.sql` — Organisation suspension and closure are governed. Campaign release/pre-flight enforcement against suspended organisations remains to be wired. |
+| BR-029 | Must | IMPLEMENTED_TESTED | A suspended organisation or sender cannot be selected for a new release. | `internal/organisation/service.go`, `internal/campaign/service.go`, `internal/consent/review.go`, `internal/audience/importer/import.go`, `internal/orchestration/release.go`, `internal/campaign/organisation_policy_test.go` — Inactive organisations fail closed across campaign creation/progression, consent review, import approval and release; safety actions such as pause/cancel remain available. |
 | BR-030 | Must | NOT_STARTED | All campaign and sender status changes are attributable to a user, service or system policy. |  |
 | API-001 | Must | NOT_STARTED | Gateway delivery command shall not contain raw consent or unnecessary demographic data. |  |
 | API-002 | Must | NOT_STARTED | Recipient data shall be decrypted only within the minimum authorised boundary required to send. |  |

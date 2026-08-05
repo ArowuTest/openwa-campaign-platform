@@ -145,12 +145,15 @@
   },
   "BR-029": {
     "evidence": [
-      "internal/organisation/model.go",
       "internal/organisation/service.go",
-      "database/migrations/0036_organisation_lifecycle_governance.sql"
+      "internal/campaign/service.go",
+      "internal/consent/review.go",
+      "internal/audience/importer/import.go",
+      "internal/orchestration/release.go",
+      "internal/campaign/organisation_policy_test.go"
     ],
-    "notes": "Organisation suspension and closure are governed. Campaign release/pre-flight enforcement against suspended organisations remains to be wired.",
-    "status": "PARTIAL"
+    "notes": "Inactive organisations fail closed across campaign creation/progression, consent review, import approval and release; safety actions such as pause/cancel remain available.",
+    "status": "IMPLEMENTED_TESTED"
   },
   "CNS-011": {
     "evidence": [
@@ -492,6 +495,17 @@
     "notes": "Internal organisation creation, retrieval, listing and persistent runtime composition are implemented without external portal identities.",
     "status": "IMPLEMENTED_TESTED"
   },
+  "ORG-005": {
+    "evidence": [
+      "internal/organisation/policy.go",
+      "internal/organisation/policy_test.go",
+      "internal/persistence/postgres/organisation_policy.go",
+      "database/migrations/0038_organisation_policy_governance.sql",
+      "internal/platform/httpserver/server.go"
+    ],
+    "notes": "Organisation-specific allowed and prohibited campaign purposes are governed through versioned maker-checker policy records and enforced during campaign creation.",
+    "status": "IMPLEMENTED_TESTED"
+  },
   "ORG-008": {
     "evidence": [
       "internal/organisation/service.go",
@@ -511,6 +525,16 @@
       "internal/organisation/lifecycle_test.go"
     ],
     "notes": "Active organisations are protected by a normalised legal-name and country uniqueness rule in both memory and PostgreSQL repositories.",
+    "status": "IMPLEMENTED_TESTED"
+  },
+  "ORG-010": {
+    "evidence": [
+      "internal/organisation/policy.go",
+      "internal/organisation/policy_test.go",
+      "internal/persistence/postgres/organisation_policy.go",
+      "database/migrations/0038_organisation_policy_governance.sql"
+    ],
+    "notes": "Effective-dated organisation policy versions govern contact/campaign retention periods and report branding metadata.",
     "status": "IMPLEMENTED_TESTED"
   },
   "PRV-004": {

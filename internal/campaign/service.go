@@ -28,6 +28,9 @@ type Service struct {
 	organisations interface {
 		Get(context.Context, string) (organisation.Organisation, error)
 	}
+	policies interface {
+		ValidatePurpose(context.Context, string, string) error
+	}
 	clock func() time.Time
 }
 
@@ -39,6 +42,13 @@ func (s *Service) WithOrganisationReader(reader interface {
 	Get(context.Context, string) (organisation.Organisation, error)
 }) *Service {
 	s.organisations = reader
+	return s
+}
+
+func (s *Service) WithOrganisationPolicies(policies interface {
+	ValidatePurpose(context.Context, string, string) error
+}) *Service {
+	s.policies = policies
 	return s
 }
 
@@ -59,6 +69,11 @@ func (s *Service) requireActiveOrganisation(ctx context.Context, organisationID 
 func (s *Service) Create(ctx context.Context, input CreateInput) (Campaign, error) {
 	if err := s.requireActiveOrganisation(ctx, input.OrganisationID); err != nil {
 		return Campaign{}, err
+	}
+	if s.policies != nil {
+		if err := s.policies.ValidatePurpose(ctx, input.OrganisationID, input.PurposeID); err != nil {
+			return Campaign{}, err
+		}
 	}
 	entity, err := New(input, s.clock())
 	if err != nil {

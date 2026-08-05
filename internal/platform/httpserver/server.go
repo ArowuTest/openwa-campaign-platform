@@ -49,6 +49,7 @@ type Dependencies struct {
 	FilterDefinitions        *audiencefilter.AdministrationService
 	Compiler                 *cohort.Compiler
 	Organisations            *organisation.Service
+	OrganisationPolicies     *organisation.PolicyAdministration
 	ConsentReviews           *consent.Service
 	ConsentLedger            *consent.LedgerService
 	OptOutProcessor          *consent.OptOutProcessor
@@ -145,6 +146,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/v1/organisations/{id}", s.require("organisation.write", s.updateOrganisation))
 	mux.Handle("POST /api/v1/organisations/{id}/status", s.require("organisation.approve", s.setOrganisationStatus))
 	mux.Handle("GET /api/v1/organisations/{id}/events", s.require("organisation.read", s.listOrganisationEvents))
+	mux.Handle("GET /api/v1/organisations/{id}/policies", s.require("organisation.read", s.listOrganisationPolicies))
+	mux.Handle("POST /api/v1/organisations/{id}/policies", s.require("organisation.write", s.createOrganisationPolicy))
+	mux.Handle("POST /api/v1/organisation-policies/{id}/submit", s.require("organisation.write", s.submitOrganisationPolicy))
+	mux.Handle("POST /api/v1/organisation-policies/{id}/decision", s.require("organisation.approve", s.decideOrganisationPolicy))
 	mux.Handle("GET /api/v1/consent-reviews", s.require("consent.read", s.listConsentReviews))
 	mux.Handle("POST /api/v1/consent-reviews", s.require("consent.write", s.createConsentReview))
 	mux.Handle("POST /api/v1/consent-reviews/{id}/decision", s.require("consent.review", s.decideConsentReview))
@@ -653,6 +658,86 @@ func (s *Server) listOrganisationEvents(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+
+func (s *Server) listOrganisationPolicies(w http.ResponseWriter, r *http.Request) {
+	if s.deps.OrganisationPolicies == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "ORGANISATION_POLICY_UNAVAILABLE", "Organisation policy administration is not configured.", nil)
+		return
+	}
+	items, err := s.deps.OrganisationPolicies.List(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+func (s *Server) createOrganisationPolicy(w http.ResponseWriter, r *http.Request) {
+	if s.deps.OrganisationPolicies == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "ORGANISATION_POLICY_UNAVAILABLE", "Organisation policy administration is not configured.", nil)
+		return
+	}
+	var input organisation.Policy
+	if err := httpx.DecodeJSON(w, r, 1<<20, &input); err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The organisation policy request is invalid.", map[string]any{"detail": err.Error()})
+		return
+	}
+	principal, _ := identity.PrincipalFromContext(r.Context())
+	input.OrganisationID = r.PathValue("id")
+	reason := input.Reason
+	value, err := s.deps.OrganisationPolicies.CreateDraft(r.Context(), input, principal.User.ID, reason)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "ORGANISATION_POLICY_INVALID", "The organisation policy could not be created.", map[string]any{"detail": err.Error()})
+		return
+	}
+	httpx.WriteJSON(w, http.StatusCreated, value)
+}
+func (s *Server) submitOrganisationPolicy(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		ExpectedVersion int64  `json:"expectedVersion"`
+		Reason          string `json:"reason"`
+	}
+	if err := httpx.DecodeJSON(w, r, 1<<20, &input); err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The organisation policy submission is invalid.", nil)
+		return
+	}
+	principal, _ := identity.PrincipalFromContext(r.Context())
+	value, err := s.deps.OrganisationPolicies.Submit(r.Context(), r.PathValue("id"), input.ExpectedVersion, principal.User.ID, input.Reason)
+	if errors.Is(err, organisation.ErrPolicyConflict) {
+		httpx.WriteError(w, r, http.StatusConflict, "ORGANISATION_POLICY_CONFLICT", "The organisation policy changed; reload before submitting.", nil)
+		return
+	}
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "ORGANISATION_POLICY_INVALID", "The organisation policy submission was rejected.", map[string]any{"detail": err.Error()})
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, value)
+}
+func (s *Server) decideOrganisationPolicy(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		ExpectedVersion int64  `json:"expectedVersion"`
+		Approve         bool   `json:"approve"`
+		Reason          string `json:"reason"`
+	}
+	if err := httpx.DecodeJSON(w, r, 1<<20, &input); err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The organisation policy decision is invalid.", nil)
+		return
+	}
+	principal, _ := identity.PrincipalFromContext(r.Context())
+	if !identity.StepUpSatisfied(principal.Session, time.Now().UTC(), 10*time.Minute) {
+		httpx.WriteError(w, r, http.StatusForbidden, "MFA_STEP_UP_REQUIRED", "Recent MFA verification is required.", nil)
+		return
+	}
+	value, err := s.deps.OrganisationPolicies.Decide(r.Context(), r.PathValue("id"), input.ExpectedVersion, input.Approve, principal.User.ID, input.Reason)
+	if errors.Is(err, organisation.ErrPolicyConflict) {
+		httpx.WriteError(w, r, http.StatusConflict, "ORGANISATION_POLICY_CONFLICT", "The organisation policy changed; reload before deciding.", nil)
+		return
+	}
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "ORGANISATION_POLICY_INVALID", "The organisation policy decision was rejected.", map[string]any{"detail": err.Error()})
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, value)
 }
 
 func (s *Server) listConsentReviews(w http.ResponseWriter, r *http.Request) {

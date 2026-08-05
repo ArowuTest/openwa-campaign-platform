@@ -308,6 +308,64 @@ paths:
       responses:
         '200': { description: Valid definition }
         '422': { $ref: '#/components/responses/ValidationError' }
+  /cohorts/estimate:
+    post:
+      operationId: estimateCohort
+      summary: Calculate the current eligible audience count for a governed cohort
+      responses:
+        '200': { description: Cohort estimate returned }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+        '422': { description: Cohort could not be estimated }
+  /segments:
+    get:
+      operationId: listSegments
+      summary: List saved governed audience segments
+      responses:
+        '200': { description: Segments returned }
+    post:
+      operationId: createSegment
+      summary: Create a saved governed audience segment
+      responses:
+        '201': { description: Segment created }
+        '422': { description: Segment rejected }
+  /segments/{id}:
+    get:
+      operationId: getSegment
+      summary: Get a saved audience segment
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Segment returned }
+        '404': { description: Segment not found }
+    put:
+      operationId: updateSegment
+      summary: Create a new version of a saved audience segment
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Segment updated }
+        '409': { description: Optimistic version conflict }
+  /segments/{id}/archive:
+    post:
+      operationId: archiveSegment
+      summary: Archive a saved segment with recent MFA verification
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Segment archived }
+        '403': { description: MFA step-up required }
+        '409': { description: Optimistic version conflict }
+  /segments/{id}/versions:
+    get:
+      operationId: listSegmentVersions
+      summary: List immutable versions of a saved audience segment
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Segment versions returned }
+        '404': { description: Segment not found }
   /cohorts/compile:
     post:
       operationId: compileCohort
@@ -852,6 +910,17 @@ paths:
         '400': { description: Invalid request }
         '401': { description: Authentication required }
         '403': { description: Permission denied }
+  /campaigns/{id}/audience-snapshots/materialise:
+    post:
+      operationId: materialiseAudienceSnapshot
+      summary: Compile and materialise an immutable campaign audience snapshot server-side
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '201': { description: Audience snapshot materialised }
+        '404': { description: Campaign not found }
+        '409': { description: Campaign is not building an audience }
+        '422': { description: Cohort invalid, too large or exceeds campaign entitlement }
   /campaigns/{id}/audience-snapshots:
     post:
       operationId: createAudienceSnapshot

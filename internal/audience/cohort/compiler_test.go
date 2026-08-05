@@ -28,7 +28,7 @@ func TestCompileEligibilityAndSegment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compile: %v", err)
 	}
-	for _, expected := range []string{"EXISTS", "NOT EXISTS", "geo.iso2", "geo.code", "c.reported_age BETWEEN"} {
+	for _, expected := range []string{"EXISTS", "NOT EXISTS", "geo.iso2", "geo.code", "c.reported_age BETWEEN", "newer.granted_at", "o.status = 'ACTIVE'"} {
 		if !strings.Contains(query.SQL, expected) {
 			t.Fatalf("query missing %q: %s", expected, query.SQL)
 		}

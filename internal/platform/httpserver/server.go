@@ -49,6 +49,7 @@ type Dependencies struct {
 	Registry                 *audiencefilter.Registry
 	FilterDefinitions        *audiencefilter.AdministrationService
 	Compiler                 *cohort.Compiler
+	Cohorts                  *cohort.ExecutionService
 	Organisations            *organisation.Service
 	OrganisationPolicies     *organisation.PolicyAdministration
 	ConsentReviews           *consent.Service
@@ -68,6 +69,7 @@ type Dependencies struct {
 	MSISDNProtector          *sharedcrypto.MSISDNProtector
 	Messages                 *message.Service
 	Snapshots                *segment.Service
+	SegmentDefinitions       *segment.DefinitionService
 	Releases                 *orchestration.ReleaseService
 	SenderGovernance         *sender.GovernanceService
 	DeliveryMetrics          *delivery.MetricsService
@@ -140,6 +142,13 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/v1/admin/filter-definitions/{code}", s.require("configuration.write", s.updateFilterDefinition))
 	mux.Handle("POST /api/v1/cohorts/validate", s.require("audience.read", s.validateCohort))
 	mux.Handle("POST /api/v1/cohorts/compile", s.require("audience.read", s.compileCohort))
+	mux.Handle("POST /api/v1/cohorts/estimate", s.require("audience.read", s.estimateCohort))
+	mux.Handle("GET /api/v1/segments", s.require("audience.read", s.listSegments))
+	mux.Handle("POST /api/v1/segments", s.require("audience.write", s.createSegment))
+	mux.Handle("GET /api/v1/segments/{id}", s.require("audience.read", s.getSegment))
+	mux.Handle("PUT /api/v1/segments/{id}", s.require("audience.write", s.updateSegment))
+	mux.Handle("POST /api/v1/segments/{id}/archive", s.require("audience.approve", s.archiveSegment))
+	mux.Handle("GET /api/v1/segments/{id}/versions", s.require("audience.read", s.listSegmentVersions))
 	mux.Handle("GET /api/v1/geography/countries", s.require("audience.read", s.listCountries))
 	mux.Handle("GET /api/v1/geography/areas", s.require("audience.read", s.listAreas))
 	mux.Handle("GET /api/v1/organisations", s.require("organisation.read", s.listOrganisations))
@@ -194,6 +203,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/campaigns/{id}/message-versions", s.require("campaign.write", s.createMessageVersion))
 	mux.Handle("POST /api/v1/message-versions/{id}/approve", s.require("campaign.approve", s.approveMessageVersion))
 	mux.Handle("POST /api/v1/campaigns/{id}/audience-snapshots", s.require("audience.write", s.createAudienceSnapshot))
+	mux.Handle("POST /api/v1/campaigns/{id}/audience-snapshots/materialise", s.require("audience.write", s.materialiseAudienceSnapshot))
 	mux.Handle("POST /api/v1/campaigns/{id}/release", s.require("campaign.operate", s.releaseCampaignAudience))
 	mux.Handle("GET /api/v1/campaigns/{id}/metrics", s.require("campaign.read", s.getCampaignMetrics))
 	mux.Handle("GET /api/v1/campaigns/{id}/execution-plan", s.require("campaign.read", s.getCampaignExecutionPlan))
@@ -548,6 +558,154 @@ func (s *Server) compileCohort(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"valid": true, "compiled": compiled})
+}
+
+func (s *Server) estimateCohort(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Cohorts == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "COHORT_EXECUTION_UNAVAILABLE", "Cohort execution is unavailable.", nil)
+		return
+	}
+	if s.deps.FilterDefinitions != nil {
+		if err := s.deps.FilterDefinitions.Refresh(r.Context()); err != nil {
+			s.internalError(w, r, err)
+			return
+		}
+	}
+	var input compileCohortRequest
+	if err := httpx.DecodeJSON(w, r, 1<<20, &input); err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The cohort estimate request is invalid.", map[string]any{"detail": err.Error()})
+		return
+	}
+	asOf := time.Now().UTC()
+	if input.AsOf != nil {
+		asOf = input.AsOf.UTC()
+	}
+	principal, _ := identity.PrincipalFromContext(r.Context())
+	estimate, err := s.deps.Cohorts.Estimate(r.Context(), input.Definition, cohort.EligibilityContext{OrganisationID: input.OrganisationID, PurposeID: input.PurposeID, Channel: input.Channel, AsOf: asOf}, principal.User.HasPermission)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "COHORT_ESTIMATE_FAILED", "The cohort could not be estimated.", map[string]any{"detail": err.Error()})
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, estimate)
+}
+
+func (s *Server) listSegments(w http.ResponseWriter, r *http.Request) {
+	if s.deps.SegmentDefinitions == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "SEGMENTS_UNAVAILABLE", "Saved segments are unavailable.", nil)
+		return
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	items, err := s.deps.SegmentDefinitions.List(r.Context(), r.URL.Query().Get("organisationId"), limit)
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+func (s *Server) createSegment(w http.ResponseWriter, r *http.Request) {
+	if s.deps.SegmentDefinitions == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "SEGMENTS_UNAVAILABLE", "Saved segments are unavailable.", nil)
+		return
+	}
+	var input segment.CreateDefinitionInput
+	if err := httpx.DecodeJSON(w, r, 1<<20, &input); err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The segment request is invalid.", map[string]any{"detail": err.Error()})
+		return
+	}
+	principal, _ := identity.PrincipalFromContext(r.Context())
+	input.ActorID = principal.User.ID
+	item, err := s.deps.SegmentDefinitions.Create(r.Context(), input, principal.User.HasPermission)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "SEGMENT_REJECTED", "The segment could not be created.", map[string]any{"detail": err.Error()})
+		return
+	}
+	httpx.WriteJSON(w, http.StatusCreated, item)
+}
+func (s *Server) getSegment(w http.ResponseWriter, r *http.Request) {
+	if s.deps.SegmentDefinitions == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "SEGMENTS_UNAVAILABLE", "Saved segments are unavailable.", nil)
+		return
+	}
+	item, err := s.deps.SegmentDefinitions.Get(r.Context(), r.PathValue("id"))
+	if errors.Is(err, segment.ErrDefinitionNotFound) {
+		httpx.WriteError(w, r, http.StatusNotFound, "SEGMENT_NOT_FOUND", "The segment was not found.", nil)
+		return
+	}
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, item)
+}
+func (s *Server) updateSegment(w http.ResponseWriter, r *http.Request) {
+	if s.deps.SegmentDefinitions == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "SEGMENTS_UNAVAILABLE", "Saved segments are unavailable.", nil)
+		return
+	}
+	var input segment.UpdateDefinitionInput
+	if err := httpx.DecodeJSON(w, r, 1<<20, &input); err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The segment update is invalid.", map[string]any{"detail": err.Error()})
+		return
+	}
+	principal, _ := identity.PrincipalFromContext(r.Context())
+	input.ActorID = principal.User.ID
+	item, err := s.deps.SegmentDefinitions.Update(r.Context(), r.PathValue("id"), input, principal.User.HasPermission)
+	writeSegmentResult(w, r, item, err)
+}
+
+type archiveSegmentRequest struct {
+	ExpectedVersion int64  `json:"expectedVersion"`
+	Reason          string `json:"reason"`
+}
+
+func (s *Server) archiveSegment(w http.ResponseWriter, r *http.Request) {
+	if s.deps.SegmentDefinitions == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "SEGMENTS_UNAVAILABLE", "Saved segments are unavailable.", nil)
+		return
+	}
+	var input archiveSegmentRequest
+	if err := httpx.DecodeJSON(w, r, 64<<10, &input); err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The archive request is invalid.", map[string]any{"detail": err.Error()})
+		return
+	}
+	principal, _ := identity.PrincipalFromContext(r.Context())
+	if !identity.StepUpSatisfied(principal.Session, time.Now().UTC(), 10*time.Minute) {
+		httpx.WriteError(w, r, http.StatusForbidden, "STEP_UP_REQUIRED", "Recent multi-factor verification is required to archive a segment.", nil)
+		return
+	}
+	item, err := s.deps.SegmentDefinitions.Archive(r.Context(), r.PathValue("id"), principal.User.ID, input.Reason, input.ExpectedVersion)
+	writeSegmentResult(w, r, item, err)
+}
+func (s *Server) listSegmentVersions(w http.ResponseWriter, r *http.Request) {
+	if s.deps.SegmentDefinitions == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "SEGMENTS_UNAVAILABLE", "Saved segments are unavailable.", nil)
+		return
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	items, err := s.deps.SegmentDefinitions.Versions(r.Context(), r.PathValue("id"), limit)
+	if errors.Is(err, segment.ErrDefinitionNotFound) {
+		httpx.WriteError(w, r, http.StatusNotFound, "SEGMENT_NOT_FOUND", "The segment was not found.", nil)
+		return
+	}
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+func writeSegmentResult(w http.ResponseWriter, r *http.Request, item segment.Definition, err error) {
+	switch {
+	case errors.Is(err, segment.ErrDefinitionNotFound):
+		httpx.WriteError(w, r, http.StatusNotFound, "SEGMENT_NOT_FOUND", "The segment was not found.", nil)
+	case errors.Is(err, segment.ErrDefinitionConflict):
+		httpx.WriteError(w, r, http.StatusConflict, "SEGMENT_VERSION_CONFLICT", "The segment changed; reload before retrying.", nil)
+	case errors.Is(err, segment.ErrDefinitionState):
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "SEGMENT_STATE_INVALID", "The segment state does not allow this operation.", nil)
+	case err != nil:
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "SEGMENT_REJECTED", "The segment operation was rejected.", map[string]any{"detail": err.Error()})
+	default:
+		httpx.WriteJSON(w, http.StatusOK, item)
+	}
 }
 
 func (s *Server) listCountries(w http.ResponseWriter, _ *http.Request) {
@@ -1566,6 +1724,65 @@ func (s *Server) createAudienceSnapshot(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	created, err := s.deps.Snapshots.Create(r.Context(), input)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "SNAPSHOT_FAILED", "The audience snapshot could not be materialised.", map[string]any{"detail": err.Error()})
+		return
+	}
+	httpx.WriteJSON(w, http.StatusCreated, created)
+}
+
+type materialiseAudienceSnapshotRequest struct {
+	Definition           audiencefilter.Group `json:"definition"`
+	SegmentID            string               `json:"segmentId,omitempty"`
+	DefinitionVersion    int64                `json:"definitionVersion"`
+	ConsentPolicyVersion string               `json:"consentPolicyVersion"`
+	ConfigurationVersion string               `json:"configurationVersion"`
+	AsOf                 *time.Time           `json:"asOf,omitempty"`
+	Limit                int                  `json:"limit,omitempty"`
+}
+
+func (s *Server) materialiseAudienceSnapshot(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Cohorts == nil || s.deps.Snapshots == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "COHORT_EXECUTION_UNAVAILABLE", "Cohort materialisation is unavailable.", nil)
+		return
+	}
+	campaignEntity, err := s.deps.Campaigns.Get(r.Context(), r.PathValue("id"))
+	if errors.Is(err, campaign.ErrNotFound) {
+		httpx.WriteError(w, r, http.StatusNotFound, "CAMPAIGN_NOT_FOUND", "The campaign was not found.", nil)
+		return
+	}
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	if campaignEntity.Status != campaign.StatusAudienceBuilding {
+		httpx.WriteError(w, r, http.StatusConflict, "SNAPSHOT_NOT_ALLOWED", "A snapshot can be materialised only while the campaign audience is building.", nil)
+		return
+	}
+	var input materialiseAudienceSnapshotRequest
+	if err := httpx.DecodeJSON(w, r, 1<<20, &input); err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The materialisation request is invalid.", map[string]any{"detail": err.Error()})
+		return
+	}
+	asOf := time.Now().UTC()
+	if input.AsOf != nil {
+		asOf = input.AsOf.UTC()
+	}
+	principal, _ := identity.PrincipalFromContext(r.Context())
+	members, err := s.deps.Cohorts.Materialise(r.Context(), input.Definition, cohort.EligibilityContext{OrganisationID: campaignEntity.OrganisationID, PurposeID: campaignEntity.PurposeID, Channel: "WHATSAPP", AsOf: asOf}, principal.User.HasPermission, input.Limit)
+	if errors.Is(err, cohort.ErrCohortTooLarge) {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "COHORT_TOO_LARGE", "The eligible cohort exceeds the configured materialisation limit.", nil)
+		return
+	}
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "COHORT_MATERIALISATION_FAILED", "The cohort could not be materialised.", map[string]any{"detail": err.Error()})
+		return
+	}
+	if int64(len(members)) > campaignEntity.MaximumUniqueRecipients {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "COHORT_EXCEEDS_ENTITLEMENT", "The eligible cohort exceeds the campaign recipient entitlement.", map[string]any{"eligibleCount": len(members), "maximumUniqueRecipients": campaignEntity.MaximumUniqueRecipients})
+		return
+	}
+	created, err := s.deps.Snapshots.Create(r.Context(), segment.CreateInput{CampaignID: campaignEntity.ID, SegmentID: strings.TrimSpace(input.SegmentID), Definition: input.Definition, DefinitionVersion: input.DefinitionVersion, ConsentPolicyVersion: input.ConsentPolicyVersion, ConfigurationVersion: input.ConfigurationVersion, CreatedBy: principal.User.ID, Members: members})
 	if err != nil {
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "SNAPSHOT_FAILED", "The audience snapshot could not be materialised.", map[string]any{"detail": err.Error()})
 		return

@@ -28,3 +28,11 @@
 1. Obtain a reproducible pinned PostgreSQL driver and execute all migrations through 0042 against a live database.
 2. Run `EXPLAIN (ANALYZE, BUFFERS)` for frequency-cap and cohort paths on synthetic high-volume data.
 3. Continue backend remediation with platform-wide privacy deletion/anonymisation and retention-hold governance.
+
+## Audience operational core next actions
+
+1. Add durable asynchronous snapshot-materialisation jobs with fenced leases, checkpoints and progress.
+2. Add segment clone and version-diff APIs.
+3. Complete audience-import merge completion rules, bulk conflict decisions and final import reconciliation.
+4. Add database-backed exclusion waterfalls and anonymised audience samples.
+5. Run EXPLAIN ANALYZE and scale tests once live PostgreSQL is available.

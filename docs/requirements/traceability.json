@@ -1457,9 +1457,14 @@
     "requirement": "Save, version, clone, retire and compare segment definitions.",
     "priority": "Must",
     "acceptance": "Historical campaign references remain immutable.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "PARTIAL",
+    "evidence": [
+      "internal/segment/definition.go",
+      "internal/segment/definition_postgres.go",
+      "internal/segment/definition_test.go",
+      "database/migrations/0043_segment_definition_and_cohort_execution.sql"
+    ],
+    "notes": "Save, version and archive are implemented; clone and version comparison remain outstanding."
   },
   {
     "id": "SEG-014",
@@ -1481,9 +1486,15 @@
     "requirement": "Create an immutable audience snapshot with hash and policy versions.",
     "priority": "Must",
     "acceptance": "Membership cannot be altered after freeze.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/segment/snapshot.go",
+      "internal/segment/postgres.go",
+      "internal/segment/snapshot_test.go",
+      "internal/audience/cohort/execution.go",
+      "internal/audience/cohort/execution_test.go"
+    ],
+    "notes": "Immutable snapshot membership, deterministic hash and policy/configuration versions are enforced."
   },
   {
     "id": "SEG-016",
@@ -1526,9 +1537,12 @@
     "requirement": "Support asynchronous snapshot creation for multi-million audiences with progress and resumability.",
     "priority": "Must",
     "acceptance": "Large job can resume without duplicate membership.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "PARTIAL",
+    "evidence": [
+      "internal/audience/cohort/execution.go",
+      "internal/platform/httpserver/server.go"
+    ],
+    "notes": "Server-side multi-million member query and bounded materialisation are implemented; durable asynchronous progress and resume remain outstanding."
   },
   {
     "id": "CAM-001",
@@ -1562,9 +1576,15 @@
     "requirement": "Attach exactly one immutable audience snapshot to an approved release version.",
     "priority": "Must",
     "acceptance": "Approved campaign cannot switch snapshot silently.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/segment/snapshot.go",
+      "internal/campaign/model.go",
+      "internal/campaign/service.go",
+      "internal/campaign/model_test.go",
+      "internal/campaign/model_test.go"
+    ],
+    "notes": "Campaign release binds an immutable snapshot and material changes invalidate approvals."
   },
   {
     "id": "CAM-005",
@@ -3786,9 +3806,14 @@
     "requirement": "The system creates an immutable audience snapshot and preserves policy/configuration versions.",
     "priority": "Must",
     "acceptance": "See acceptance criteria and linked tests.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/segment/snapshot.go",
+      "internal/segment/postgres.go",
+      "internal/audience/cohort/execution.go",
+      "database/migrations/0043_segment_definition_and_cohort_execution.sql"
+    ],
+    "notes": "Snapshot preserves definition, consent policy and configuration versions."
   },
   {
     "id": "AC-007",

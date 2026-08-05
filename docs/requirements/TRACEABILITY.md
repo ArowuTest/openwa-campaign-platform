@@ -6,10 +6,10 @@ Total requirements: **398**
 
 | Status | Count |
 |---|---:|
-| IMPLEMENTED_TESTED | 48 |
-| PARTIAL | 31 |
+| IMPLEMENTED_TESTED | 51 |
+| PARTIAL | 33 |
 | BLOCKED_EXTERNAL | 0 |
-| NOT_STARTED | 319 |
+| NOT_STARTED | 314 |
 
 | ID | Priority | Status | Requirement | Evidence / notes |
 |---|---|---|---|---|
@@ -157,18 +157,18 @@ Total requirements: **398**
 | SEG-010 | Must | NOT_STARTED | Provide a human-readable summary of the segment logic. |  |
 | SEG-011 | Must | NOT_STARTED | Estimate matching counts without exposing raw MSISDNs. |  |
 | SEG-012 | Must | NOT_STARTED | Display a count waterfall: demographic, consent, expiry, suppression, cap and final eligible. |  |
-| SEG-013 | Must | NOT_STARTED | Save, version, clone, retire and compare segment definitions. |  |
+| SEG-013 | Must | PARTIAL | Save, version, clone, retire and compare segment definitions. | `internal/segment/definition.go`, `internal/segment/definition_postgres.go`, `internal/segment/definition_test.go`, `database/migrations/0043_segment_definition_and_cohort_execution.sql` — Save, version and archive are implemented; clone and version comparison remain outstanding. |
 | SEG-014 | Must | IMPLEMENTED_TESTED | Restrict segment fields based on user permission and data-use policy. | `internal/audience/filter/query.go`, `internal/audience/cohort/compiler.go`, `internal/platform/httpserver/server.go`, `internal/audience/filter/administration_test.go`, `internal/audience/cohort/compiler_test.go` — Sensitive governed filter definitions require the configured permission during HTTP validation, compilation and snapshot creation; direct code submission cannot bypass hidden UI fields. |
-| SEG-015 | Must | NOT_STARTED | Create an immutable audience snapshot with hash and policy versions. |  |
+| SEG-015 | Must | IMPLEMENTED_TESTED | Create an immutable audience snapshot with hash and policy versions. | `internal/segment/snapshot.go`, `internal/segment/postgres.go`, `internal/segment/snapshot_test.go`, `internal/audience/cohort/execution.go`, `internal/audience/cohort/execution_test.go` — Immutable snapshot membership, deterministic hash and policy/configuration versions are enforced. |
 | SEG-016 | Must | NOT_STARTED | Store snapshot creation time, rule version and initiating user. |  |
 | SEG-017 | Must | NOT_STARTED | Perform final live suppression/consent check before each send. |  |
 | SEG-018 | Must | NOT_STARTED | Support cohort overlap analysis without exporting identities. |  |
 | SEG-019 | Must | NOT_STARTED | Prevent tiny cohort reporting below configurable privacy threshold. |  |
-| SEG-020 | Must | NOT_STARTED | Support asynchronous snapshot creation for multi-million audiences with progress and resumability. |  |
+| SEG-020 | Must | PARTIAL | Support asynchronous snapshot creation for multi-million audiences with progress and resumability. | `internal/audience/cohort/execution.go`, `internal/platform/httpserver/server.go` — Server-side multi-million member query and bounded materialisation are implemented; durable asynchronous progress and resume remain outstanding. |
 | CAM-001 | Must | NOT_STARTED | Create campaigns linked to one internal organisation and consent-review basis. |  |
 | CAM-002 | Must | NOT_STARTED | Store campaign name, purpose, category, owner, requested window and completion deadline. |  |
 | CAM-003 | Must | NOT_STARTED | Support draft, review, approved, scheduled, dispatching, paused, completed, exception, cancelled and expired states. |  |
-| CAM-004 | Must | NOT_STARTED | Attach exactly one immutable audience snapshot to an approved release version. |  |
+| CAM-004 | Must | IMPLEMENTED_TESTED | Attach exactly one immutable audience snapshot to an approved release version. | `internal/segment/snapshot.go`, `internal/campaign/model.go`, `internal/campaign/service.go`, `internal/campaign/model_test.go`, `internal/campaign/model_test.go` — Campaign release binds an immutable snapshot and material changes invalidate approvals. |
 | CAM-005 | Must | NOT_STARTED | Compose text, image-caption, video, document and supported provider message types. |  |
 | CAM-006 | Must | NOT_STARTED | Store media in object storage with checksum, type, size and scan status. |  |
 | CAM-007 | Must | NOT_STARTED | Support approved personalisation variables with typed values and fallback. |  |
@@ -396,7 +396,7 @@ Total requirements: **398**
 | AC-003 | Must | PARTIAL | The platform stores MSISDN encrypted, deduplicates using HMAC and masks it in UI/logs. | `internal/shared/crypto/msisdn.go`, `internal/audience/importer/csv.go` |
 | AC-004 | Must | NOT_STARTED | The segment builder creates a Lagos age 18–35 cohort using the configured self-declared-age policy. |  |
 | AC-005 | Must | IMPLEMENTED_TESTED | The final eligible count applies organisation/purpose/channel consent, expiry, suppression and frequency caps. | `internal/organisation/policy.go`, `internal/organisation/policy_test.go`, `internal/audience/cohort/compiler.go`, `internal/audience/cohort/compiler_test.go`, `internal/orchestration/postgres.go`, `internal/dispatch/postgres_material.go`, `internal/persistence/postgres/organisation_policy.go`, `database/migrations/0042_organisation_frequency_cap_policy.sql` — Final release and final dispatch eligibility re-evaluate consent, suppression and governed frequency caps and return FREQUENCY_CAPPED when exceeded. |
-| AC-006 | Must | NOT_STARTED | The system creates an immutable audience snapshot and preserves policy/configuration versions. |  |
+| AC-006 | Must | IMPLEMENTED_TESTED | The system creates an immutable audience snapshot and preserves policy/configuration versions. | `internal/segment/snapshot.go`, `internal/segment/postgres.go`, `internal/audience/cohort/execution.go`, `database/migrations/0043_segment_definition_and_cohort_execution.sql` — Snapshot preserves definition, consent policy and configuration versions. |
 | AC-007 | Must | NOT_STARTED | A campaign message and media are versioned, scanned, tested and approved through maker-checker. |  |
 | AC-008 | Must | NOT_STARTED | Campaign entitlement prevents excess or duplicate recipients. |  |
 | AC-009 | Must | NOT_STARTED | Recipient records/outbox are created atomically and queue can be rebuilt. |  |

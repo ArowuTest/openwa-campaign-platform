@@ -1,0 +1,164 @@
+package cohort
+
+import (
+	"context"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	audiencefilter "campaign-platform/internal/audience/filter"
+	"campaign-platform/internal/segment"
+)
+
+var ErrCohortTooLarge = errors.New("cohort result exceeds configured materialisation limit")
+
+type Estimate struct {
+	EligibleCount int64     `json:"eligibleCount"`
+	CalculatedAt  time.Time `json:"calculatedAt"`
+}
+
+type Materialisation struct {
+	Definition  audiencefilter.Group `json:"definition"`
+	Eligibility EligibilityContext   `json:"eligibility"`
+	Limit       int                  `json:"limit,omitempty"`
+}
+
+type QueryRepository interface {
+	Count(context.Context, CompiledQuery) (int64, error)
+	Members(context.Context, CompiledQuery, int) ([]string, error)
+}
+
+type ExecutionService struct {
+	Compiler           *Compiler
+	Repository         QueryRepository
+	Clock              func() time.Time
+	MaxMaterialisation int
+}
+
+func NewExecutionService(compiler *Compiler, repository QueryRepository) *ExecutionService {
+	return &ExecutionService{Compiler: compiler, Repository: repository, Clock: time.Now, MaxMaterialisation: 5_000_000}
+}
+
+func (s *ExecutionService) Estimate(ctx context.Context, definition audiencefilter.Group, eligibility EligibilityContext, hasPermission func(string) bool) (Estimate, error) {
+	if s == nil || s.Compiler == nil || s.Repository == nil {
+		return Estimate{}, errors.New("cohort execution is not configured")
+	}
+	compiled, err := s.Compiler.CompileForPermissions(definition, eligibility, hasPermission)
+	if err != nil {
+		return Estimate{}, err
+	}
+	count, err := s.Repository.Count(ctx, compiled)
+	if err != nil {
+		return Estimate{}, err
+	}
+	clock := s.Clock
+	if clock == nil {
+		clock = time.Now
+	}
+	return Estimate{EligibleCount: count, CalculatedAt: clock().UTC()}, nil
+}
+
+func (s *ExecutionService) Materialise(ctx context.Context, definition audiencefilter.Group, eligibility EligibilityContext, hasPermission func(string) bool, limit int) ([]segment.Member, error) {
+	if s == nil || s.Compiler == nil || s.Repository == nil {
+		return nil, errors.New("cohort execution is not configured")
+	}
+	if limit <= 0 {
+		limit = s.MaxMaterialisation
+	}
+	if s.MaxMaterialisation > 0 && limit > s.MaxMaterialisation {
+		limit = s.MaxMaterialisation
+	}
+	compiled, err := s.Compiler.CompileForPermissions(definition, eligibility, hasPermission)
+	if err != nil {
+		return nil, err
+	}
+	ids, err := s.Repository.Members(ctx, compiled, limit+1)
+	if err != nil {
+		return nil, err
+	}
+	if len(ids) > limit {
+		return nil, ErrCohortTooLarge
+	}
+	evidenceSeed, err := json.Marshal(struct {
+		Definition  audiencefilter.Group `json:"definition"`
+		Eligibility EligibilityContext   `json:"eligibility"`
+	}{definition, eligibility})
+	if err != nil {
+		return nil, err
+	}
+	members := make([]segment.Member, 0, len(ids))
+	for _, contactID := range ids {
+		digest := sha256.Sum256(append(append([]byte("cohort-eligibility-v1\x00"), evidenceSeed...), []byte("\x00"+contactID)...))
+		members = append(members, segment.Member{ContactID: contactID, EligibilityEvidenceHash: hex.EncodeToString(digest[:])})
+	}
+	return members, nil
+}
+
+type PostgreSQLQueryRepository struct{ DB *sql.DB }
+
+func (r *PostgreSQLQueryRepository) Count(ctx context.Context, compiled CompiledQuery) (int64, error) {
+	if r == nil || r.DB == nil {
+		return 0, errors.New("database is required")
+	}
+	query := "SELECT count(*) FROM (" + strings.TrimSpace(compiled.SQL) + ") eligible"
+	var count int64
+	if err := r.DB.QueryRowContext(ctx, query, compiled.Args...).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count eligible cohort: %w", err)
+	}
+	return count, nil
+}
+
+func (r *PostgreSQLQueryRepository) Members(ctx context.Context, compiled CompiledQuery, limit int) ([]string, error) {
+	if r == nil || r.DB == nil {
+		return nil, errors.New("database is required")
+	}
+	if limit <= 0 || limit > 5_000_001 {
+		return nil, errors.New("invalid cohort member limit")
+	}
+	query := "SELECT id::text FROM (" + strings.TrimSpace(compiled.SQL) + ") eligible ORDER BY id LIMIT $" + fmt.Sprint(len(compiled.Args)+1)
+	args := append(append([]any(nil), compiled.Args...), limit)
+	rows, err := r.DB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("load eligible cohort members: %w", err)
+	}
+	defer rows.Close()
+	ids := make([]string, 0)
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
+type MemoryQueryRepository struct {
+	EligibleContactIDs []string
+}
+
+func (r *MemoryQueryRepository) Count(_ context.Context, _ CompiledQuery) (int64, error) {
+	if r == nil {
+		return 0, errors.New("memory cohort repository is required")
+	}
+	return int64(len(r.EligibleContactIDs)), nil
+}
+
+func (r *MemoryQueryRepository) Members(_ context.Context, _ CompiledQuery, limit int) ([]string, error) {
+	if r == nil {
+		return nil, errors.New("memory cohort repository is required")
+	}
+	if limit <= 0 {
+		return nil, errors.New("positive cohort member limit is required")
+	}
+	ids := append([]string(nil), r.EligibleContactIDs...)
+	if len(ids) > limit {
+		ids = ids[:limit]
+	}
+	return ids, nil
+}

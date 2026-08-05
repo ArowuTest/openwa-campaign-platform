@@ -67,6 +67,11 @@ func (c *Compiler) CompileForPermissions(group audiencefilter.Group, eligibility
 FROM contacts c
 WHERE c.status = 'ACTIVE'
   AND EXISTS (
+    SELECT 1 FROM organisations o
+    WHERE o.id = ` + organisationPlaceholder + `::uuid
+      AND o.status = 'ACTIVE'
+  )
+  AND EXISTS (
     SELECT 1
     FROM consent_grants cg
     WHERE cg.contact_id = c.id
@@ -76,6 +81,20 @@ WHERE c.status = 'ACTIVE'
       AND cg.status = 'ACTIVE'
       AND cg.granted_at <= ` + asOfPlaceholder + `
       AND (cg.expires_at IS NULL OR cg.expires_at > ` + asOfPlaceholder + `)
+      AND NOT EXISTS (
+        SELECT 1
+        FROM consent_grants newer
+        WHERE newer.contact_id = cg.contact_id
+          AND newer.organisation_id = cg.organisation_id
+          AND newer.purpose_id = cg.purpose_id
+          AND newer.channel = cg.channel
+          AND newer.granted_at <= ` + asOfPlaceholder + `
+          AND (
+            newer.granted_at > cg.granted_at
+            OR (newer.granted_at = cg.granted_at AND newer.created_at > cg.created_at)
+            OR (newer.granted_at = cg.granted_at AND newer.created_at = cg.created_at AND newer.id > cg.id)
+          )
+      )
   )
   AND NOT EXISTS (
     SELECT 1

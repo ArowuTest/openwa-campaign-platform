@@ -30,3 +30,11 @@ Campaign commercial approval is now backed by campaign-specific quotation, invoi
 ## 0.8.10 remediation update
 
 Governed rolling frequency caps are now stored in effective-dated organisation policy versions and applied consistently to cohort compilation, recipient release and final dispatch. The generated traceability baseline is 48 implemented/tested, 31 partial and 319 not started. Live PostgreSQL execution and query-plan evidence remain blocked external release gates.
+
+## 0.8.11 audience operational-core update
+
+- Saved segment definitions now have governed versions and archive controls.
+- Cohort counts and snapshot membership can be calculated server-side from authoritative PostgreSQL eligibility queries.
+- Client-supplied member lists remain supported for compatibility but are no longer the only materialisation route.
+- Durable asynchronous multi-million snapshot jobs and live PostgreSQL performance validation remain open.
+- The designer's 25-screen HTML export is retained as a reference package for later production Next.js implementation and may be redesigned to match the final backend workflows.

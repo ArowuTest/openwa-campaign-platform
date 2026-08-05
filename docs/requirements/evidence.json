@@ -732,5 +732,55 @@
     ],
     "notes": "Final release and final dispatch eligibility re-evaluate consent, suppression and governed frequency caps and return FREQUENCY_CAPPED when exceeded.",
     "status": "IMPLEMENTED_TESTED"
+  },
+  "SEG-013": {
+    "status": "PARTIAL",
+    "evidence": [
+      "internal/segment/definition.go",
+      "internal/segment/definition_postgres.go",
+      "internal/segment/definition_test.go",
+      "database/migrations/0043_segment_definition_and_cohort_execution.sql"
+    ],
+    "notes": "Save, version and archive are implemented; clone and version comparison remain outstanding."
+  },
+  "SEG-015": {
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/segment/snapshot.go",
+      "internal/segment/postgres.go",
+      "internal/segment/snapshot_test.go",
+      "internal/audience/cohort/execution.go",
+      "internal/audience/cohort/execution_test.go"
+    ],
+    "notes": "Immutable snapshot membership, deterministic hash and policy/configuration versions are enforced."
+  },
+  "SEG-020": {
+    "status": "PARTIAL",
+    "evidence": [
+      "internal/audience/cohort/execution.go",
+      "internal/platform/httpserver/server.go"
+    ],
+    "notes": "Server-side multi-million member query and bounded materialisation are implemented; durable asynchronous progress and resume remain outstanding."
+  },
+  "CAM-004": {
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/segment/snapshot.go",
+      "internal/campaign/model.go",
+      "internal/campaign/service.go",
+      "internal/campaign/model_test.go",
+      "internal/campaign/model_test.go"
+    ],
+    "notes": "Campaign release binds an immutable snapshot and material changes invalidate approvals."
+  },
+  "AC-006": {
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/segment/snapshot.go",
+      "internal/segment/postgres.go",
+      "internal/audience/cohort/execution.go",
+      "database/migrations/0043_segment_definition_and_cohort_execution.sql"
+    ],
+    "notes": "Snapshot preserves definition, consent policy and configuration versions."
   }
 }

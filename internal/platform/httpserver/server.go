@@ -35,6 +35,7 @@ import (
 	"campaign-platform/internal/operations"
 	"campaign-platform/internal/orchestration"
 	"campaign-platform/internal/organisation"
+	"campaign-platform/internal/provider"
 	"campaign-platform/internal/segment"
 	"campaign-platform/internal/sender"
 	sharedcrypto "campaign-platform/internal/shared/crypto"
@@ -80,6 +81,7 @@ type Dependencies struct {
 	Releases                 *orchestration.ReleaseService
 	SenderGovernance         *sender.GovernanceService
 	PacingPolicies           *sender.PacingAdministration
+	ProviderCapabilities     *provider.Service
 	DeliveryMetrics          *delivery.MetricsService
 	Execution                *execution.Coordinator
 	RoutingPlans             *execution.RoutingAdministration
@@ -275,6 +277,13 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/campaigns/{id}/inbound-metrics", s.require("campaign.read", s.getCampaignInboundMetrics))
 	mux.Handle("GET /api/v1/audience-snapshots/{id}", s.require("audience.read", s.getAudienceSnapshot))
 	mux.Handle("GET /api/v1/audience-snapshots/overlap", s.require("audience.read", s.getAudienceSnapshotOverlap))
+	mux.Handle("GET /api/v1/admin/provider-capabilities", s.require("configuration.write", s.listProviderCapabilities))
+	mux.Handle("POST /api/v1/admin/provider-capabilities", s.require("configuration.write", s.createProviderCapability))
+	mux.Handle("POST /api/v1/admin/provider-capabilities/{id}/submit", s.require("configuration.write", s.submitProviderCapability))
+	mux.Handle("POST /api/v1/admin/provider-capabilities/{id}/decision", s.require("configuration.approve", s.decideProviderCapability))
+	mux.Handle("POST /api/v1/admin/provider-capabilities/{id}/retire", s.require("configuration.approve", s.retireProviderCapability))
+	mux.Handle("GET /api/v1/admin/provider-capabilities/{id}/events", s.require("configuration.write", s.listProviderCapabilityEvents))
+	mux.Handle("POST /api/v1/admin/provider-capabilities/resolve", s.require("configuration.write", s.resolveProviderCapability))
 	mux.Handle("GET /api/v1/admin/sender-pacing-policies", s.require("configuration.write", s.listSenderPacingPolicies))
 	mux.Handle("POST /api/v1/admin/sender-pacing-policies", s.require("configuration.write", s.createSenderPacingPolicy))
 	mux.Handle("POST /api/v1/admin/sender-pacing-policies/{id}/submit", s.require("configuration.write", s.submitSenderPacingPolicy))

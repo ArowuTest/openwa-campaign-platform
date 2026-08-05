@@ -41,8 +41,22 @@ func (s *PostgreSQLStore) Active(ctx context.Context, p string, c Channel, e str
 	return d, err
 }
 func (s *PostgreSQLStore) Create(ctx context.Context, d Definition) (Definition, error) {
-	_, err := s.DB.ExecContext(ctx, `INSERT INTO provider_capability_definitions(id,provider,channel,engine,adapter_version,minimum_gateway_version,capabilities,maximum_attachment_bytes,status,effective_from,effective_to,version,created_by,reason,created_at,updated_at) VALUES($1::uuid,$2,$3,$4,$5,NULLIF($6,''),$7,$8,$9,$10,$11,$12,$13::uuid,$14,$15,$16)`, d.ID, d.Provider, d.Channel, d.Engine, d.AdapterVersion, d.MinimumGatewayVersion, capabilityStrings(d.Capabilities), d.MaximumAttachmentBytes, d.Status, d.EffectiveFrom, d.EffectiveTo, d.Version, d.CreatedBy, d.Reason, d.CreatedAt, d.UpdatedAt)
-	return d, err
+	tx, err := s.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		return d, err
+	}
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx, `INSERT INTO provider_capability_definitions(id,provider,channel,engine,adapter_version,minimum_gateway_version,capabilities,maximum_attachment_bytes,status,effective_from,effective_to,version,created_by,reason,created_at,updated_at) VALUES($1::uuid,$2,$3,$4,$5,NULLIF($6,''),$7,$8,$9,$10,$11,$12,$13::uuid,$14,$15,$16)`, d.ID, d.Provider, d.Channel, d.Engine, d.AdapterVersion, d.MinimumGatewayVersion, capabilityStrings(d.Capabilities), d.MaximumAttachmentBytes, d.Status, d.EffectiveFrom, d.EffectiveTo, d.Version, d.CreatedBy, d.Reason, d.CreatedAt, d.UpdatedAt)
+	if err != nil {
+		return d, err
+	}
+	if err = insertProviderEvent(ctx, tx, d, "CREATED", d.CreatedBy); err != nil {
+		return d, err
+	}
+	if err = tx.Commit(); err != nil {
+		return d, err
+	}
+	return d, nil
 }
 func (s *PostgreSQLStore) CompareAndSwap(ctx context.Context, d Definition, expected int64) (Definition, error) {
 	tx, err := s.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
@@ -64,10 +78,42 @@ func (s *PostgreSQLStore) CompareAndSwap(ctx context.Context, d Definition, expe
 	if n != 1 {
 		return d, ErrConflict
 	}
+	action, actor := string(d.Status), d.SubmittedBy
+	if d.Status == StatusActive || d.Status == StatusRejected || d.Status == StatusRetired {
+		actor = d.ApprovedBy
+	}
+	if err = insertProviderEvent(ctx, tx, d, action, actor); err != nil {
+		return d, err
+	}
 	if err = tx.Commit(); err != nil {
 		return d, err
 	}
 	return d, nil
+}
+
+func (s *PostgreSQLStore) ListEvents(ctx context.Context, definitionID string) ([]Event, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT id,definition_id::text,action,actor_id::text,reason,definition_version,occurred_at FROM provider_capability_events WHERE definition_id=$1::uuid ORDER BY id`, definitionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Event{}
+	for rows.Next() {
+		var event Event
+		if err := rows.Scan(&event.ID, &event.DefinitionID, &event.Action, &event.ActorID, &event.Reason, &event.DefinitionVersion, &event.OccurredAt); err != nil {
+			return nil, err
+		}
+		out = append(out, event)
+	}
+	return out, rows.Err()
+}
+
+func insertProviderEvent(ctx context.Context, tx *sql.Tx, d Definition, action, actor string) error {
+	if strings.TrimSpace(actor) == "" {
+		return errors.New("provider capability event actor is required")
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO provider_capability_events(definition_id,action,actor_id,reason,definition_version,occurred_at) VALUES($1::uuid,$2,$3::uuid,$4,$5,$6)`, d.ID, action, actor, d.Reason, d.Version, d.UpdatedAt)
+	return err
 }
 
 const providerSelect = `SELECT id::text,provider,channel,engine,adapter_version,coalesce(minimum_gateway_version,''),capabilities,maximum_attachment_bytes,status,effective_from,effective_to,version,created_by::text,coalesce(submitted_by::text,''),coalesce(approved_by::text,''),reason,created_at,updated_at FROM provider_capability_definitions`

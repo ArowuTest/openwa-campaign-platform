@@ -151,6 +151,59 @@ paths:
         - { name: id, in: path, required: true, schema: { type: string } }
       responses:
         '200': { description: Decision recorded }
+  /admin/provider-capabilities:
+    get:
+      operationId: listProviderCapabilities
+      summary: List governed provider and engine capability definitions
+      responses:
+        '200': { description: Provider capability definition list }
+    post:
+      operationId: createProviderCapability
+      summary: Create a draft provider capability definition
+      responses:
+        '201': { description: Draft provider capability definition created }
+  /admin/provider-capabilities/{id}/submit:
+    post:
+      operationId: submitProviderCapability
+      summary: Submit a provider capability definition for independent approval
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Provider capability definition awaiting approval }
+  /admin/provider-capabilities/{id}/decision:
+    post:
+      operationId: decideProviderCapability
+      summary: Approve or reject a provider capability definition
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Provider capability decision recorded }
+        '403': { description: Recent MFA step-up required }
+  /admin/provider-capabilities/{id}/retire:
+    post:
+      operationId: retireProviderCapability
+      summary: Retire an active provider capability definition
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Provider capability definition retired }
+        '403': { description: Recent MFA step-up required }
+  /admin/provider-capabilities/{id}/events:
+    get:
+      operationId: listProviderCapabilityEvents
+      summary: List append-only provider capability lifecycle events
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Provider capability event history }
+  /admin/provider-capabilities/resolve:
+    post:
+      operationId: resolveProviderCapability
+      summary: Resolve an active provider and engine definition and verify required capabilities
+      responses:
+        '200': { description: Active compatible provider capability definition }
+        '404': { description: No active provider capability definition matched }
+        '422': { description: Required capabilities are not supported }
   /admin/sender-pacing-policies:
     get:
       operationId: listSenderPacingPolicies

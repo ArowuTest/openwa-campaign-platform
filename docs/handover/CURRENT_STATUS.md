@@ -1,4 +1,9 @@
 
+## 0.8.23 provider capability governance
+
+The control plane now persists and administers provider/engine capability definitions, validates campaign routes against active definitions, and records append-only lifecycle evidence. Both OpenWA `WHATSAPP_WEB_JS` and `BAILEYS` are represented as separate governed routes. Live engine validation remains outstanding.
+
+
 ## 0.8.17 audience import merge runtime
 
 Approved audience imports are now automatically claimed and merged by the audience worker with PostgreSQL leases and fencing. Validation, canonical merge, conflict evidence and asynchronous materialisation now all have durable worker paths. Live PostgreSQL execution and production-scale performance remain external gates.

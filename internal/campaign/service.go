@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"campaign-platform/internal/organisation"
+	"campaign-platform/internal/provider"
 )
 
 var (
@@ -39,6 +41,9 @@ type Service struct {
 	consentReviews interface {
 		ValidateCampaignReview(context.Context, string, string, string, time.Time) error
 	}
+	providerCapabilities interface {
+		Require(context.Context, string, provider.Channel, string, time.Time, []provider.Capability) (provider.Definition, error)
+	}
 	clock func() time.Time
 }
 
@@ -65,6 +70,31 @@ func (s *Service) WithOrganisationPolicies(policies interface {
 }) *Service {
 	s.policies = policies
 	return s
+}
+
+func (s *Service) WithProviderCapabilities(registry interface {
+	Require(context.Context, string, provider.Channel, string, time.Time, []provider.Capability) (provider.Definition, error)
+}) *Service {
+	s.providerCapabilities = registry
+	return s
+}
+
+func (s *Service) validateProviderCapabilities(ctx context.Context, transport TransportSelection) error {
+	if s.providerCapabilities == nil {
+		return nil
+	}
+	required := make([]provider.Capability, 0, len(transport.RequiredCapabilities))
+	for _, capability := range transport.RequiredCapabilities {
+		required = append(required, provider.Capability(capability))
+	}
+	definition, err := s.providerCapabilities.Require(ctx, string(transport.Provider), provider.Channel(strings.ToUpper(strings.TrimSpace(transport.Channel))), string(transport.Engine), s.clock().UTC(), required)
+	if err != nil {
+		return err
+	}
+	if definition.AdapterVersion != strings.TrimSpace(transport.AdapterVersion) {
+		return errors.New("campaign adapter version does not match the active provider capability definition")
+	}
+	return nil
 }
 
 func (s *Service) WithConsentReviews(reader interface {
@@ -96,6 +126,9 @@ func (s *Service) requireActiveOrganisation(ctx context.Context, organisationID 
 }
 
 func (s *Service) Create(ctx context.Context, input CreateInput) (Campaign, error) {
+	if err := s.validateProviderCapabilities(ctx, input.Transport); err != nil {
+		return Campaign{}, err
+	}
 	if err := s.requireActiveOrganisation(ctx, input.OrganisationID); err != nil {
 		return Campaign{}, err
 	}
@@ -151,6 +184,12 @@ func (s *Service) Transition(ctx context.Context, identifier string, input Trans
 	switch input.Action {
 	case ActionApproveConsent, ActionRequestFinalApproval, ActionApproveFinal, ActionStartDispatch, ActionResume:
 		if err := s.validateConsentReview(ctx, entity); err != nil {
+			return Campaign{}, err
+		}
+	}
+	switch input.Action {
+	case ActionRequestFinalApproval, ActionApproveFinal, ActionStartDispatch, ActionResume:
+		if err := s.validateProviderCapabilities(ctx, entity.Transport); err != nil {
 			return Campaign{}, err
 		}
 	}

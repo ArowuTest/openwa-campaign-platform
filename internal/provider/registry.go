@@ -45,6 +45,16 @@ var (
 	ErrInvalid  = errors.New("provider capability definition is invalid")
 )
 
+type Event struct {
+	ID                int64     `json:"id"`
+	DefinitionID      string    `json:"definitionId"`
+	Action            string    `json:"action"`
+	ActorID           string    `json:"actorId"`
+	Reason            string    `json:"reason"`
+	DefinitionVersion int64     `json:"definitionVersion"`
+	OccurredAt        time.Time `json:"occurredAt"`
+}
+
 type Definition struct {
 	ID                     string       `json:"id"`
 	Provider               string       `json:"provider"`
@@ -72,6 +82,7 @@ type Store interface {
 	Active(context.Context, string, Channel, string, time.Time) (Definition, error)
 	Create(context.Context, Definition) (Definition, error)
 	CompareAndSwap(context.Context, Definition, int64) (Definition, error)
+	ListEvents(context.Context, string) ([]Event, error)
 }
 
 type Service struct {
@@ -155,6 +166,33 @@ func (s *Service) Decide(ctx context.Context, definitionID string, expected int6
 	return s.Store.CompareAndSwap(ctx, d, expected)
 }
 
+func (s *Service) ListEvents(ctx context.Context, definitionID string) ([]Event, error) {
+	if s == nil || s.Store == nil {
+		return nil, errors.New("provider capability store is required")
+	}
+	return s.Store.ListEvents(ctx, strings.TrimSpace(definitionID))
+}
+
+func (s *Service) Retire(ctx context.Context, definitionID string, expected int64, actor, reason string) (Definition, error) {
+	d, err := s.Store.Get(ctx, strings.TrimSpace(definitionID))
+	if err != nil {
+		return Definition{}, err
+	}
+	if d.Version != expected {
+		return Definition{}, ErrConflict
+	}
+	actor, reason = strings.TrimSpace(actor), strings.TrimSpace(reason)
+	if d.Status != StatusActive || actor == "" || len(reason) < 5 {
+		return Definition{}, ErrInvalid
+	}
+	now := s.now()
+	d.Status, d.EffectiveTo, d.Reason = StatusRetired, &now, reason
+	d.ApprovedBy = actor
+	d.Version++
+	d.UpdatedAt = now
+	return s.Store.CompareAndSwap(ctx, d, expected)
+}
+
 func (s *Service) Require(ctx context.Context, providerName string, channel Channel, engine string, at time.Time, required []Capability) (Definition, error) {
 	if s == nil || s.Store == nil {
 		return Definition{}, errors.New("provider capability store is required")
@@ -223,11 +261,14 @@ func validate(d *Definition) error {
 }
 
 type MemoryStore struct {
-	mu    sync.Mutex
-	items map[string]Definition
+	mu     sync.Mutex
+	items  map[string]Definition
+	events map[string][]Event
 }
 
-func NewMemoryStore() *MemoryStore { return &MemoryStore{items: map[string]Definition{}} }
+func NewMemoryStore() *MemoryStore {
+	return &MemoryStore{items: map[string]Definition{}, events: map[string][]Event{}}
+}
 func (m *MemoryStore) List(context.Context) ([]Definition, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -268,6 +309,7 @@ func (m *MemoryStore) Create(_ context.Context, d Definition) (Definition, error
 		return Definition{}, ErrConflict
 	}
 	m.items[d.ID] = d
+	m.appendEvent(d, "CREATED", d.CreatedBy)
 	return d, nil
 }
 func (m *MemoryStore) CompareAndSwap(_ context.Context, d Definition, expected int64) (Definition, error) {
@@ -291,7 +333,24 @@ func (m *MemoryStore) CompareAndSwap(_ context.Context, d Definition, expected i
 		}
 	}
 	m.items[d.ID] = d
+	action, actor := string(d.Status), d.SubmittedBy
+	if d.Status == StatusActive || d.Status == StatusRejected || d.Status == StatusRetired {
+		actor = d.ApprovedBy
+	}
+	m.appendEvent(d, action, actor)
 	return d, nil
+}
+func (m *MemoryStore) appendEvent(d Definition, action, actor string) {
+	m.events[d.ID] = append(m.events[d.ID], Event{ID: int64(len(m.events[d.ID]) + 1), DefinitionID: d.ID, Action: action, ActorID: actor, Reason: d.Reason, DefinitionVersion: d.Version, OccurredAt: d.UpdatedAt})
+}
+func (m *MemoryStore) ListEvents(_ context.Context, definitionID string) ([]Event, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.items[definitionID]; !ok {
+		return nil, ErrNotFound
+	}
+	out := append([]Event(nil), m.events[definitionID]...)
+	return out, nil
 }
 func overlap(a time.Time, ae *time.Time, b time.Time, be *time.Time) bool {
 	aEnd := time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)

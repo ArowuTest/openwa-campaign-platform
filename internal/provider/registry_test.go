@@ -76,3 +76,40 @@ func TestActivatingReplacementRetiresOverlappingDefinition(t *testing.T) {
 		t.Fatalf("expected replacement active")
 	}
 }
+
+func TestRetireActiveDefinitionPreservesEventHistory(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)
+	store := NewMemoryStore()
+	service := &Service{Store: store, Clock: func() time.Time { return now }}
+	draft, err := service.CreateDraft(ctx, Definition{Provider: "OPENWA", Channel: ChannelWhatsApp, Engine: "BAILEYS", AdapterVersion: "0.13.0", Capabilities: []Capability{CapabilitySendText}}, "maker", "create provider definition")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := service.Submit(ctx, draft.ID, draft.Version, "maker", "submit provider definition")
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, err := service.Decide(ctx, pending.ID, pending.Version, true, "checker", "approve provider definition")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Hour)
+	retired, err := service.Retire(ctx, active.ID, active.Version, "checker", "retire obsolete provider route")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if retired.Status != StatusRetired || retired.EffectiveTo == nil {
+		t.Fatalf("unexpected retired definition: %+v", retired)
+	}
+	events, err := service.ListEvents(ctx, retired.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 4 {
+		t.Fatalf("expected 4 lifecycle events, got %d", len(events))
+	}
+	if events[len(events)-1].Action != string(StatusRetired) {
+		t.Fatalf("unexpected final event %+v", events[len(events)-1])
+	}
+}

@@ -1,3 +1,11 @@
+
+## After 0.8.23
+
+1. Complete gateway-node registration against the provider capability definition and enforce minimum compatible gateway versions.
+2. Close remaining backend retention, data-subject and deployment-governance workflows.
+3. Run the final backend traceability and adversarial readiness audit.
+4. Validate both OpenWA engines on live Hostinger infrastructure with genuine test sessions.
+
 # Next actions
 
 1. Continue the independent repository audit and reconcile stale evidence across the remaining 398-requirement catalogue.

@@ -90,7 +90,9 @@ func buildMemoryRuntime(cfg config.Config, protector *sharedcrypto.MSISDNProtect
 	admin := identity.User{ID: "00000000-0000-4000-8000-000000000001", Email: cfg.BootstrapAdminEmail, DisplayName: "Bootstrap Administrator", Status: identity.StatusActive, PasswordHash: hash, TOTPSecret: cfg.BootstrapAdminTOTP, MFARequired: true, Permissions: map[string]struct{}{"*": {}}}
 	adminStore := identity.NewMemoryAdministrationRepository("SUPER_ADMIN", "CAMPAIGN_OPERATOR", "COMPLIANCE_REVIEWER", "CAMPAIGN_APPROVER", "ANALYST", "TECHNICAL_ADMIN", "FINANCE_USER", "FINANCE_APPROVER")
 	now := time.Now().UTC()
-	_ = adminStore.CreateAccount(context.Background(), identity.Account{ID: admin.ID, Email: admin.Email, DisplayName: admin.DisplayName, Status: identity.StatusActive, MFARequired: true, RoleCodes: []string{"SUPER_ADMIN"}, Version: 1, CreatedAt: now, UpdatedAt: now}, hash, admin.TOTPSecret, admin.ID, "bootstrap administrator")
+	if err := adminStore.CreateAccount(context.Background(), identity.Account{ID: admin.ID, Email: admin.Email, DisplayName: admin.DisplayName, Status: identity.StatusActive, MFARequired: true, RoleCodes: []string{"SUPER_ADMIN"}, Version: 1, CreatedAt: now, UpdatedAt: now}, hash, admin.TOTPSecret, admin.ID, "bootstrap administrator"); err != nil {
+		return nil, fmt.Errorf("bootstrap administrator: %w", err)
+	}
 	memorySessions := identity.NewMemorySessionRepository()
 	identityService := identity.NewPersistentServiceWithEvents(adminStore, memorySessions, identity.NewMemoryChallengeRepository(), identity.NewMemoryEventRecorder(), cfg.SessionIdleTimeout, cfg.SessionAbsoluteTimeout)
 	identityAdministration := identity.NewAdministrationService(adminStore, memorySessions)
@@ -112,16 +114,25 @@ func buildMemoryRuntime(cfg config.Config, protector *sharedcrypto.MSISDNProtect
 	optOutProcessor := &consent.OptOutProcessor{Deliveries: deliveryEvents, Ledger: consentLedger, Policies: optOutPolicies, ActorID: consent.DefaultGatewayServiceActorID, Inbox: inboundReplies}
 	providerStore := provider.NewMemoryStore()
 	providerCapabilities := &provider.Service{Store: providerStore}
-	bootstrapProviderCapabilities(context.Background(), providerStore, nowPolicy)
-	campaigns := campaign.NewService(campaign.NewMemoryRepository()).WithOrganisationReader(orgs).WithOrganisationPolicies(organisationPolicies).WithCommercialApprovals(commercialService).WithConsentReviews(reviews).WithProviderCapabilities(providerCapabilities)
+	if err := bootstrapProviderCapabilities(context.Background(), providerStore, nowPolicy); err != nil {
+		return nil, fmt.Errorf("bootstrap provider capabilities: %w", err)
+	}
+	senderStore := sender.NewMemoryGovernanceStore()
+	gatewayPools := &sender.GatewayPoolService{Store: senderStore}
+	if err := bootstrapGatewayPools(context.Background(), gatewayPools); err != nil {
+		return nil, fmt.Errorf("bootstrap gateway pools: %w", err)
+	}
+	campaigns := campaign.NewService(campaign.NewMemoryRepository()).WithOrganisationReader(orgs).WithOrganisationPolicies(organisationPolicies).WithCommercialApprovals(commercialService).WithConsentReviews(reviews).WithProviderCapabilities(providerCapabilities).WithGatewayPools(gatewayPools)
 	messages := message.NewService(message.NewMemoryRepository())
-	testMessages := &testmessage.Service{Repository: testmessage.NewMemoryRepository(), Protector: protector, Messages: messages, Routes: testmessage.RouteValidatorFunc(func(context.Context, string, string, string, string, string) error { return nil })}
+	testMessages := &testmessage.Service{Repository: testmessage.NewMemoryRepository(), Protector: protector, Messages: messages, Routes: testmessage.RouteValidatorFunc(func(context.Context, testmessage.RouteRequirements) (testmessage.RouteEvidence, error) {
+		return testmessage.RouteEvidence{GatewayPoolVersion: 1, AdapterVersion: "0.13.0", ProviderDefinitionID: "00000000-0000-4000-8000-000000000101", ProviderDefinitionVersion: 1}, nil
+	})}
 	snapshots := segment.NewService(segment.NewMemoryRepository())
 	segmentDefinitions := &segment.DefinitionService{Repository: segment.NewMemoryDefinitionRepository(), Registry: filters.Registry}
 	cohortExecution := cohort.NewExecutionService(filters.Compiler, &cohort.MemoryQueryRepository{})
 	materialisationService := &materialisation.MaterialisationService{Repository: materialisation.NewMemoryMaterialisationRepository()}
 	metrics := delivery.NewMetricsService(delivery.NewMemoryMetricsRepository())
-	senderGovernance := &sender.GovernanceService{Store: sender.NewMemoryGovernanceStore()}
+	senderGovernance := &sender.GovernanceService{Store: senderStore}
 	pacingPolicies := &sender.PacingAdministration{Store: sender.NewMemoryPacingStore()}
 	executionStore := execution.NewMemoryStore()
 	executionCoordinator := &execution.Coordinator{Campaigns: campaigns, Store: executionStore, SafetyMarginPercent: 15}
@@ -129,7 +140,7 @@ func buildMemoryRuntime(cfg config.Config, protector *sharedcrypto.MSISDNProtect
 		m, err := executionStore.Metrics(ctx, id)
 		return campaignworkspace.DeliveryMetrics{Authorised: m.Authorised, Queued: m.Queued, Pending: m.Pending, Submitted: m.Submitted, Sent: m.Sent, Delivered: m.Delivered, Read: m.Read, Unknown: m.Unknown}, err
 	})}
-	routingPlans := &execution.RoutingAdministration{Store: execution.NewMemoryRoutingPlanStore(), Campaigns: campaigns}
+	routingPlans := &execution.RoutingAdministration{Store: execution.NewMemoryRoutingPlanStore(), Campaigns: campaigns, ProviderCapabilities: providerCapabilities, GatewayPools: gatewayPools}
 	shardReallocations := &execution.ReallocationAdministration{Store: execution.NewMemoryShardRepository()}
 	executionCoordinator.RoutingPlans = routingPlans
 	operationsService := &operations.Service{Repo: operations.NewMemoryRepository(), Audit: auditRecorder, AuditRepository: auditRepository, Deliveries: deliveryEvents}
@@ -224,7 +235,9 @@ func buildPostgreSQLRuntime(ctx context.Context, cfg config.Config, protector *s
 	}
 	optOutProcessor := &consent.OptOutProcessor{Deliveries: deliveryEvents, Ledger: consentLedger, Policies: optOutPolicies, ActorID: consent.DefaultGatewayServiceActorID, Inbox: inboundReplies}
 	providerCapabilities := &provider.Service{Store: &provider.PostgreSQLStore{DB: db}}
-	campaigns := campaign.NewService(&postgresrepo.CampaignRepository{DB: db}).WithOrganisationReader(orgs).WithOrganisationPolicies(organisationPolicies).WithCommercialApprovals(commercialService).WithConsentReviews(reviews).WithProviderCapabilities(providerCapabilities)
+	senderStore := &sender.PostgreSQLGovernanceStore{DB: db}
+	gatewayPools := &sender.GatewayPoolService{Store: senderStore}
+	campaigns := campaign.NewService(&postgresrepo.CampaignRepository{DB: db}).WithOrganisationReader(orgs).WithOrganisationPolicies(organisationPolicies).WithCommercialApprovals(commercialService).WithConsentReviews(reviews).WithProviderCapabilities(providerCapabilities).WithGatewayPools(gatewayPools)
 	messages := message.NewService(&message.PostgreSQLRepository{DB: db})
 	testMessageRepository := &testmessage.PostgreSQLRepository{DB: db}
 	testMessages := &testmessage.Service{Repository: testMessageRepository, Protector: protector, Messages: messages, Routes: testMessageRepository}
@@ -234,7 +247,7 @@ func buildPostgreSQLRuntime(ctx context.Context, cfg config.Config, protector *s
 	cohortExecution := cohort.NewExecutionService(filters.Compiler, &cohort.PostgreSQLQueryRepository{DB: db})
 	materialisationService := &materialisation.MaterialisationService{Repository: &materialisation.PostgreSQLRepository{DB: db}}
 	metrics := delivery.NewMetricsService(&delivery.PostgreSQLMetricsRepository{DB: db})
-	senderGovernance := &sender.GovernanceService{Store: &sender.PostgreSQLGovernanceStore{DB: db}}
+	senderGovernance := &sender.GovernanceService{Store: senderStore}
 	pacingPolicies := &sender.PacingAdministration{Store: &postgresrepo.PacingPolicyRepository{DB: db}}
 	executionStore := &execution.PostgreSQLStore{DB: db}
 	executionCoordinator := &execution.Coordinator{Campaigns: campaigns, Store: executionStore, SafetyMarginPercent: 15}
@@ -242,7 +255,7 @@ func buildPostgreSQLRuntime(ctx context.Context, cfg config.Config, protector *s
 		m, err := executionStore.Metrics(ctx, id)
 		return campaignworkspace.DeliveryMetrics{Authorised: m.Authorised, Queued: m.Queued, Pending: m.Pending, Submitted: m.Submitted, Sent: m.Sent, Delivered: m.Delivered, Read: m.Read, Unknown: m.Unknown}, err
 	})}
-	routingPlans := &execution.RoutingAdministration{Store: &execution.PostgreSQLRoutingPlanStore{DB: db}, Campaigns: campaigns}
+	routingPlans := &execution.RoutingAdministration{Store: &execution.PostgreSQLRoutingPlanStore{DB: db}, Campaigns: campaigns, ProviderCapabilities: providerCapabilities, GatewayPools: gatewayPools}
 	shardReallocations := &execution.ReallocationAdministration{Store: &execution.PostgreSQLShardRepository{DB: db}}
 	executionCoordinator.RoutingPlans = routingPlans
 	operationsService := &operations.Service{Repo: &operations.PostgreSQLRepository{DB: db}, Audit: auditRecorder, AuditRepository: auditRepository, Deliveries: deliveryEvents}
@@ -279,7 +292,43 @@ func buildImportIntake(cfg config.Config, service *importer.ImportService) (*imp
 }
 func verifyControlSchema(ctx context.Context, db *sql.DB) error {
 	var ready bool
-	err := db.QueryRowContext(ctx, `SELECT to_regclass('public.internal_mfa_challenges') IS NOT NULL AND to_regclass('public.attribute_definitions') IS NOT NULL AND to_regclass('public.audience_import_staging') IS NOT NULL AND to_regclass('public.delivery_provider_events') IS NOT NULL AND to_regclass('public.campaign_metric_reconciliation') IS NOT NULL AND to_regclass('public.consent_grants') IS NOT NULL AND to_regclass('public.suppressions') IS NOT NULL AND to_regclass('public.consent_events') IS NOT NULL AND to_regclass('public.inbound_replies') IS NOT NULL AND to_regclass('public.opt_out_policies') IS NOT NULL AND to_regclass('public.inbound_retention_policies') IS NOT NULL AND to_regclass('public.sender_pools') IS NOT NULL AND to_regclass('public.sender_governance_events') IS NOT NULL AND to_regclass('public.campaign_capacity_assessments') IS NOT NULL AND to_regclass('public.campaign_execution_leases') IS NOT NULL AND to_regclass('public.operations_incidents') IS NOT NULL AND to_regclass('public.export_requests') IS NOT NULL AND to_regclass('public.audience_profile_conflicts') IS NOT NULL AND to_regclass('public.organisation_policy_versions') IS NOT NULL AND to_regclass('public.campaign_commercial_approvals') IS NOT NULL AND to_regclass('public.audience_materialisation_jobs') IS NOT NULL AND to_regclass('public.sender_pacing_policies') IS NOT NULL AND to_regclass('public.sender_pacing_runtime') IS NOT NULL AND to_regclass('public.campaign_shard_reallocations') IS NOT NULL AND to_regclass('public.approved_test_recipients') IS NOT NULL AND to_regclass('public.test_message_sends') IS NOT NULL AND to_regclass('public.provider_capability_definitions') IS NOT NULL`).Scan(&ready)
+	err := db.QueryRowContext(ctx, `SELECT
+  to_regclass('public.internal_mfa_challenges') IS NOT NULL
+  AND to_regclass('public.attribute_definitions') IS NOT NULL
+  AND to_regclass('public.audience_import_staging') IS NOT NULL
+  AND to_regclass('public.delivery_provider_events') IS NOT NULL
+  AND to_regclass('public.campaign_metric_reconciliation') IS NOT NULL
+  AND to_regclass('public.consent_grants') IS NOT NULL
+  AND to_regclass('public.suppressions') IS NOT NULL
+  AND to_regclass('public.consent_events') IS NOT NULL
+  AND to_regclass('public.inbound_replies') IS NOT NULL
+  AND to_regclass('public.opt_out_policies') IS NOT NULL
+  AND to_regclass('public.inbound_retention_policies') IS NOT NULL
+  AND to_regclass('public.sender_pools') IS NOT NULL
+  AND to_regclass('public.sender_governance_events') IS NOT NULL
+  AND to_regclass('public.campaign_capacity_assessments') IS NOT NULL
+  AND to_regclass('public.campaign_execution_leases') IS NOT NULL
+  AND to_regclass('public.operations_incidents') IS NOT NULL
+  AND to_regclass('public.export_requests') IS NOT NULL
+  AND to_regclass('public.audience_profile_conflicts') IS NOT NULL
+  AND to_regclass('public.organisation_policy_versions') IS NOT NULL
+  AND to_regclass('public.campaign_commercial_approvals') IS NOT NULL
+  AND to_regclass('public.audience_materialisation_jobs') IS NOT NULL
+  AND to_regclass('public.sender_pacing_policies') IS NOT NULL
+  AND to_regclass('public.sender_pacing_runtime') IS NOT NULL
+  AND to_regclass('public.campaign_shard_reallocations') IS NOT NULL
+  AND to_regclass('public.approved_test_recipients') IS NOT NULL
+  AND to_regclass('public.test_message_sends') IS NOT NULL
+  AND to_regclass('public.provider_capability_definitions') IS NOT NULL
+  AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='campaigns' AND column_name='provider_capability_definition_id')
+  AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='campaigns' AND column_name='provider_capability_definition_version')
+  AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='campaigns' AND column_name='gateway_pool_version')
+  AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='campaign_routing_plan_pools' AND column_name='provider_capability_definition_id')
+  AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='campaign_routing_plan_pools' AND column_name='gateway_pool_version')
+  AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='test_message_sends' AND column_name='gateway_pool_version')
+  AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='test_message_sends' AND column_name='provider_adapter_version')
+  AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='test_message_sends' AND column_name='provider_capability_definition_id')
+  AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname='provider_capability_active_period_exclusion')`).Scan(&ready)
 	if err != nil {
 		return err
 	}
@@ -289,12 +338,28 @@ func verifyControlSchema(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-func bootstrapProviderCapabilities(ctx context.Context, store provider.Store, now time.Time) {
+func bootstrapGatewayPools(ctx context.Context, service *sender.GatewayPoolService) error {
+	definitions := []sender.GatewayPool{
+		{ID: "00000000-0000-4000-8000-000000000201", Name: "OpenWA whatsapp-web.js", Provider: sender.GatewayProviderOpenWA, Engine: sender.GatewayEngineWhatsAppWebJS, AdapterVersion: "0.13.0", Status: sender.GatewayPoolActive, Capabilities: []sender.Capability{sender.CapabilitySendText, sender.CapabilitySendImage, sender.CapabilitySendVideo, sender.CapabilitySendDocument, sender.CapabilityDeliveryEvents, sender.CapabilityReadEvents, sender.CapabilityInboundMessages}, MinimumHealthyNodes: 1},
+		{ID: "00000000-0000-4000-8000-000000000202", Name: "OpenWA Baileys", Provider: sender.GatewayProviderOpenWA, Engine: sender.GatewayEngineBaileys, AdapterVersion: "0.13.0", Status: sender.GatewayPoolActive, Capabilities: []sender.Capability{sender.CapabilitySendText, sender.CapabilitySendImage, sender.CapabilitySendVideo, sender.CapabilitySendDocument, sender.CapabilityDeliveryEvents, sender.CapabilityReadEvents, sender.CapabilityInboundMessages}, MinimumHealthyNodes: 1},
+	}
+	for _, definition := range definitions {
+		if _, err := service.Create(ctx, definition, "00000000-0000-4000-8000-000000000001", "bootstrap governed OpenWA gateway pool"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func bootstrapProviderCapabilities(ctx context.Context, store provider.Store, now time.Time) error {
 	definitions := []provider.Definition{
 		{ID: "00000000-0000-4000-8000-000000000101", Provider: "OPENWA", Channel: provider.ChannelWhatsApp, Engine: "WHATSAPP_WEB_JS", AdapterVersion: "0.13.0", Capabilities: []provider.Capability{provider.CapabilitySendText, provider.CapabilitySendImage, provider.CapabilitySendVideo, provider.CapabilitySendDocument, provider.CapabilityDeliveryEvents, provider.CapabilityReadEvents, provider.CapabilityInbound, provider.CapabilityPairingQR}, MaximumAttachmentBytes: 64 << 20, Status: provider.StatusActive, EffectiveFrom: now.Add(-time.Second), Version: 1, CreatedBy: "00000000-0000-4000-8000-000000000001", ApprovedBy: "00000000-0000-4000-8000-000000000001", Reason: "bootstrap OpenWA whatsapp-web.js capability definition", CreatedAt: now, UpdatedAt: now},
 		{ID: "00000000-0000-4000-8000-000000000102", Provider: "OPENWA", Channel: provider.ChannelWhatsApp, Engine: "BAILEYS", AdapterVersion: "0.13.0", Capabilities: []provider.Capability{provider.CapabilitySendText, provider.CapabilitySendImage, provider.CapabilitySendVideo, provider.CapabilitySendDocument, provider.CapabilityDeliveryEvents, provider.CapabilityReadEvents, provider.CapabilityInbound, provider.CapabilityPairingQR, provider.CapabilityPairingCode}, MaximumAttachmentBytes: 64 << 20, Status: provider.StatusActive, EffectiveFrom: now.Add(-time.Second), Version: 1, CreatedBy: "00000000-0000-4000-8000-000000000001", ApprovedBy: "00000000-0000-4000-8000-000000000001", Reason: "bootstrap OpenWA Baileys capability definition", CreatedAt: now, UpdatedAt: now},
 	}
 	for _, definition := range definitions {
-		_, _ = store.Create(ctx, definition)
+		if _, err := store.Create(ctx, definition); err != nil {
+			return err
+		}
 	}
+	return nil
 }

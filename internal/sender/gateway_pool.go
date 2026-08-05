@@ -56,6 +56,13 @@ type GatewayPoolStore interface {
 
 type GatewayPoolService struct{ Store GatewayPoolStore }
 
+func (s *GatewayPoolService) Get(ctx context.Context, id string) (GatewayPool, error) {
+	if s == nil || s.Store == nil {
+		return GatewayPool{}, errors.New("gateway pool store is required")
+	}
+	return s.Store.GetGatewayPool(ctx, strings.TrimSpace(id))
+}
+
 func (s *GatewayPoolService) Create(ctx context.Context, value GatewayPool, actor, reason string) (GatewayPool, error) {
 	if s == nil || s.Store == nil {
 		return GatewayPool{}, errors.New("gateway pool store is required")

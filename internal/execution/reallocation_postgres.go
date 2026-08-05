@@ -72,7 +72,10 @@ FROM campaign_dispatch_shards s WHERE s.id=$1::uuid FOR UPDATE`, shardID).Scan(&
 	if err != nil {
 		return ShardReallocation{}, err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return ShardReallocation{}, err
+	}
 	if n != 1 {
 		return ShardReallocation{}, ErrReallocationConflict
 	}

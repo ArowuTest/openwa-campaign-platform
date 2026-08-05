@@ -27,7 +27,7 @@ func (r *PostgreSQLShardRepository) Discover(ctx context.Context, targetSize int
 	}
 	defer tx.Rollback()
 	rows, err := tx.QueryContext(ctx, `SELECT c.id::text FROM campaigns c
-WHERE c.status IN ('SCHEDULED','SENDING','PAUSED')
+WHERE c.status IN ('SCHEDULED','DISPATCHING','PAUSED')
   AND EXISTS (SELECT 1 FROM campaign_recipients cr WHERE cr.campaign_id=c.id)
   AND NOT EXISTS (SELECT 1 FROM campaign_dispatch_shards s WHERE s.campaign_id=c.id)
 ORDER BY c.requested_start_at NULLS LAST,c.id
@@ -49,23 +49,35 @@ FOR UPDATE SKIP LOCKED LIMIT $1`, limit)
 	}
 	created := 0
 	for _, campaignID := range ids {
-		result, err := tx.ExecContext(ctx, `WITH ranked AS (
+		var shardCount int
+		err := tx.QueryRowContext(ctx, `WITH ranked AS (
  SELECT cr.id, ((row_number() OVER (ORDER BY cr.id)-1)/$2)::int AS ordinal
  FROM campaign_recipients cr WHERE cr.campaign_id=$1::uuid
 ), inserted AS (
  INSERT INTO campaign_dispatch_shards(campaign_id,ordinal,target_size,recipient_count,status,created_at,updated_at)
  SELECT $1::uuid,ordinal,$2,count(*)::bigint,'PENDING',$3,$3 FROM ranked GROUP BY ordinal
  ON CONFLICT(campaign_id,ordinal) DO NOTHING RETURNING id,ordinal
+), assigned AS (
+ UPDATE campaign_recipients cr SET dispatch_shard_id=i.id
+ FROM ranked r JOIN inserted i ON i.ordinal=r.ordinal
+ WHERE cr.id=r.id AND cr.dispatch_shard_id IS NULL
+ RETURNING cr.id
 )
-UPDATE campaign_recipients cr SET dispatch_shard_id=i.id
-FROM ranked r JOIN inserted i ON i.ordinal=r.ordinal
-WHERE cr.id=r.id AND cr.dispatch_shard_id IS NULL;
+SELECT count(*)::int FROM inserted`, campaignID, targetSize, now.UTC()).Scan(&shardCount)
+		if err != nil {
+			return 0, fmt.Errorf("create shards for campaign %s: %w", campaignID, err)
+		}
 
-WITH latest_plan AS (
- SELECT rp.id FROM campaign_routing_plans rp WHERE rp.campaign_id=$1::uuid ORDER BY rp.plan_version DESC,rp.approved_at DESC LIMIT 1
+		// Assign every newly discovered shard to the latest approved route using
+		// one row per weighted slot. count(*) is the true number of generated
+		// slots; summing allocation_weight after generate_series would square
+		// each route's weight and leave some ordinals unassignable.
+		if _, err := tx.ExecContext(ctx, `WITH latest_plan AS (
+ SELECT rp.id FROM campaign_routing_plans rp WHERE rp.campaign_id=$1::uuid ORDER BY rp.plan_version DESC,rp.approved_at DESC,rp.id DESC LIMIT 1
 ), slots AS (
- SELECT l.id AS routing_plan_id,p.sender_pool_id,row_number() OVER (ORDER BY p.sender_pool_id,gs)::bigint-1 AS slot,
-        sum(p.allocation_weight) OVER ()::bigint AS total_slots
+ SELECT l.id AS routing_plan_id,p.sender_pool_id,
+        row_number() OVER (ORDER BY p.sender_pool_id,gs)::bigint-1 AS slot,
+        count(*) OVER ()::bigint AS total_slots
  FROM latest_plan l JOIN campaign_routing_plan_pools p ON p.routing_plan_id=l.id
  CROSS JOIN LATERAL generate_series(1,p.allocation_weight) gs
 ), chosen AS (
@@ -73,12 +85,11 @@ WITH latest_plan AS (
  FROM campaign_dispatch_shards s JOIN slots sl ON sl.slot=(s.ordinal::bigint % sl.total_slots)
  WHERE s.campaign_id=$1::uuid AND s.routing_plan_id IS NULL
 )
-UPDATE campaign_dispatch_shards s SET routing_plan_id=c.routing_plan_id,assigned_sender_pool_id=c.sender_pool_id,updated_at=$3
-FROM chosen c WHERE s.id=c.shard_id`, campaignID, targetSize, now.UTC())
-		if err != nil {
-			return 0, fmt.Errorf("create shards for campaign %s: %w", campaignID, err)
+UPDATE campaign_dispatch_shards s SET routing_plan_id=c.routing_plan_id,assigned_sender_pool_id=c.sender_pool_id,updated_at=$2
+FROM chosen c WHERE s.id=c.shard_id`, campaignID, now.UTC()); err != nil {
+			return 0, fmt.Errorf("assign shard routes for campaign %s: %w", campaignID, err)
 		}
-		if n, e := result.RowsAffected(); e == nil && n > 0 {
+		if shardCount > 0 {
 			created++
 		}
 	}
@@ -129,7 +140,10 @@ WHERE id=$1::uuid AND status='RUNNING' AND lease_owner=$2 AND lease_version=$3 A
 	if err != nil {
 		return err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
 	if n != 1 {
 		return ErrShardLeaseConflict
 	}

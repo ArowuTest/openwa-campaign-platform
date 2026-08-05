@@ -61,7 +61,10 @@ func (r *PostgreSQLRotationRepository) RenewRun(ctx context.Context, run Rotatio
 	if err != nil {
 		return err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
 	if n != 1 {
 		return ErrRotationLeaseConflict
 	}
@@ -116,7 +119,10 @@ func (r *PostgreSQLRotationRepository) ProcessRunBatch(ctx context.Context, run 
 		if e != nil {
 			return run, false, e
 		}
-		n, _ := res.RowsAffected()
+		n, e := res.RowsAffected()
+		if e != nil {
+			return run, false, e
+		}
 		processed += n
 		last = i.id
 	}
@@ -151,7 +157,10 @@ func (r *PostgreSQLRotationRepository) FailRun(ctx context.Context, run Rotation
 	if err != nil {
 		return err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
 	if n != 1 {
 		return ErrRotationLeaseConflict
 	}

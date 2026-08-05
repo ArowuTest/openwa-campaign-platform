@@ -93,7 +93,10 @@ func (r *IdentityRepository) Save(ctx context.Context, u identity.User) error {
 	if err != nil {
 		return err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
 	if n == 0 {
 		return identity.ErrUserNotFound
 	}
@@ -175,7 +178,10 @@ func (r *IdentitySessionRepository) RevokeAll(ctx context.Context, userID string
 	if err != nil {
 		return 0, err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
 	return int(n), nil
 }
 func (r *IdentitySessionRepository) ActiveByUser(ctx context.Context, userID string, now time.Time) ([]identity.Session, error) {
@@ -249,7 +255,10 @@ WHERE user_id=$1::uuid`, userID, now.UTC(), threshold, intervalLiteral(lockDurat
 	if err != nil {
 		return err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
 	if n == 0 {
 		return identity.ErrUserNotFound
 	}
@@ -266,7 +275,10 @@ func (r *IdentityRepository) RecordSuccessfulLogin(ctx context.Context, userID s
 	if err != nil {
 		return err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
 	if n == 0 {
 		return identity.ErrUserNotFound
 	}

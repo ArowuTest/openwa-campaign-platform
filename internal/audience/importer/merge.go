@@ -13,7 +13,7 @@ var (
 	ErrImportNotApproved       = errors.New("audience import is not approved for merge")
 	ErrMakerChecker            = errors.New("audience import uploader cannot approve the same import")
 	ErrConsentBasis            = errors.New("audience import consent basis is invalid or expired")
-	ErrUnsupportedUpdatePolicy = errors.New("audience import update policy is not implemented for durable merge")
+	ErrUnsupportedUpdatePolicy = errors.New("unsupported audience import update policy")
 )
 
 type MergeResult struct {

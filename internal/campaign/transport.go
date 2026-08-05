@@ -23,18 +23,21 @@ const (
 )
 
 type TransportSelection struct {
-	Channel                 string       `json:"channel"`
-	Provider                Provider     `json:"provider"`
-	Engine                  Engine       `json:"engine"`
-	RoutingMode             RoutingMode  `json:"routingMode"`
-	GatewayPoolID           string       `json:"gatewayPoolId"`
-	SessionID               string       `json:"sessionId,omitempty"`
-	SenderPoolID            string       `json:"senderPoolId,omitempty"`
-	AdapterVersion          string       `json:"adapterVersion"`
-	RequiredCapabilities    []string     `json:"requiredCapabilities,omitempty"`
-	FallbackMode            FallbackMode `json:"fallbackMode"`
-	RoutingPolicyVersion    string       `json:"routingPolicyVersion"`
-	CapacityEvidenceVersion string       `json:"capacityEvidenceVersion"`
+	Channel                   string       `json:"channel"`
+	Provider                  Provider     `json:"provider"`
+	Engine                    Engine       `json:"engine"`
+	RoutingMode               RoutingMode  `json:"routingMode"`
+	GatewayPoolID             string       `json:"gatewayPoolId"`
+	GatewayPoolVersion        int64        `json:"gatewayPoolVersion,omitempty"`
+	SessionID                 string       `json:"sessionId,omitempty"`
+	SenderPoolID              string       `json:"senderPoolId,omitempty"`
+	AdapterVersion            string       `json:"adapterVersion"`
+	ProviderDefinitionID      string       `json:"providerDefinitionId,omitempty"`
+	ProviderDefinitionVersion int64        `json:"providerDefinitionVersion,omitempty"`
+	RequiredCapabilities      []string     `json:"requiredCapabilities,omitempty"`
+	FallbackMode              FallbackMode `json:"fallbackMode"`
+	RoutingPolicyVersion      string       `json:"routingPolicyVersion"`
+	CapacityEvidenceVersion   string       `json:"capacityEvidenceVersion"`
 }
 
 func (t TransportSelection) Validate() error {
@@ -49,6 +52,15 @@ func (t TransportSelection) Validate() error {
 	}
 	if strings.TrimSpace(t.GatewayPoolID) == "" || strings.TrimSpace(t.AdapterVersion) == "" || strings.TrimSpace(t.RoutingPolicyVersion) == "" || strings.TrimSpace(t.CapacityEvidenceVersion) == "" {
 		return errors.New("gateway pool, adapter, routing policy and capacity evidence versions are required")
+	}
+	if t.GatewayPoolVersion < 0 {
+		return errors.New("gateway pool version cannot be negative")
+	}
+	if (strings.TrimSpace(t.ProviderDefinitionID) == "") != (t.ProviderDefinitionVersion == 0) {
+		return errors.New("provider capability definition ID and version must be supplied together")
+	}
+	if t.ProviderDefinitionVersion < 0 {
+		return errors.New("provider capability definition version cannot be negative")
 	}
 	if t.FallbackMode != FallbackNone {
 		return errors.New("initial release requires fallback mode NONE")

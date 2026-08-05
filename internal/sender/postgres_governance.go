@@ -12,7 +12,7 @@ import (
 type PostgreSQLGovernanceStore struct{ DB *sql.DB }
 
 func (p *PostgreSQLGovernanceStore) ListPools(ctx context.Context) ([]Pool, error) {
-	rows, err := p.DB.QueryContext(ctx, `SELECT id::text,name,coalesce(organisation_id::text,''),status,max_messages_per_minute,daily_capacity,reserved_capacity,version,created_at,updated_at FROM sender_pools ORDER BY name`)
+	rows, err := p.DB.QueryContext(ctx, `SELECT id::text,name,coalesce(organisation_id::text,''),status,max_messages_per_minute,daily_capacity,reserved_capacity,version,created_at,updated_at FROM sender_pools ORDER BY name LIMIT 5000`)
 	if err != nil {
 		return nil, err
 	}
@@ -39,7 +39,7 @@ func (p *PostgreSQLGovernanceStore) UpdatePool(ctx context.Context, id string, e
 	return v, err
 }
 func (p *PostgreSQLGovernanceStore) ListNodes(ctx context.Context) ([]Node, error) {
-	rows, err := p.DB.QueryContext(ctx, `SELECT id::text,name,coalesce(public_ip::text,''),status,coalesce(build_version,''),capacity,queue_depth,draining,last_heartbeat_at,governance_version FROM sender_nodes ORDER BY name`)
+	rows, err := p.DB.QueryContext(ctx, `SELECT id::text,name,coalesce(public_ip::text,''),status,coalesce(build_version,''),capacity,queue_depth,draining,last_heartbeat_at,governance_version FROM sender_nodes ORDER BY name LIMIT 5000`)
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +74,7 @@ func (p *PostgreSQLGovernanceStore) HeartbeatNode(ctx context.Context, id string
 	return v, err
 }
 func (p *PostgreSQLGovernanceStore) ListSessions(ctx context.Context) ([]GovernedSession, error) {
-	rows, err := p.DB.QueryContext(ctx, `SELECT id::text,coalesce(node_id::text,''),coalesce(sender_pool_id::text,''),masked_msisdn,engine_type,coalesce(engine_version,''),status,coalesce(safe_messages_per_minute,0)::int,coalesce(safe_daily_capacity,0),in_flight_limit,sent_today,last_heartbeat_at,last_success_at,quarantined_at,coalesce(quarantine_reason,''),reinstated_at,governance_version FROM sender_sessions ORDER BY masked_msisdn`)
+	rows, err := p.DB.QueryContext(ctx, `SELECT id::text,coalesce(node_id::text,''),coalesce(sender_pool_id::text,''),masked_msisdn,engine_type,coalesce(engine_version,''),status,coalesce(safe_messages_per_minute,0)::int,coalesce(safe_daily_capacity,0),in_flight_limit,sent_today,last_heartbeat_at,last_success_at,quarantined_at,coalesce(quarantine_reason,''),reinstated_at,governance_version FROM sender_sessions ORDER BY masked_msisdn LIMIT 10000`)
 	if err != nil {
 		return nil, err
 	}
@@ -186,7 +186,7 @@ func encodeCapabilities(values []Capability) ([]byte, error) {
 }
 
 func (p *PostgreSQLGovernanceStore) ListGatewayPools(ctx context.Context) ([]GatewayPool, error) {
-	rows, err := p.DB.QueryContext(ctx, `SELECT id::text,name,provider,engine,adapter_version,status,capabilities,minimum_healthy_nodes,version,created_at,updated_at FROM gateway_pools ORDER BY name`)
+	rows, err := p.DB.QueryContext(ctx, `SELECT id::text,name,provider,engine,adapter_version,status,capabilities,minimum_healthy_nodes,version,created_at,updated_at FROM gateway_pools ORDER BY name LIMIT 5000`)
 	if err != nil {
 		return nil, err
 	}

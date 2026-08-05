@@ -68,8 +68,15 @@ type Result struct {
 
 type AtomicStore interface {
 	Authorise(context.Context, Command, EligibilityChecker) (Result, error)
-	Recipients(context.Context, string) []delivery.Recipient
-	Outbox(context.Context) []Outbox
+}
+
+// EvidenceStore exposes bounded, error-returning diagnostic reads over the
+// authoritative recipient ledger and transactional outbox. These operations
+// are intentionally separate from AtomicStore so release execution cannot
+// accidentally depend on loading an entire campaign or outbox into memory.
+type EvidenceStore interface {
+	ListRecipients(context.Context, string, string, string, int) ([]delivery.Recipient, error)
+	ListOutbox(context.Context, time.Time, string, int) ([]Outbox, error)
 }
 
 type MemoryStore struct {
@@ -167,7 +174,10 @@ func (s *MemoryStore) Authorise(ctx context.Context, cmd Command, checker Eligib
 			result.Existing++
 			continue
 		}
-		key, _ := delivery.NewIdempotencyKey(cmd.CampaignID, m.ContactID, cmd.MessageVersionID)
+		key, err := delivery.NewIdempotencyKey(cmd.CampaignID, m.ContactID, cmd.MessageVersionID)
+		if err != nil {
+			return Result{}, err
+		}
 		recipientID, err := id.New()
 		if err != nil {
 			return Result{}, err
@@ -177,7 +187,10 @@ func (s *MemoryStore) Authorise(ctx context.Context, cmd Command, checker Eligib
 		if err != nil {
 			return Result{}, err
 		}
-		payload, _ := json.Marshal(map[string]any{"campaignRecipientId": recipientID, "campaignId": cmd.CampaignID, "snapshotId": cmd.SnapshotID, "shard": shardFor(m.ContactID, cmd.MaximumUniqueRecipients, cmd.ShardSize), "eligibilityEvidenceHash": m.EligibilityEvidenceHash})
+		payload, err := json.Marshal(map[string]any{"campaignRecipientId": recipientID, "campaignId": cmd.CampaignID, "snapshotId": cmd.SnapshotID, "shard": shardFor(m.ContactID, cmd.MaximumUniqueRecipients, cmd.ShardSize), "eligibilityEvidenceHash": m.EligibilityEvidenceHash})
+		if err != nil {
+			return Result{}, err
+		}
 		out := Outbox{ID: outboxID, DedupKey: "dispatch:" + key, EventType: "CAMPAIGN_RECIPIENT_AUTHORISED", AggregateID: recipientID, Payload: payload, CreatedAt: now}
 		s.recipients[recipientID] = recipient
 		s.byNatural[natural] = recipientID
@@ -187,28 +200,84 @@ func (s *MemoryStore) Authorise(ctx context.Context, cmd Command, checker Eligib
 	}
 	return result, nil
 }
-func (s *MemoryStore) Recipients(_ context.Context, campaignID string) []delivery.Recipient {
+func (s *MemoryStore) ListRecipients(_ context.Context, campaignID, afterContactID, afterID string, limit int) ([]delivery.Recipient, error) {
+	if err := validateRecipientCursor(afterContactID, afterID); err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > 5_000 {
+		limit = 1_000
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := []delivery.Recipient{}
 	for _, v := range s.recipients {
+		if campaignID != "" && v.CampaignID != campaignID {
+			continue
+		}
+		if afterContactID != "" && (v.ContactID < afterContactID || (v.ContactID == afterContactID && v.ID <= afterID)) {
+			continue
+		}
 		if campaignID == "" || v.CampaignID == campaignID {
 			out = append(out, v)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ContactID < out[j].ContactID })
-	return out
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].ContactID == out[j].ContactID {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].ContactID < out[j].ContactID
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }
-func (s *MemoryStore) Outbox(_ context.Context) []Outbox {
+func (s *MemoryStore) ListOutbox(_ context.Context, afterCreatedAt time.Time, afterID string, limit int) ([]Outbox, error) {
+	if err := validateOutboxCursor(afterCreatedAt, afterID); err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > 5_000 {
+		limit = 1_000
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	out := make([]Outbox, 0, len(s.outbox))
 	for _, v := range s.outbox {
+		if !afterCreatedAt.IsZero() && (v.CreatedAt.Before(afterCreatedAt) || (v.CreatedAt.Equal(afterCreatedAt) && v.ID <= afterID)) {
+			continue
+		}
 		v.Payload = append([]byte(nil), v.Payload...)
 		out = append(out, v)
 	}
-	return out
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].CreatedAt.Before(out[j].CreatedAt)
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }
+func validateRecipientCursor(afterContactID, afterID string) error {
+	hasContact := strings.TrimSpace(afterContactID) != ""
+	hasID := strings.TrimSpace(afterID) != ""
+	if hasContact != hasID {
+		return errors.New("recipient cursor requires both contact ID and recipient ID")
+	}
+	return nil
+}
+
+func validateOutboxCursor(afterCreatedAt time.Time, afterID string) error {
+	hasTime := !afterCreatedAt.IsZero()
+	hasID := strings.TrimSpace(afterID) != ""
+	if hasTime != hasID {
+		return errors.New("outbox cursor requires both creation time and outbox ID")
+	}
+	return nil
+}
+
 func validateCommand(c Command) error {
 	if c.CampaignID == "" || c.SnapshotID == "" || c.MessageVersionID == "" || c.OrganisationID == "" || c.PurposeID == "" || c.Channel == "" {
 		return errors.New("campaign, snapshot, message, organisation, purpose and channel are required")

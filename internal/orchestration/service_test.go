@@ -65,10 +65,10 @@ func TestReleaseServiceBatchesAndReplaysIdempotently(t *testing.T) {
 	if second.Authorised != 0 || second.OutboxCreated != 0 || second.Existing != 5 {
 		t.Fatalf("unexpected replay: %+v", second)
 	}
-	if got := len(store.Recipients(ctx, entity.ID)); got != 5 {
+	if got := len(mustRecipients(t, store, entity.ID)); got != 5 {
 		t.Fatalf("recipients=%d", got)
 	}
-	if got := len(store.Outbox(ctx)); got != 5 {
+	if got := len(mustOutbox(t, store)); got != 5 {
 		t.Fatalf("outbox=%d", got)
 	}
 }

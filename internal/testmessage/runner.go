@@ -23,13 +23,14 @@ type Processor struct {
 	Protector  *crypto.MSISDNProtector
 	Messages   *message.Service
 	Gateway    dispatch.Gateway
+	Routes     RouteValidator
 	Pacing     dispatch.PacingController
 	Media      MediaResolver
 	Clock      func() time.Time
 }
 
 func (p *Processor) Process(ctx context.Context, send Send) error {
-	if p == nil || p.Repository == nil || p.Protector == nil || p.Messages == nil || p.Gateway == nil {
+	if p == nil || p.Repository == nil || p.Protector == nil || p.Messages == nil || p.Gateway == nil || p.Routes == nil {
 		return errors.New("test-message processor dependencies are required")
 	}
 	now := time.Now().UTC()
@@ -53,6 +54,24 @@ func (p *Processor) Process(ctx context.Context, send Send) error {
 	}
 	if version.ContentHash != send.MessageContentHash || version.CampaignID != send.CampaignID {
 		return p.finish(ctx, send, SendFailed, "", "MESSAGE_VERSION_CHANGED", now)
+	}
+	requiredCapability, err := testMessageCapability(version.Type)
+	if err != nil {
+		return p.finish(ctx, send, SendFailed, "", "MESSAGE_TYPE_UNSUPPORTED", now)
+	}
+	routeEvidence, err := p.Routes.ValidateTestRoute(ctx, RouteRequirements{
+		CampaignID: send.CampaignID, GatewayPoolID: send.GatewayPoolID, SenderPoolID: send.SenderPoolID,
+		Provider: send.Provider, Engine: send.Engine, SessionID: send.SenderSessionID,
+		RequiredCapabilities: []string{requiredCapability}, At: now,
+	})
+	if err != nil {
+		return p.finish(ctx, send, SendFailed, "", "TEST_ROUTE_NO_LONGER_VALID", now)
+	}
+	if routeEvidence.GatewayPoolVersion != send.GatewayPoolVersion ||
+		routeEvidence.AdapterVersion != send.ProviderAdapterVersion ||
+		routeEvidence.ProviderDefinitionID != send.ProviderDefinitionID ||
+		routeEvidence.ProviderDefinitionVersion != send.ProviderDefinitionVersion {
+		return p.finish(ctx, send, SendFailed, "", "TEST_ROUTE_EVIDENCE_CHANGED", now)
 	}
 	rendered, err := message.Render(version, message.RenderInput{Values: send.VariableValues, Mode: message.RenderDispatch})
 	if err != nil {

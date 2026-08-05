@@ -68,6 +68,9 @@ func TestActivatingReplacementRetiresOverlappingDefinition(t *testing.T) {
 	if old.Status != StatusRetired {
 		t.Fatalf("expected retired, got %s", old.Status)
 	}
+	if old.EffectiveTo != nil && !old.EffectiveTo.After(old.EffectiveFrom) {
+		t.Fatalf("replacement manufactured an invalid effective period: %+v", old)
+	}
 	active, err := store.Active(context.Background(), "OPENWA", ChannelWhatsApp, "WHATSAPP_WEB_JS", now)
 	if err != nil {
 		t.Fatal(err)
@@ -111,5 +114,59 @@ func TestRetireActiveDefinitionPreservesEventHistory(t *testing.T) {
 	}
 	if events[len(events)-1].Action != string(StatusRetired) {
 		t.Fatalf("unexpected final event %+v", events[len(events)-1])
+	}
+}
+
+func TestFutureDatedReplacementPreservesCurrentRouteUntilBoundary(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)
+	store := NewMemoryStore()
+	service := &Service{Store: store, Clock: func() time.Time { return now }}
+	activate := func(version string, effectiveFrom time.Time) Definition {
+		draft, err := service.CreateDraft(ctx, Definition{Provider: "OPENWA", Channel: ChannelWhatsApp, Engine: "BAILEYS", AdapterVersion: version, EffectiveFrom: effectiveFrom, Capabilities: []Capability{CapabilitySendText}}, "maker", "create provider definition")
+		if err != nil {
+			t.Fatal(err)
+		}
+		pending, err := service.Submit(ctx, draft.ID, draft.Version, "maker", "submit provider definition")
+		if err != nil {
+			t.Fatal(err)
+		}
+		active, err := service.Decide(ctx, pending.ID, pending.Version, true, "checker", "approve provider definition")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return active
+	}
+	current := activate("0.13.0", now.Add(-time.Hour))
+	futureAt := now.Add(24 * time.Hour)
+	future := activate("0.14.0", futureAt)
+
+	before, err := store.Active(ctx, "OPENWA", ChannelWhatsApp, "BAILEYS", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.ID != current.ID {
+		t.Fatalf("current route was lost before the future boundary: %+v", before)
+	}
+	after, err := store.Active(ctx, "OPENWA", ChannelWhatsApp, "BAILEYS", futureAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.ID != future.ID {
+		t.Fatalf("future route did not activate at the boundary: %+v", after)
+	}
+	storedCurrent, err := store.Get(ctx, current.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if storedCurrent.Status != StatusActive || storedCurrent.EffectiveTo == nil || !storedCurrent.EffectiveTo.Equal(futureAt) {
+		t.Fatalf("current route was not bounded correctly: %+v", storedCurrent)
+	}
+	events, err := store.ListEvents(ctx, current.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if events[len(events)-1].Action != "SUPERSEDED" {
+		t.Fatalf("missing supersession evidence: %+v", events)
 	}
 }

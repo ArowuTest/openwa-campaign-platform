@@ -66,7 +66,7 @@ func (r *MemoryRepository) CreateSend(_ context.Context, v Send) (Send, error) {
 	defer r.mu.Unlock()
 	if id, ok := r.byIdempotency[v.IdempotencyKey]; ok {
 		existing := r.sends[id]
-		if existing.MessageVersionID != v.MessageVersionID || existing.TestRecipientID != v.TestRecipientID || existing.SenderSessionID != v.SenderSessionID {
+		if !sameSendRequest(existing, v) {
 			return Send{}, ErrConflict
 		}
 		return existing, nil

@@ -30,7 +30,7 @@ func TestReleaseIsAtomicIdempotentAndRechecksEligibility(t *testing.T) {
 	if second.Existing != 2 || second.OutboxCreated != 0 {
 		t.Fatalf("second=%+v", second)
 	}
-	if len(store.Outbox(context.Background())) != 1 {
+	if len(mustOutbox(t, store)) != 1 {
 		t.Fatal("duplicate outbox created")
 	}
 }
@@ -43,7 +43,7 @@ func TestReleaseRejectsEntitlementOverflowWithoutPartialWrites(t *testing.T) {
 	if _, err := store.Authorise(context.Background(), cmd, checker); err != ErrEntitlementExceeded {
 		t.Fatalf("err=%v", err)
 	}
-	if len(store.Recipients(context.Background(), "c")) != 0 || len(store.Outbox(context.Background())) != 0 {
+	if len(mustRecipients(t, store, "c")) != 0 || len(mustOutbox(t, store)) != 0 {
 		t.Fatal("partial release persisted")
 	}
 }

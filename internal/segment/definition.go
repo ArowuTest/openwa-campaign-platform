@@ -2,9 +2,9 @@ package segment
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -261,9 +261,26 @@ func (r *MemoryDefinitionRepository) append(v Definition, reason string) {
 	r.versions[v.ID] = append(r.versions[v.ID], DefinitionVersion{SegmentID: v.ID, Version: v.Version, Name: v.Name, Description: v.Description, Definition: v.Definition, Status: v.Status, ChangedBy: v.UpdatedBy, Reason: reason, CreatedAt: v.UpdatedAt})
 }
 func cloneDefinition(v Definition) Definition {
-	payload, _ := json.Marshal(v.Definition)
-	_ = json.Unmarshal(payload, &v.Definition)
+	v.Definition = cloneFilterGroup(v.Definition)
 	return v
+}
+
+func cloneFilterGroup(group audiencefilter.Group) audiencefilter.Group {
+	copyGroup := audiencefilter.Group{Join: group.Join}
+	if len(group.Rules) > 0 {
+		copyGroup.Rules = make([]audiencefilter.Rule, len(group.Rules))
+		for i, rule := range group.Rules {
+			copyGroup.Rules[i] = rule
+			copyGroup.Rules[i].Values = append([]any(nil), rule.Values...)
+		}
+	}
+	if len(group.Children) > 0 {
+		copyGroup.Children = make([]audiencefilter.Group, len(group.Children))
+		for i, child := range group.Children {
+			copyGroup.Children[i] = cloneFilterGroup(child)
+		}
+	}
+	return copyGroup
 }
 
 type CloneDefinitionInput struct {
@@ -422,7 +439,5 @@ func flattenRules(group audiencefilter.Group) map[string]audiencefilter.Rule {
 }
 
 func rulesEqual(left, right audiencefilter.Rule) bool {
-	leftJSON, _ := json.Marshal(left)
-	rightJSON, _ := json.Marshal(right)
-	return string(leftJSON) == string(rightJSON)
+	return reflect.DeepEqual(left, right)
 }

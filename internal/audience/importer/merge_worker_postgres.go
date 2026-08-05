@@ -53,7 +53,10 @@ WHERE id=$1::uuid AND status='IMPORTING' AND merge_lease_owner=$2 AND merge_leas
 	if err != nil {
 		return err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
 	if n != 1 {
 		return ErrImportConflict
 	}
@@ -76,7 +79,10 @@ WHERE id=$1::uuid AND status='IMPORTING' AND merge_lease_owner=$2 AND merge_leas
 	if err != nil {
 		return err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
 	if n != 1 {
 		return ErrImportConflict
 	}

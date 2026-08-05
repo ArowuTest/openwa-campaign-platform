@@ -40,7 +40,10 @@ func (r *PostgreSQLRepository) Create(ctx context.Context, v Reply) (Reply, bool
 	if err != nil {
 		return Reply{}, false, err
 	}
-	rows, _ := result.RowsAffected()
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return Reply{}, false, err
+	}
 	if rows == 1 {
 		return v, true, nil
 	}
@@ -207,7 +210,10 @@ func (r *PostgreSQLRepository) ReencryptContent(ctx context.Context, limit int) 
 		if err != nil {
 			return count, err
 		}
-		n, _ := res.RowsAffected()
+		n, err := res.RowsAffected()
+		if err != nil {
+			return count, err
+		}
 		count += n
 	}
 	return count, nil

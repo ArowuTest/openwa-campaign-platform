@@ -67,7 +67,10 @@ func (r *CommercialRepository) CompareAndSwap(ctx context.Context, v commercial.
 	if err != nil {
 		return commercial.Record{}, err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return commercial.Record{}, err
+	}
 	if n != 1 {
 		return commercial.Record{}, commercial.ErrConflict
 	}

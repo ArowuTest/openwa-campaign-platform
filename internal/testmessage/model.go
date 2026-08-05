@@ -50,30 +50,34 @@ type Recipient struct {
 }
 
 type Send struct {
-	ID                 string            `json:"id"`
-	CampaignID         string            `json:"campaignId"`
-	MessageVersionID   string            `json:"messageVersionId"`
-	MessageContentHash string            `json:"messageContentHash"`
-	TestRecipientID    string            `json:"testRecipientId"`
-	GatewayPoolID      string            `json:"gatewayPoolId"`
-	SenderPoolID       string            `json:"senderPoolId,omitempty"`
-	Provider           string            `json:"provider"`
-	Engine             string            `json:"engine"`
-	SenderSessionID    string            `json:"senderSessionId"`
-	VariableValues     map[string]string `json:"variableValues"`
-	Status             SendStatus        `json:"status"`
-	ProviderMessageID  string            `json:"providerMessageId,omitempty"`
-	FailureCode        string            `json:"failureCode,omitempty"`
-	CreatedBy          string            `json:"createdBy"`
-	Reason             string            `json:"reason"`
-	IdempotencyKey     string            `json:"idempotencyKey"`
-	AttemptCount       int               `json:"attemptCount"`
-	LeaseOwner         string            `json:"leaseOwner,omitempty"`
-	LeaseVersion       int64             `json:"leaseVersion"`
-	LeaseExpiresAt     *time.Time        `json:"leaseExpiresAt,omitempty"`
-	CreatedAt          time.Time         `json:"createdAt"`
-	UpdatedAt          time.Time         `json:"updatedAt"`
-	CompletedAt        *time.Time        `json:"completedAt,omitempty"`
+	ID                        string            `json:"id"`
+	CampaignID                string            `json:"campaignId"`
+	MessageVersionID          string            `json:"messageVersionId"`
+	MessageContentHash        string            `json:"messageContentHash"`
+	TestRecipientID           string            `json:"testRecipientId"`
+	GatewayPoolID             string            `json:"gatewayPoolId"`
+	GatewayPoolVersion        int64             `json:"gatewayPoolVersion"`
+	SenderPoolID              string            `json:"senderPoolId,omitempty"`
+	Provider                  string            `json:"provider"`
+	Engine                    string            `json:"engine"`
+	ProviderAdapterVersion    string            `json:"providerAdapterVersion"`
+	ProviderDefinitionID      string            `json:"providerDefinitionId"`
+	ProviderDefinitionVersion int64             `json:"providerDefinitionVersion"`
+	SenderSessionID           string            `json:"senderSessionId"`
+	VariableValues            map[string]string `json:"variableValues"`
+	Status                    SendStatus        `json:"status"`
+	ProviderMessageID         string            `json:"providerMessageId,omitempty"`
+	FailureCode               string            `json:"failureCode,omitempty"`
+	CreatedBy                 string            `json:"createdBy"`
+	Reason                    string            `json:"reason"`
+	IdempotencyKey            string            `json:"idempotencyKey"`
+	AttemptCount              int               `json:"attemptCount"`
+	LeaseOwner                string            `json:"leaseOwner,omitempty"`
+	LeaseVersion              int64             `json:"leaseVersion"`
+	LeaseExpiresAt            *time.Time        `json:"leaseExpiresAt,omitempty"`
+	CreatedAt                 time.Time         `json:"createdAt"`
+	UpdatedAt                 time.Time         `json:"updatedAt"`
+	CompletedAt               *time.Time        `json:"completedAt,omitempty"`
 }
 
 var (
@@ -96,14 +100,32 @@ type Repository interface {
 	CompleteSend(context.Context, Send, SendStatus, string, string, time.Time) error
 }
 
-type RouteValidator interface {
-	ValidateTestRoute(context.Context, string, string, string, string, string) error
+type RouteRequirements struct {
+	CampaignID           string
+	GatewayPoolID        string
+	SenderPoolID         string
+	Provider             string
+	Engine               string
+	SessionID            string
+	RequiredCapabilities []string
+	At                   time.Time
 }
 
-type RouteValidatorFunc func(context.Context, string, string, string, string, string) error
+type RouteEvidence struct {
+	GatewayPoolVersion        int64
+	AdapterVersion            string
+	ProviderDefinitionID      string
+	ProviderDefinitionVersion int64
+}
 
-func (f RouteValidatorFunc) ValidateTestRoute(ctx context.Context, gatewayPoolID, senderPoolID, provider, engine, sessionID string) error {
-	return f(ctx, gatewayPoolID, senderPoolID, provider, engine, sessionID)
+type RouteValidator interface {
+	ValidateTestRoute(context.Context, RouteRequirements) (RouteEvidence, error)
+}
+
+type RouteValidatorFunc func(context.Context, RouteRequirements) (RouteEvidence, error)
+
+func (f RouteValidatorFunc) ValidateTestRoute(ctx context.Context, requirements RouteRequirements) (RouteEvidence, error) {
+	return f(ctx, requirements)
 }
 
 type Service struct {
@@ -218,17 +240,44 @@ func (s *Service) Schedule(ctx context.Context, campaignID, messageVersionID, re
 	if s.Routes == nil {
 		return Send{}, ErrInvalid
 	}
-	if err := s.Routes.ValidateTestRoute(ctx, strings.TrimSpace(gatewayPoolID), strings.TrimSpace(senderPoolID), provider, engine, strings.TrimSpace(sessionID)); err != nil {
+	requiredCapability, err := testMessageCapability(v.Type)
+	if err != nil {
 		return Send{}, err
+	}
+	now := s.now()
+	routeEvidence, err := s.Routes.ValidateTestRoute(ctx, RouteRequirements{
+		CampaignID: campaignID, GatewayPoolID: strings.TrimSpace(gatewayPoolID), SenderPoolID: strings.TrimSpace(senderPoolID),
+		Provider: provider, Engine: engine, SessionID: strings.TrimSpace(sessionID),
+		RequiredCapabilities: []string{requiredCapability}, At: now,
+	})
+	if err != nil {
+		return Send{}, err
+	}
+	if routeEvidence.GatewayPoolVersion <= 0 || strings.TrimSpace(routeEvidence.AdapterVersion) == "" || strings.TrimSpace(routeEvidence.ProviderDefinitionID) == "" || routeEvidence.ProviderDefinitionVersion <= 0 {
+		return Send{}, ErrInvalid
 	}
 	ident, err := id.New()
 	if err != nil {
 		return Send{}, err
 	}
-	now := s.now()
-	send := Send{ID: ident, CampaignID: campaignID, MessageVersionID: messageVersionID, MessageContentHash: v.ContentHash, TestRecipientID: recipientID, GatewayPoolID: gatewayPoolID, SenderPoolID: strings.TrimSpace(senderPoolID), Provider: provider, Engine: engine, SenderSessionID: sessionID, VariableValues: values, Status: SendPending, CreatedBy: actor, Reason: strings.TrimSpace(reason), IdempotencyKey: strings.TrimSpace(idempotency), LeaseVersion: 0, CreatedAt: now, UpdatedAt: now}
+	send := Send{ID: ident, CampaignID: campaignID, MessageVersionID: messageVersionID, MessageContentHash: v.ContentHash, TestRecipientID: recipientID, GatewayPoolID: gatewayPoolID, GatewayPoolVersion: routeEvidence.GatewayPoolVersion, SenderPoolID: strings.TrimSpace(senderPoolID), Provider: provider, Engine: engine, ProviderAdapterVersion: routeEvidence.AdapterVersion, ProviderDefinitionID: routeEvidence.ProviderDefinitionID, ProviderDefinitionVersion: routeEvidence.ProviderDefinitionVersion, SenderSessionID: sessionID, VariableValues: values, Status: SendPending, CreatedBy: actor, Reason: strings.TrimSpace(reason), IdempotencyKey: strings.TrimSpace(idempotency), LeaseVersion: 0, CreatedAt: now, UpdatedAt: now}
 	return s.Repository.CreateSend(ctx, send)
 }
+func testMessageCapability(messageType message.Type) (string, error) {
+	switch messageType {
+	case message.TypeText:
+		return "SEND_TEXT", nil
+	case message.TypeImageCaption:
+		return "SEND_IMAGE", nil
+	case message.TypeVideo:
+		return "SEND_VIDEO", nil
+	case message.TypeDocument:
+		return "SEND_DOCUMENT", nil
+	default:
+		return "", ErrInvalid
+	}
+}
+
 func (s *Service) ListRecipients(ctx context.Context) ([]Recipient, error) {
 	return s.Repository.ListRecipients(ctx)
 }

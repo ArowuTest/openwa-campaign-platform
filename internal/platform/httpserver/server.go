@@ -1186,12 +1186,25 @@ func (s *Server) decideConsentReview(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listCampaigns(w http.ResponseWriter, r *http.Request) {
-	items, err := s.deps.Campaigns.List(r.Context())
+	limit := 100
+	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
+		parsed, parseErr := strconv.Atoi(raw)
+		if parseErr != nil || parsed < 1 || parsed > 500 {
+			httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_LIMIT", "The campaign page limit must be between 1 and 500.", nil)
+			return
+		}
+		limit = parsed
+	}
+	page, err := s.deps.Campaigns.List(r.Context(), limit, r.URL.Query().Get("cursor"))
 	if err != nil {
+		if strings.Contains(err.Error(), "page cursor") {
+			httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The campaign page cursor is invalid.", nil)
+			return
+		}
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+	httpx.WriteJSON(w, http.StatusOK, page)
 }
 
 func (s *Server) createCampaign(w http.ResponseWriter, r *http.Request) {

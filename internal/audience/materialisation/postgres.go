@@ -78,7 +78,7 @@ func (r *PostgreSQLRepository) ListByCampaign(ctx context.Context, campaignID st
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	rows, err := r.DB.QueryContext(ctx, materialisationSelect+` WHERE ($1='' OR campaign_id=$1::uuid) ORDER BY requested_at DESC LIMIT $2`, strings.TrimSpace(campaignID), limit)
+	rows, err := r.DB.QueryContext(ctx, materialisationSelect+` WHERE ($1='' OR campaign_id=NULLIF($1,'')::uuid) ORDER BY requested_at DESC LIMIT $2`, strings.TrimSpace(campaignID), limit)
 	if err != nil {
 		return nil, err
 	}

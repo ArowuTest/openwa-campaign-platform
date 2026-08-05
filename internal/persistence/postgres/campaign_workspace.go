@@ -34,7 +34,9 @@ func (r *CampaignWorkspaceRepository) Get(ctx context.Context, id string) (campa
 		return campaignworkspace.Workspace{}, err
 	}
 	w.Archive.CampaignID = id
-	_ = json.Unmarshal(tags, &w.Tags)
+	if err := json.Unmarshal(tags, &w.Tags); err != nil {
+		return campaignworkspace.Workspace{}, err
+	}
 	if archivedAt.Valid {
 		t := archivedAt.Time
 		w.Archive.ArchivedAt = &t
@@ -57,7 +59,10 @@ func (r *CampaignWorkspaceRepository) SetTags(ctx context.Context, id string, ta
 	if r.DB == nil {
 		return campaignworkspace.Workspace{}, errors.New("database is required")
 	}
-	b, _ := json.Marshal(tags)
+	b, err := json.Marshal(tags)
+	if err != nil {
+		return campaignworkspace.Workspace{}, err
+	}
 	tx, err := r.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return campaignworkspace.Workspace{}, err
@@ -67,7 +72,10 @@ func (r *CampaignWorkspaceRepository) SetTags(ctx context.Context, id string, ta
 	if err != nil {
 		return campaignworkspace.Workspace{}, err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return campaignworkspace.Workspace{}, err
+	}
 	if n == 0 {
 		return campaignworkspace.Workspace{}, campaignworkspace.ErrConflict
 	}
@@ -96,7 +104,10 @@ func (r *CampaignWorkspaceRepository) Archive(ctx context.Context, id string, ar
 	if err != nil {
 		return campaignworkspace.Workspace{}, err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return campaignworkspace.Workspace{}, err
+	}
 	if n == 0 {
 		return campaignworkspace.Workspace{}, campaignworkspace.ErrConflict
 	}

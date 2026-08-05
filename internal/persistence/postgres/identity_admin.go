@@ -124,7 +124,10 @@ func (r *IdentityAdministrationRepository) CompareAndSwapAccount(ctx context.Con
 	if err != nil {
 		return err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
 	if n == 0 {
 		return identity.ErrAccountConflict
 	}
@@ -164,7 +167,10 @@ func (r *IdentityAdministrationRepository) ResetCredentials(ctx context.Context,
 	if err != nil {
 		return identity.Account{}, err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return identity.Account{}, err
+	}
 	if n == 0 {
 		return identity.Account{}, identity.ErrAccountConflict
 	}
@@ -199,7 +205,10 @@ func (r *IdentityAdministrationRepository) UnlockAccount(ctx context.Context, id
 	if err != nil {
 		return identity.Account{}, err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return identity.Account{}, err
+	}
 	if n == 0 {
 		return identity.Account{}, identity.ErrAccountConflict
 	}

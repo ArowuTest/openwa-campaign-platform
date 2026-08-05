@@ -36,6 +36,14 @@ func (s *MemoryStore) Metrics(_ context.Context, id string) (Metrics, error) {
 func (s *MemoryStore) Capacity(context.Context, string, time.Time) (int, int64, error) {
 	return s.MessagesPerMinute, s.DailyCapacity, nil
 }
+
+func (s *MemoryStore) RouteCapacity(_ context.Context, route PoolRoute, _ time.Time) (PoolCapacity, error) {
+	rate, daily, err := s.Capacity(context.Background(), route.SenderPoolID, time.Time{})
+	if err != nil {
+		return PoolCapacity{}, err
+	}
+	return PoolCapacity{SenderPoolID: route.SenderPoolID, GatewayPoolID: route.GatewayPoolID, AvailableMessagesPerMinute: rate, AvailableHourlyUnits: int64(rate) * 60, AvailableDailyUnits: daily, HealthySessions: 1, HealthyNodes: 1, MinimumHealthyNodes: 1}, nil
+}
 func (s *MemoryStore) RecordEvent(_ context.Context, cid, typ, actor, reason string, details map[string]any, now time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -11,7 +11,7 @@ import (
 type PostgreSQLStore struct{ DB *sql.DB }
 
 func (s *PostgreSQLStore) List(ctx context.Context) ([]Definition, error) {
-	rows, err := s.DB.QueryContext(ctx, providerSelect+` ORDER BY created_at DESC`)
+	rows, err := s.DB.QueryContext(ctx, providerSelect+` ORDER BY created_at DESC,id DESC LIMIT 1000`)
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +65,24 @@ func (s *PostgreSQLStore) CompareAndSwap(ctx context.Context, d Definition, expe
 	}
 	defer tx.Rollback()
 	if d.Status == StatusActive {
-		_, err = tx.ExecContext(ctx, `UPDATE provider_capability_definitions SET status='RETIRED',effective_to=$1,version=version+1,updated_at=$2 WHERE id<>$3::uuid AND provider=$4 AND channel=$5 AND engine=$6 AND status='ACTIVE' AND effective_from<$7 AND (effective_to IS NULL OR effective_to>$8)`, d.EffectiveFrom, d.UpdatedAt, d.ID, d.Provider, d.Channel, d.Engine, coalesceEnd(d.EffectiveTo), d.EffectiveFrom)
+		routeKey := d.Provider + "\x1f" + string(d.Channel) + "\x1f" + d.Engine
+		if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, routeKey); err != nil {
+			return d, err
+		}
+		if strings.TrimSpace(d.ApprovedBy) == "" {
+			return d, errors.New("provider capability activation approver is required")
+		}
+		_, err = tx.ExecContext(ctx, `WITH superseded AS (
+  UPDATE provider_capability_definitions
+  SET status=CASE WHEN effective_from >= $1 OR $1 <= $2 THEN 'RETIRED' ELSE status END,
+      effective_to=CASE WHEN effective_from < $1 THEN $1 ELSE effective_to END,
+      approved_by=$3::uuid,reason=$4,version=version+1,updated_at=$2
+  WHERE id<>$5::uuid AND provider=$6 AND channel=$7 AND engine=$8 AND status='ACTIVE'
+    AND effective_from<$9 AND (effective_to IS NULL OR effective_to>$1)
+  RETURNING id,version
+)
+INSERT INTO provider_capability_events(definition_id,action,actor_id,reason,definition_version,occurred_at)
+SELECT id,'SUPERSEDED',$3::uuid,$4,version,$2 FROM superseded`, d.EffectiveFrom, d.UpdatedAt, d.ApprovedBy, "superseded by provider definition "+d.ID, d.ID, d.Provider, d.Channel, d.Engine, coalesceEnd(d.EffectiveTo))
 		if err != nil {
 			return d, err
 		}
@@ -74,7 +91,10 @@ func (s *PostgreSQLStore) CompareAndSwap(ctx context.Context, d Definition, expe
 	if err != nil {
 		return d, err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return d, err
+	}
 	if n != 1 {
 		return d, ErrConflict
 	}
@@ -92,7 +112,7 @@ func (s *PostgreSQLStore) CompareAndSwap(ctx context.Context, d Definition, expe
 }
 
 func (s *PostgreSQLStore) ListEvents(ctx context.Context, definitionID string) ([]Event, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT id,definition_id::text,action,actor_id::text,reason,definition_version,occurred_at FROM provider_capability_events WHERE definition_id=$1::uuid ORDER BY id`, definitionID)
+	rows, err := s.DB.QueryContext(ctx, `SELECT id,definition_id::text,action,actor_id::text,reason,definition_version,occurred_at FROM provider_capability_events WHERE definition_id=$1::uuid ORDER BY id DESC LIMIT 5000`, definitionID)
 	if err != nil {
 		return nil, err
 	}
@@ -124,11 +144,14 @@ func scanDefinition(s scanner) (Definition, error) {
 	var d Definition
 	var caps []string
 	err := s.Scan(&d.ID, &d.Provider, &d.Channel, &d.Engine, &d.AdapterVersion, &d.MinimumGatewayVersion, &caps, &d.MaximumAttachmentBytes, &d.Status, &d.EffectiveFrom, &d.EffectiveTo, &d.Version, &d.CreatedBy, &d.SubmittedBy, &d.ApprovedBy, &d.Reason, &d.CreatedAt, &d.UpdatedAt)
+	if err != nil {
+		return Definition{}, err
+	}
 	d.Capabilities = make([]Capability, len(caps))
 	for i, v := range caps {
 		d.Capabilities[i] = Capability(v)
 	}
-	return d, err
+	return d, nil
 }
 func capabilityStrings(in []Capability) []string {
 	out := make([]string, len(in))

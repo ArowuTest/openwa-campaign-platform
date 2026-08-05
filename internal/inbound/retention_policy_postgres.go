@@ -59,7 +59,10 @@ func (s *PostgreSQLRetentionPolicyStore) CompareAndSwap(ctx context.Context, p R
 	if err != nil {
 		return p, err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return p, err
+	}
 	if n != 1 {
 		return p, ErrRetentionPolicyConflict
 	}

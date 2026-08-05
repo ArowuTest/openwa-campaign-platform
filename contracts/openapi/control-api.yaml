@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Internal Audience & Campaign Control API
-  version: 0.8.0
+  version: 0.8.24
   description: >
     Internal-only API for organisation records, offline consent reviews, secure audience imports,
     governed cohort definitions and controlled campaign lifecycle management.
@@ -711,9 +711,22 @@ paths:
   /campaigns:
     get:
       operationId: listCampaigns
-      summary: List internal campaigns
+      summary: List internal campaigns using bounded keyset pagination
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque cursor returned by the previous page. }
       responses:
-        '200': { description: Campaign list }
+        '200':
+          description: Campaign page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  nextCursor: { type: string }
+        '400': { description: Invalid page limit or cursor }
     post:
       operationId: createCampaign
       summary: Create a draft campaign
@@ -2097,21 +2110,59 @@ components:
         decision: { type: string, enum: [APPROVED, REJECTED] }
         expiresAt: { type: string, format: date-time }
         reason: { type: string }
+    TransportSelectionRequest:
+      type: object
+      additionalProperties: false
+      required:
+        [channel, provider, engine, routingMode, gatewayPoolId, adapterVersion, fallbackMode, routingPolicyVersion, capacityEvidenceVersion]
+      properties:
+        channel: { type: string, enum: [WHATSAPP] }
+        provider: { type: string, enum: [OPENWA] }
+        engine: { type: string, enum: [WHATSAPP_WEB_JS, BAILEYS] }
+        routingMode: { type: string, enum: [SPECIFIC_SESSION, SENDER_POOL] }
+        gatewayPoolId: { type: string, format: uuid }
+        sessionId: { type: string, format: uuid }
+        senderPoolId: { type: string, format: uuid }
+        adapterVersion: { type: string, minLength: 1, maxLength: 100 }
+        requiredCapabilities:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+            enum: [SEND_TEXT, SEND_IMAGE, SEND_VIDEO, SEND_DOCUMENT, DELIVERY_EVENTS, READ_EVENTS, INBOUND_MESSAGES]
+        fallbackMode: { type: string, enum: [NONE] }
+        routingPolicyVersion: { type: string, minLength: 1, maxLength: 100 }
+        capacityEvidenceVersion: { type: string, minLength: 1, maxLength: 100 }
+      allOf:
+        - if:
+            properties: { routingMode: { const: SPECIFIC_SESSION } }
+          then:
+            required: [sessionId]
+            not: { required: [senderPoolId] }
+        - if:
+            properties: { routingMode: { const: SENDER_POOL } }
+          then:
+            required: [senderPoolId]
+            not: { required: [sessionId] }
     CreateCampaign:
       type: object
+      additionalProperties: false
       required:
-        [organisationId, name, purposeId, consentReviewId, maximumUniqueRecipients, senderPool, createdBy]
+        [organisationId, name, purposeId, consentReviewId, maximumUniqueRecipients, transport]
       properties:
         organisationId: { type: string, format: uuid }
-        name: { type: string }
+        name: { type: string, minLength: 1, maxLength: 250 }
         purposeId: { type: string, format: uuid }
         consentReviewId: { type: string, format: uuid }
         requestedStartAt: { type: string, format: date-time }
         completionDeadlineAt: { type: string, format: date-time }
+        timezone: { type: string, default: UTC }
+        quietHoursStart: { type: string, pattern: '^(?:[01][0-9]|2[0-3]):[0-5][0-9]$' }
+        quietHoursEnd: { type: string, pattern: '^(?:[01][0-9]|2[0-3]):[0-5][0-9]$' }
         maximumUniqueRecipients: { type: integer, format: int64, minimum: 1 }
         maximumMessagesPerRecipient: { type: integer, enum: [1], default: 1 }
-        senderPool: { type: string }
-        createdBy: { type: string, format: uuid }
+        senderPool: { type: string, description: Legacy display label; governed routing uses transport.senderPoolId. }
+        transport: { $ref: '#/components/schemas/TransportSelectionRequest' }
     CampaignMaterialAmendment:
       type: object
       required: [expectedVersion, reason]

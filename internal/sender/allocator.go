@@ -30,6 +30,8 @@ const (
 type Session struct {
 	ID                    string
 	Pool                  string
+	PoolID                string
+	GatewayPoolID         string
 	Status                Status
 	LeaseExpiresAt        time.Time
 	NodeReady             bool
@@ -43,8 +45,28 @@ type Session struct {
 	LastSuccessfulAt      time.Time
 }
 
+type AllocationRoute struct {
+	SenderPoolID      string
+	LegacyPool        string
+	GatewayPoolID     string
+	SpecificSessionID string
+}
+
+func (r AllocationRoute) Validate() error {
+	if strings.TrimSpace(r.SpecificSessionID) != "" {
+		if strings.TrimSpace(r.SenderPoolID) != "" || strings.TrimSpace(r.LegacyPool) != "" {
+			return errors.New("specific-session allocation cannot also select a sender pool")
+		}
+		return nil
+	}
+	if strings.TrimSpace(r.SenderPoolID) == "" && strings.TrimSpace(r.LegacyPool) == "" {
+		return errors.New("sender pool allocation is required")
+	}
+	return nil
+}
+
 type Allocator interface {
-	Assign(context.Context, string, string, time.Time) (string, error)
+	Assign(context.Context, string, AllocationRoute, time.Time) (string, error)
 }
 
 type MemoryAllocator struct {
@@ -60,31 +82,29 @@ func NewMemoryAllocator(sessions ...Session) *MemoryAllocator {
 	}
 	return a
 }
-func (a *MemoryAllocator) Assign(_ context.Context, recipientID, pool string, now time.Time) (string, error) {
-	recipientID, pool = strings.TrimSpace(recipientID), strings.TrimSpace(pool)
-	if recipientID == "" || pool == "" {
-		return "", errors.New("recipient and sender pool are required")
+func (a *MemoryAllocator) Assign(_ context.Context, recipientID string, route AllocationRoute, now time.Time) (string, error) {
+	recipientID = strings.TrimSpace(recipientID)
+	if recipientID == "" {
+		return "", errors.New("recipient is required")
+	}
+	if err := route.Validate(); err != nil {
+		return "", err
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if existing := a.assignments[recipientID]; existing != "" {
+		session, ok := a.sessions[existing]
+		if !ok || !sessionMatchesRoute(session, route) {
+			return "", ErrAssignmentConflict
+		}
+		if !sessionHealthyForAllocation(session, now) {
+			return "", ErrNoHealthySession
+		}
 		return existing, nil
 	}
 	candidates := make([]Session, 0)
 	for _, value := range a.sessions {
-		if value.Pool != pool || !value.NodeReady || value.NodeDraining || !value.LeaseExpiresAt.After(now) {
-			continue
-		}
-		if value.Status != StatusReady && value.Status != StatusBusy {
-			continue
-		}
-		if value.SafeMessagesPerMinute < 0 || value.SafeDailyCapacity < 0 {
-			continue
-		}
-		if value.SafeDailyCapacity > 0 && value.SafeDailyCapacity <= value.SentToday {
-			continue
-		}
-		if value.InFlightLimit > 0 && value.InFlight >= value.InFlightLimit {
+		if !sessionMatchesRoute(value, route) || !sessionHealthyForAllocation(value, now) {
 			continue
 		}
 		candidates = append(candidates, value)
@@ -121,6 +141,36 @@ func (a *MemoryAllocator) Assign(_ context.Context, recipientID, pool string, no
 	a.assignments[recipientID] = candidates[0].ID
 	return candidates[0].ID, nil
 }
+
+func sessionMatchesRoute(value Session, route AllocationRoute) bool {
+	if route.SpecificSessionID != "" && value.ID != strings.TrimSpace(route.SpecificSessionID) {
+		return false
+	}
+	if route.SenderPoolID != "" && value.PoolID != strings.TrimSpace(route.SenderPoolID) {
+		return false
+	}
+	if route.SenderPoolID == "" && route.LegacyPool != "" && value.Pool != strings.TrimSpace(route.LegacyPool) {
+		return false
+	}
+	return route.GatewayPoolID == "" || value.GatewayPoolID == strings.TrimSpace(route.GatewayPoolID)
+}
+
+func sessionHealthyForAllocation(value Session, now time.Time) bool {
+	if !value.NodeReady || value.NodeDraining || !value.LeaseExpiresAt.After(now) {
+		return false
+	}
+	if value.Status != StatusReady && value.Status != StatusBusy {
+		return false
+	}
+	if value.SafeMessagesPerMinute < 0 || value.SafeDailyCapacity < 0 {
+		return false
+	}
+	if value.SafeDailyCapacity > 0 && value.SafeDailyCapacity <= value.SentToday {
+		return false
+	}
+	return value.InFlightLimit <= 0 || value.InFlight < value.InFlightLimit
+}
+
 func utilisationRatio(used, capacity int64) float64 {
 	if capacity <= 0 {
 		return 1

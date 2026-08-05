@@ -21,13 +21,16 @@ JOIN sender_nodes sn ON sn.id=ss.node_id
 JOIN sender_session_leases sl
   ON sl.session_id=ss.id
  AND sl.worker_node_id=ss.node_id
-WHERE ss.logical_sender_pool=$2
+WHERE ($2='' OR ss.sender_pool_id=nullif($2,'')::uuid)
+  AND ($2<>'' OR $3='' OR ss.logical_sender_pool=$3)
+  AND ($4='' OR ss.gateway_pool_id=nullif($4,'')::uuid)
+  AND ($5='' OR ss.id=nullif($5,'')::uuid)
   AND ss.status IN ('READY','BUSY')
   AND sn.status='READY'
   AND NOT sn.draining
-  AND ss.last_heartbeat_at>$4
-  AND sn.last_heartbeat_at>$4
-  AND sl.expires_at>$3
+  AND ss.last_heartbeat_at>$7
+  AND sn.last_heartbeat_at>$7
+  AND sl.expires_at>$6
   AND coalesce(ss.safe_messages_per_minute,0)>0
   AND coalesce(ss.safe_daily_capacity,0)>coalesce(ss.sent_today,0)
   AND (
@@ -45,17 +48,39 @@ ORDER BY
 LIMIT 1
 FOR UPDATE OF ss SKIP LOCKED`
 
+const postgresAssignedSessionValidationQuery = `
+SELECT
+  (($2='' OR ss.sender_pool_id=nullif($2,'')::uuid)
+   AND ($2<>'' OR $3='' OR ss.logical_sender_pool=$3)
+   AND ($4='' OR ss.gateway_pool_id=nullif($4,'')::uuid)
+   AND ($5='' OR ss.id=nullif($5,'')::uuid)) AS route_matches,
+  (ss.status IN ('READY','BUSY')
+   AND sn.status='READY'
+   AND NOT sn.draining
+   AND ss.last_heartbeat_at>$7
+   AND sn.last_heartbeat_at>$7
+   AND EXISTS (SELECT 1 FROM sender_session_leases sl WHERE sl.session_id=ss.id AND sl.worker_node_id=ss.node_id AND sl.expires_at>$6)
+   AND coalesce(ss.safe_messages_per_minute,0)>0
+   AND coalesce(ss.safe_daily_capacity,0)>coalesce(ss.sent_today,0)) AS healthy
+FROM sender_sessions ss
+JOIN sender_nodes sn ON sn.id=ss.node_id
+WHERE ss.id=$1::uuid
+FOR SHARE OF ss,sn`
+
 // Assign is idempotent. The campaign recipient row is locked, so concurrent
 // workers cannot assign different sessions. Candidate ordering is deterministic
 // for a recipient, distributing assignments without a mutable global counter.
 // A session is eligible only when its node owns the current lease, both
 // heartbeats are fresh and its measured capacity/in-flight bounds are positive.
-func (a *PostgreSQLAllocator) Assign(ctx context.Context, recipientID, pool string, now time.Time) (string, error) {
+func (a *PostgreSQLAllocator) Assign(ctx context.Context, recipientID string, route AllocationRoute, now time.Time) (string, error) {
 	if a == nil || a.DB == nil {
 		return "", errors.New("database is required")
 	}
-	if strings.TrimSpace(recipientID) == "" || strings.TrimSpace(pool) == "" {
-		return "", errors.New("recipient and sender pool are required")
+	if strings.TrimSpace(recipientID) == "" {
+		return "", errors.New("recipient is required")
+	}
+	if err := route.Validate(); err != nil {
+		return "", err
 	}
 	ttl := a.HeartbeatTTL
 	if ttl <= 0 || ttl > 10*time.Minute {
@@ -74,13 +99,27 @@ func (a *PostgreSQLAllocator) Assign(ctx context.Context, recipientID, pool stri
 		return "", err
 	}
 	if assigned.Valid && assigned.String != "" {
+		var routeMatches, healthy bool
+		err := tx.QueryRowContext(ctx, postgresAssignedSessionValidationQuery, assigned.String, strings.TrimSpace(route.SenderPoolID), strings.TrimSpace(route.LegacyPool), strings.TrimSpace(route.GatewayPoolID), strings.TrimSpace(route.SpecificSessionID), now.UTC(), now.UTC().Add(-ttl)).Scan(&routeMatches, &healthy)
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", ErrNoHealthySession
+		}
+		if err != nil {
+			return "", fmt.Errorf("validate assigned sender session: %w", err)
+		}
+		if !routeMatches {
+			return "", ErrAssignmentConflict
+		}
+		if !healthy {
+			return "", ErrNoHealthySession
+		}
 		if err := tx.Commit(); err != nil {
 			return "", err
 		}
 		return assigned.String, nil
 	}
 	var sessionID string
-	if err := tx.QueryRowContext(ctx, postgresAllocationQuery, recipientID, pool, now.UTC(), now.UTC().Add(-ttl)).Scan(&sessionID); err != nil {
+	if err := tx.QueryRowContext(ctx, postgresAllocationQuery, recipientID, strings.TrimSpace(route.SenderPoolID), strings.TrimSpace(route.LegacyPool), strings.TrimSpace(route.GatewayPoolID), strings.TrimSpace(route.SpecificSessionID), now.UTC(), now.UTC().Add(-ttl)).Scan(&sessionID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", ErrNoHealthySession
 		}

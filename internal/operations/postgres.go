@@ -10,57 +10,84 @@ import (
 type PostgreSQLRepository struct{ DB *sql.DB }
 
 func (r *PostgreSQLRepository) Dashboard(ctx context.Context, now time.Time) (Dashboard, error) {
-	d := Dashboard{GeneratedAt: now, Campaigns: map[string]int64{}, Recipients: map[string]int64{}, Senders: map[string]int64{}}
-	rows, err := r.DB.QueryContext(ctx, `SELECT status,count(*) FROM campaigns GROUP BY status`)
-	if err != nil {
+	if r == nil || r.DB == nil {
+		return Dashboard{}, errors.New("database is required")
+	}
+	d := Dashboard{GeneratedAt: now.UTC(), Campaigns: map[string]int64{}, Recipients: map[string]int64{}, Senders: map[string]int64{}}
+	if err := loadStatusCounts(ctx, r.DB, `SELECT status,count(*) FROM campaigns GROUP BY status`, d.Campaigns); err != nil {
 		return d, err
 	}
-	for rows.Next() {
-		var k string
-		var v int64
-		if err = rows.Scan(&k, &v); err != nil {
-			return d, err
-		}
-		d.Campaigns[k] = v
-	}
-	rows.Close()
-	rows, err = r.DB.QueryContext(ctx, `SELECT status,count(*) FROM campaign_recipients GROUP BY status`)
-	if err != nil {
+
+	var authorised, queued, submitted, sent, delivered, read, failed, unknown, suppressed int64
+	if err := r.DB.QueryRowContext(ctx, `SELECT
+ coalesce(sum(authorised_total),0),coalesce(sum(queued_total),0),coalesce(sum(submitted_total),0),
+ coalesce(sum(sent_total),0),coalesce(sum(delivered_total),0),coalesce(sum(read_total),0),
+ coalesce(sum(failed_total),0),coalesce(sum(unknown_total),0),coalesce(sum(suppressed_total),0)
+FROM campaign_metrics`).Scan(&authorised, &queued, &submitted, &sent, &delivered, &read, &failed, &unknown, &suppressed); err != nil {
 		return d, err
 	}
-	for rows.Next() {
-		var k string
-		var v int64
-		if err = rows.Scan(&k, &v); err != nil {
-			return d, err
-		}
-		d.Recipients[k] = v
-		if k == "UNKNOWN" {
-			d.UnknownOutcomes = v
-		}
-		if k == "AUTHORISED" || k == "QUEUED" || k == "CLAIMED" || k == "SUBMITTING" || k == "FAILED_RETRYABLE" {
-			d.QueueDepth += v
-		}
+	d.Recipients = map[string]int64{
+		"AUTHORISED": authorised,
+		"QUEUED":     queued,
+		"SUBMITTED":  submitted,
+		"SENT":       sent,
+		"DELIVERED":  delivered,
+		"READ":       read,
+		"FAILED":     failed,
+		"UNKNOWN":    unknown,
+		"SUPPRESSED": suppressed,
 	}
-	rows.Close()
-	rows, err = r.DB.QueryContext(ctx, `SELECT status,count(*) FROM sender_sessions GROUP BY status`)
-	if err != nil {
+	d.UnknownOutcomes = unknown
+
+	var submitting, retryable int64
+	if err := r.DB.QueryRowContext(ctx, `SELECT
+ count(*) FILTER (WHERE status='SUBMITTING'),
+ count(*) FILTER (WHERE status='FAILED_RETRYABLE')
+FROM campaign_recipients
+WHERE status IN('SUBMITTING','FAILED_RETRYABLE')`).Scan(&submitting, &retryable); err != nil {
 		return d, err
 	}
-	for rows.Next() {
-		var k string
-		var v int64
-		if err = rows.Scan(&k, &v); err != nil {
-			return d, err
-		}
-		d.Senders[k] = v
+	// Queue depth represents work that has not yet received a provider acceptance.
+	// GATEWAY_ACCEPTED is reported in submitted totals but is no longer queued work.
+	d.QueueDepth = authorised + queued + submitting + retryable
+
+	if err := loadStatusCounts(ctx, r.DB, `SELECT status,count(*) FROM sender_sessions GROUP BY status`, d.Senders); err != nil {
+		return d, err
 	}
-	rows.Close()
-	_ = r.DB.QueryRowContext(ctx, `SELECT min(updated_at) FROM campaign_recipients WHERE status IN('AUTHORISED','QUEUED','CLAIMED','SUBMITTING','FAILED_RETRYABLE')`).Scan(&d.OldestQueuedAt)
-	_ = r.DB.QueryRowContext(ctx, `SELECT count(*) FILTER(WHERE status<>'RESOLVED'),count(*) FILTER(WHERE status<>'RESOLVED' AND severity='CRITICAL') FROM operations_incidents`).Scan(&d.OpenIncidents, &d.CriticalIncidents)
-	_ = r.DB.QueryRowContext(ctx, `SELECT count(*) FROM sender_nodes WHERE last_heartbeat_at IS NULL OR last_heartbeat_at < $1`, now.Add(-2*time.Minute)).Scan(&d.StaleWorkerNodes)
+	var oldest sql.NullTime
+	if err := r.DB.QueryRowContext(ctx, `SELECT min(updated_at) FROM campaign_recipients WHERE status IN('AUTHORISED','QUEUED','CLAIMED','SUBMITTING','FAILED_RETRYABLE')`).Scan(&oldest); err != nil {
+		return d, err
+	}
+	if oldest.Valid {
+		value := oldest.Time.UTC()
+		d.OldestQueuedAt = &value
+	}
+	if err := r.DB.QueryRowContext(ctx, `SELECT count(*) FILTER(WHERE status<>'RESOLVED'),count(*) FILTER(WHERE status<>'RESOLVED' AND severity='CRITICAL') FROM operations_incidents`).Scan(&d.OpenIncidents, &d.CriticalIncidents); err != nil {
+		return d, err
+	}
+	if err := r.DB.QueryRowContext(ctx, `SELECT count(*) FROM sender_nodes WHERE last_heartbeat_at IS NULL OR last_heartbeat_at < $1`, now.UTC().Add(-2*time.Minute)).Scan(&d.StaleWorkerNodes); err != nil {
+		return d, err
+	}
 	return d, nil
 }
+
+func loadStatusCounts(ctx context.Context, db *sql.DB, query string, target map[string]int64) error {
+	rows, err := db.QueryContext(ctx, query)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var status string
+		var count int64
+		if err := rows.Scan(&status, &count); err != nil {
+			return err
+		}
+		target[status] = count
+	}
+	return rows.Err()
+}
+
 func scanIncident(s interface{ Scan(...any) error }) (Incident, error) {
 	var v Incident
 	var resolved sql.NullTime
@@ -110,7 +137,10 @@ func (r *PostgreSQLRepository) UpdateIncident(ctx context.Context, v Incident, e
 	if err != nil {
 		return Incident{}, err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return Incident{}, err
+	}
 	if n == 0 {
 		return Incident{}, ErrConflict
 	}
@@ -128,13 +158,19 @@ func (r *PostgreSQLRepository) CampaignReport(ctx context.Context, id string, no
 		return v, err
 	}
 	var a, q, sub, sent, del, read, fail, unk, supp, opt int64
-	_ = r.DB.QueryRowContext(ctx, `SELECT authorised_total,queued_total,submitted_total,sent_total,delivered_total,read_total,failed_total,unknown_total,suppressed_total,opt_out_total FROM campaign_metrics WHERE campaign_id=$1::uuid`, id).Scan(&a, &q, &sub, &sent, &del, &read, &fail, &unk, &supp, &opt)
+	metricsErr := r.DB.QueryRowContext(ctx, `SELECT authorised_total,queued_total,submitted_total,sent_total,delivered_total,read_total,failed_total,unknown_total,suppressed_total,opt_out_total FROM campaign_metrics WHERE campaign_id=$1::uuid`, id).Scan(&a, &q, &sub, &sent, &del, &read, &fail, &unk, &supp, &opt)
+	if metricsErr != nil && !errors.Is(metricsErr, sql.ErrNoRows) {
+		return v, metricsErr
+	}
 	v.Audience = map[string]int64{"authorised": a, "suppressed": supp}
 	v.Delivery = map[string]int64{"queued": q, "submitted": sub, "sent": sent, "delivered": del, "read": read}
 	v.Engagement = map[string]int64{"optOuts": opt}
 	v.Exceptions = map[string]int64{"failed": fail, "unknown": unk}
 	v.Pools = []CampaignPoolReport{}
 	v.Warnings = []string{}
+	if errors.Is(metricsErr, sql.ErrNoRows) {
+		v.Warnings = append(v.Warnings, "CAMPAIGN_METRICS_UNAVAILABLE")
+	}
 	var paymentAt sql.NullTime
 	commercialErr := r.DB.QueryRowContext(ctx, `SELECT status,quotation_reference,invoice_reference,currency,approved_recipients,unit_price_minor,management_fee_minor,total_amount_minor,coalesce(payment_reference,''),payment_received_at FROM campaign_commercial_approvals WHERE campaign_id=$1::uuid`, id).Scan(&v.Commercial.Status, &v.Commercial.QuotationReference, &v.Commercial.InvoiceReference, &v.Commercial.Currency, &v.Commercial.ApprovedRecipients, &v.Commercial.UnitPriceMinor, &v.Commercial.ManagementFeeMinor, &v.Commercial.TotalAmountMinor, &v.Commercial.PaymentReference, &paymentAt)
 	if commercialErr != nil && !errors.Is(commercialErr, sql.ErrNoRows) {
@@ -358,7 +394,10 @@ func (r *PostgreSQLRepository) UpdateExport(ctx context.Context, v ExportRequest
 	if err != nil {
 		return v, err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return v, err
+	}
 	if n == 0 {
 		return v, ErrConflict
 	}
@@ -370,7 +409,7 @@ func (r *PostgreSQLRepository) ListExceptions(ctx context.Context, campaignID st
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	rows, err := r.DB.QueryContext(ctx, `SELECT id::text,campaign_id::text,status,coalesce(assigned_session_id::text,''),coalesce(provider_message_id,''),attempt_count,coalesce(last_error_code,''),updated_at FROM campaign_recipients WHERE ($1='' OR campaign_id=$1::uuid) AND (status IN('FAILED_RETRYABLE','FAILED_PERMANENT','UNKNOWN') OR reconciliation_required=true) ORDER BY updated_at DESC LIMIT $2`, campaignID, limit)
+	rows, err := r.DB.QueryContext(ctx, `SELECT id::text,campaign_id::text,status,coalesce(assigned_session_id::text,''),coalesce(provider_message_id,''),attempt_count,coalesce(last_error_code,''),updated_at FROM campaign_recipients WHERE ($1='' OR campaign_id=NULLIF($1,'')::uuid) AND (status IN('FAILED_RETRYABLE','FAILED_PERMANENT','UNKNOWN') OR reconciliation_required=true) ORDER BY updated_at DESC LIMIT $2`, campaignID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -420,7 +459,10 @@ func (r *PostgreSQLRepository) CompleteExport(ctx context.Context, id, key, cont
 	if err != nil {
 		return err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
 	if n == 0 {
 		return ErrConflict
 	}

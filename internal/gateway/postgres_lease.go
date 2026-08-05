@@ -62,7 +62,10 @@ func (s *PostgreSQLLeaseStore) Release(ctx context.Context, lease Lease) error {
 	if err != nil {
 		return err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
 	if n == 0 {
 		return ErrLeaseLost
 	}

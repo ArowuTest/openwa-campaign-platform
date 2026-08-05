@@ -98,7 +98,10 @@ func (r *PacingPolicyRepository) CompareAndSwap(ctx context.Context, p sender.Pa
 	if err != nil {
 		return sender.PacingPolicy{}, err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return sender.PacingPolicy{}, err
+	}
 	if n != 1 {
 		return sender.PacingPolicy{}, sender.ErrPacingConflict
 	}

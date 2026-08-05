@@ -11,10 +11,11 @@ type MemoryRoutingPlanStore struct {
 	plans        map[string]RoutingPlan
 	byCampaign   map[string][]string
 	reservations map[string][]CapacityReservation
+	idempotency  map[string]string
 }
 
 func NewMemoryRoutingPlanStore() *MemoryRoutingPlanStore {
-	return &MemoryRoutingPlanStore{plans: map[string]RoutingPlan{}, byCampaign: map[string][]string{}, reservations: map[string][]CapacityReservation{}}
+	return &MemoryRoutingPlanStore{plans: map[string]RoutingPlan{}, byCampaign: map[string][]string{}, reservations: map[string][]CapacityReservation{}, idempotency: map[string]string{}}
 }
 func (s *MemoryRoutingPlanStore) Create(_ context.Context, p RoutingPlan, r []CapacityReservation) (RoutingPlan, error) {
 	s.mu.Lock()
@@ -22,7 +23,23 @@ func (s *MemoryRoutingPlanStore) Create(_ context.Context, p RoutingPlan, r []Ca
 	if _, ok := s.plans[p.ID]; ok {
 		return RoutingPlan{}, ErrRoutingPlanConflict
 	}
+	key := p.CampaignID + "\x00" + p.IdempotencyKey
+	if existingID, ok := s.idempotency[key]; ok {
+		existing := s.plans[existingID]
+		if existing.RequestHash != p.RequestHash {
+			return RoutingPlan{}, ErrRoutingPlanConflict
+		}
+		return existing, nil
+	}
+	var next int64 = 1
+	for _, planID := range s.byCampaign[p.CampaignID] {
+		if existing := s.plans[planID]; existing.Version >= next {
+			next = existing.Version + 1
+		}
+	}
+	p.Version = next
 	s.plans[p.ID] = p
+	s.idempotency[key] = p.ID
 	s.byCampaign[p.CampaignID] = append(s.byCampaign[p.CampaignID], p.ID)
 	s.reservations[p.ID] = append([]CapacityReservation(nil), r...)
 	return p, nil
@@ -44,6 +61,22 @@ func (s *MemoryRoutingPlanStore) ListByCampaign(_ context.Context, id string) ([
 		out = append(out, s.plans[pid])
 	}
 	return out, nil
+}
+func (s *MemoryRoutingPlanStore) LatestByCampaign(_ context.Context, id string) (RoutingPlan, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ids := s.byCampaign[id]
+	if len(ids) == 0 {
+		return RoutingPlan{}, ErrRoutingPlanNotFound
+	}
+	latest := s.plans[ids[0]]
+	for _, planID := range ids[1:] {
+		value := s.plans[planID]
+		if value.Version > latest.Version || (value.Version == latest.Version && value.ApprovedAt.After(latest.ApprovedAt)) {
+			latest = value
+		}
+	}
+	return latest, nil
 }
 func (s *MemoryRoutingPlanStore) Reservations(_ context.Context, id string) ([]CapacityReservation, error) {
 	s.mu.Lock()
@@ -98,7 +131,7 @@ func (s *MemoryRoutingPlanStore) PoolExecutionReport(_ context.Context, id strin
 	}
 	out := make([]PoolExecutionReport, 0, len(p.Routes))
 	for _, r := range p.Routes {
-		out = append(out, PoolExecutionReport{RoutingPlanID: id, SenderPoolID: r.SenderPoolID, GatewayPoolID: r.GatewayPoolID, Provider: r.Provider, Engine: r.Engine, MaximumRecipients: r.MaximumRecipients, ReservedMessagesPerMinute: r.ReservedMessagesPerMinute, ReservedHourlyUnits: r.ReservedHourlyUnits, ReservedDailyUnits: r.ReservedDailyUnits})
+		out = append(out, PoolExecutionReport{RoutingPlanID: id, SenderPoolID: r.SenderPoolID, GatewayPoolID: r.GatewayPoolID, Provider: r.Provider, Engine: r.Engine, ProviderAdapterVersion: r.ProviderAdapterVersion, ProviderDefinitionID: r.ProviderDefinitionID, ProviderDefinitionVersion: r.ProviderDefinitionVersion, GatewayPoolVersion: r.GatewayPoolVersion, MaximumRecipients: r.MaximumRecipients, ReservedMessagesPerMinute: r.ReservedMessagesPerMinute, ReservedHourlyUnits: r.ReservedHourlyUnits, ReservedDailyUnits: r.ReservedDailyUnits})
 	}
 	return out, nil
 }

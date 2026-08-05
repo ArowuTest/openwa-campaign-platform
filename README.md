@@ -1,74 +1,87 @@
 # Internal Audience & Campaign Platform
 
-Private, internally operated platform for consent-governed audience management, cohort creation, campaign approvals, WhatsApp dispatch through an isolated OpenWA gateway, and truthful campaign reporting.
+Private, internally operated platform for consent-governed audience management, cohort creation, campaign approvals, durable WhatsApp dispatch through isolated OpenWA gateway pools, and truthful campaign reporting.
 
 ## Operating model
 
 External organisations do not receive portal access in the initial release. They request campaigns offline and provide the consent basis, approved content and audience data. Internal operators:
 
-1. Create the organisation record.
+1. Create and govern the organisation record.
 2. Record and decide the offline consent review.
-3. Preview and approve the audience import.
+3. Preview, validate and reconcile audience imports.
 4. Build a cohort using governed filters.
 5. Freeze an immutable audience snapshot.
-6. Approve the message, commercial terms and final release.
-7. Dispatch through healthy messaging sessions.
-8. Report sent, delivered, read, failed and unknown outcomes separately.
+6. Approve the message, commercial terms, routing plan and final release.
+7. Dispatch through approved gateway and sender pools with durable recipient obligations.
+8. Report submitted, sent, delivered, read, failed and unknown outcomes separately.
 
 ## Technology boundaries
 
 - **Next.js/TypeScript** provides the internal operations portal.
-- **Go** owns organisations, consent, contacts, segmentation, campaigns, approvals, delivery state, metrics and reporting.
+- **Go** owns organisations, consent, contacts, segmentation, campaigns, approvals, routing, delivery state, metrics and reporting.
 - **PostgreSQL** is the authoritative system of record.
-- **Redis** is an execution accelerator, never the sole source of delivery obligations.
+- **Redis** is an execution accelerator, never the sole source of recipient or delivery obligations.
 - **OpenWA/NestJS** is an isolated, replaceable messaging transport gateway.
 - **S3-compatible storage** holds import files, consent evidence, campaign media and generated reports.
 - **Hostinger VPS/Docker Compose** is the initial deployment target.
 
 ## Current checkpoint
 
-Version `0.3.1` is an integrity-focused development checkpoint. It is not a completed SRS release. The current repository now includes:
+Version `0.8.24` is a backend-hardening checkpoint based on `0.8.23`. It is pre-production and must not be represented as deployment-certified.
 
-- Server-derived identity, MFA/session foundations and maker-checker controls.
-- Optimistic concurrency for campaign and consent transitions.
-- Immutable message and audience-snapshot evidence.
-- Transactional recipient entitlement and outbox creation.
-- Fenced leases for imports, outbox records, jobs and metric reconciliation.
-- Idempotency keys with exact payload comparison rather than key-only replay.
-- Monotonic delivery evidence and signed, replay-resistant gateway callbacks.
-- Secure streamed import quarantine, file-signature inspection and ClamAV integration boundary.
-- Streaming, resumable audience validation with protected MSISDN staging.
-- Final live consent/suppression checks before dispatch.
-- Deterministic healthy sender-session allocation with lease and heartbeat checks.
-- Executable audience, campaign and metric workers with bounded concurrency, health checks and graceful shutdown.
-- Query-path-specific PostgreSQL indexes for cohorts, consent eligibility, import claims, outbox/jobs, sender leases, provider events and metric reconciliation.
-- An SRS traceability catalogue covering all 398 requirements.
+The repository includes:
 
-Verified locally at this checkpoint:
+- Server-derived identity, MFA/session, RBAC and maker-checker controls.
+- Governed organisation, consent, suppression, audience, campaign and commercial lifecycles.
+- Immutable audience snapshots, approved message versions and recipient entitlements.
+- Durable workers, fenced leases, queue reconstruction and unknown-outcome protection.
+- Multi-pool routing across separately governed OpenWA `WHATSAPP_WEB_JS` and `BAILEYS` gateway pools.
+- Versioned pacing policies, route capacity reservations and campaign admission forecasting.
+- Exact provider-capability definition and gateway-version evidence frozen into campaigns, routes and controlled test sends.
+- Runtime provider, engine, adapter, capability, session and gateway revalidation before submission.
+- Monotonic delivery evidence, signed callbacks, reconciliation and governed operational reporting.
+- PostgreSQL migrations through `0059_backend_hardening_and_provider_binding.sql`.
+- An SRS traceability catalogue containing 398 granular requirement records.
+- Imported OpenWA source under the repository's governed third-party-source model; see `UPSTREAM.md` and `THIRD_PARTY_NOTICES.md`.
+
+## Verified code-level checks
+
+The checkpoint is expected to pass:
 
 ```bash
+make fmt
 go test ./...
-go test -race ./...
 go vet ./...
-go build ./...
+make build
+make frontend-syntax
+python3 scripts/verify_openapi_routes.py
+make governance-test
+make governance-check
 ```
 
-Current blockers remain explicit:
+Race-sensitive backend packages are also tested with `go test -race` in bounded package groups. The aggregate repository race command can exceed constrained CI/workspace execution windows because the HTTP security tests intentionally perform expensive password hashing.
 
-- A pinned PostgreSQL `database/sql` driver cannot be downloaded in this isolated workspace, so deployed binaries still fail closed until that dependency is added.
-- PostgreSQL migrations and repository adapters have not yet been exercised against a live PostgreSQL server here.
-- Docker on the user's desktop is not accessible from this workspace.
-- OpenWA source and real WhatsApp transport are not yet imported; the gateway transport remains mocked.
-- Full Next.js and NestJS dependency installation, typechecking and production builds remain pending.
-- Media dispatch remains disabled until authenticated short-lived object access is implemented.
+## Release gates still open
 
-## Local checks
+Code-level completion is not the same as production validation. The following remain required:
+
+- Execute the complete migration chain against production-like PostgreSQL and retain locking, upgrade and recovery evidence.
+- Validate query plans and endurance at target recipient, campaign and reporting volumes.
+- Contract-test and operate genuine OpenWA `WHATSAPP_WEB_JS` and `BAILEYS` sessions, including pairing, media, callbacks, reconnects and uncertain outcomes.
+- Complete security assurance, secret/key rotation and penetration testing.
+- Prove backup, restore and disaster recovery.
+- Validate multi-node Hostinger deployment, observability and operational runbooks.
+- Complete the production frontend and the full 398-requirement evidence reconciliation.
+
+`make release-gate` must remain closed until the governed evidence for these gates has been reviewed and accepted.
+
+## Local checks and deployment assets
 
 ```bash
 make check
 ```
 
-When Node dependencies are installed:
+When all Node dependencies are available:
 
 ```bash
 npm install
@@ -78,8 +91,4 @@ npm run build:web
 npm run build:gateway
 ```
 
-Docker Compose is prepared under `infrastructure/compose/compose.yaml`. Docker is not exposed inside the current isolated build workspace, so Compose execution must occur on the user's machine or the Hostinger VPS.
-
-## OpenWA source
-
-The public OpenWA source has not yet been imported because this isolated workspace cannot access GitHub. `UPSTREAM.md` records the approved import model. OpenWA will be imported into this private repository as third-party source—not as a public GitHub fork—and isolated behind the messaging-provider contract.
+Docker Compose assets are under `infrastructure/compose/compose.yaml`. Live Compose, PostgreSQL, Redis, OpenWA and Hostinger validation must be performed in an environment that exposes those dependencies.

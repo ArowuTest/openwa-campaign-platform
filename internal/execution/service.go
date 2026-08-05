@@ -18,6 +18,7 @@ type RuntimeStore interface {
 	RecordAdmission(context.Context, CapacityEvidence) error
 	Metrics(context.Context, string) (Metrics, error)
 	Capacity(context.Context, string, time.Time) (int, int64, error)
+	RouteCapacity(context.Context, PoolRoute, time.Time) (PoolCapacity, error)
 	RecordEvent(context.Context, string, string, string, string, map[string]any, time.Time) error
 }
 type Coordinator struct {
@@ -63,28 +64,29 @@ func (c *Coordinator) assess(ctx context.Context, id string, record bool) (Capac
 	}
 	var evidence CapacityEvidence
 	if c.RoutingPlans != nil {
-		plans, listErr := c.RoutingPlans.ListByCampaign(ctx, entity.ID)
-		if listErr != nil {
-			return CapacityEvidence{}, Metrics{}, fmt.Errorf("load campaign routing plans: %w", listErr)
-		}
-		if len(plans) > 0 {
-			plan := plans[0]
+		plan, listErr := c.RoutingPlans.LatestByCampaign(ctx, entity.ID)
+		if listErr == nil {
+			if err := c.RoutingPlans.ValidateForExecution(ctx, plan, entity, now); err != nil {
+				return CapacityEvidence{}, Metrics{}, fmt.Errorf("validate campaign routing plan: %w", err)
+			}
 			capacities := make([]PoolCapacity, 0, len(plan.Routes))
 			for _, route := range plan.Routes {
-				rate, daily, capErr := c.Store.Capacity(ctx, route.SenderPoolID, now)
+				capacity, capErr := c.Store.RouteCapacity(ctx, route, now)
 				if capErr != nil {
-					capacities = append(capacities, PoolCapacity{SenderPoolID: route.SenderPoolID})
+					capacities = append(capacities, PoolCapacity{SenderPoolID: route.SenderPoolID, GatewayPoolID: route.GatewayPoolID})
 					continue
 				}
-				capacities = append(capacities, PoolCapacity{SenderPoolID: route.SenderPoolID, AvailableMessagesPerMinute: rate, AvailableHourlyUnits: int64(rate) * 60, AvailableDailyUnits: daily, HealthySessions: 1})
+				capacities = append(capacities, capacity)
 			}
 			multi, multiErr := EvaluateMultiPoolAdmission(MultiPoolAdmissionInput{CampaignID: entity.ID, RemainingRecipients: remaining, EffectiveStart: start, Deadline: *entity.CompletionDeadlineAt, SafetyMarginPercent: c.SafetyMarginPercent, Plan: plan, Capacities: capacities, Now: now})
 			if multiErr != nil {
 				return CapacityEvidence{}, Metrics{}, multiErr
 			}
 			evidence = CapacityEvidence{CampaignID: entity.ID, PoolID: plan.ID, EvidenceVersion: plan.CapacityEvidenceVersion, RemainingRecipients: remaining, AvailableMessagesPerMinute: multi.EffectiveMessagesPerMinute, AvailableDailyCapacity: multi.EffectiveDailyUnits, SafetyMarginPercent: c.SafetyMarginPercent, RequiredMessagesPerMinute: multi.RequiredMessagesPerMinute, EffectiveMessagesPerMinute: float64(multi.EffectiveMessagesPerMinute), ForecastCompletionAt: multi.ForecastCompletionAt, DeadlineAt: *entity.CompletionDeadlineAt, Decision: multi.Decision, Reasons: multi.Reasons, EvaluatedAt: multi.EvaluatedAt}
-		} else {
+		} else if errors.Is(listErr, ErrRoutingPlanNotFound) {
 			evidence, err = c.singlePoolAdmission(ctx, entity, remaining, start, now)
+		} else {
+			return CapacityEvidence{}, Metrics{}, fmt.Errorf("load campaign routing plan: %w", listErr)
 		}
 	} else {
 		evidence, err = c.singlePoolAdmission(ctx, entity, remaining, start, now)
@@ -146,25 +148,34 @@ func (c *Coordinator) Start(ctx context.Context, id, actor, reason string, expec
 	if ev.Decision != DecisionAdmit {
 		return campaign.Campaign{}, ev, fmt.Errorf("campaign admission decision is %s: %v", ev.Decision, ev.Reasons)
 	}
+	if c.RoutingPlans != nil {
+		plan, planErr := c.RoutingPlans.LatestByCampaign(ctx, id)
+		if planErr == nil {
+			if err := c.RoutingPlans.Activate(ctx, plan.ID); err != nil {
+				return campaign.Campaign{}, ev, fmt.Errorf("activate routing-plan reservations: %w", err)
+			}
+		} else if !errors.Is(planErr, ErrRoutingPlanNotFound) {
+			return campaign.Campaign{}, ev, fmt.Errorf("load routing plan for activation: %w", planErr)
+		}
+	}
 	entity, err = c.Campaigns.Transition(ctx, id, campaign.TransitionInput{Action: campaign.ActionStartDispatch, ActorID: actor, Reason: reason, ExpectedVersion: expected})
 	if err != nil {
 		return campaign.Campaign{}, ev, err
 	}
-	if c.RoutingPlans != nil {
-		plans, _ := c.RoutingPlans.ListByCampaign(ctx, id)
-		if len(plans) > 0 {
-			_ = c.RoutingPlans.Activate(ctx, plans[0].ID)
-		}
+	if err := c.Store.RecordEvent(ctx, id, "DISPATCH_STARTED", actor, reason, map[string]any{"capacityEvidenceVersion": ev.EvidenceVersion, "forecastCompletionAt": ev.ForecastCompletionAt}, c.now()); err != nil {
+		return entity, ev, fmt.Errorf("campaign dispatch started but execution event could not be recorded: %w", err)
 	}
-	_ = c.Store.RecordEvent(ctx, id, "DISPATCH_STARTED", actor, reason, map[string]any{"capacityEvidenceVersion": ev.EvidenceVersion, "forecastCompletionAt": ev.ForecastCompletionAt}, c.now())
 	return entity, ev, nil
 }
 func (c *Coordinator) Pause(ctx context.Context, id, actor, reason string, expected int64) (campaign.Campaign, error) {
 	entity, err := c.Campaigns.Transition(ctx, id, campaign.TransitionInput{Action: campaign.ActionPause, ActorID: actor, Reason: reason, ExpectedVersion: expected})
-	if err == nil {
-		_ = c.Store.RecordEvent(ctx, id, "CAMPAIGN_PAUSED", actor, reason, nil, c.now())
+	if err != nil {
+		return entity, err
 	}
-	return entity, err
+	if err := c.Store.RecordEvent(ctx, id, "CAMPAIGN_PAUSED", actor, reason, nil, c.now()); err != nil {
+		return entity, fmt.Errorf("campaign paused but execution event could not be recorded: %w", err)
+	}
+	return entity, nil
 }
 func (c *Coordinator) Resume(ctx context.Context, id, actor, reason string, expected int64) (campaign.Campaign, CapacityEvidence, error) {
 	entity, err := c.Campaigns.Get(ctx, strings.TrimSpace(id))
@@ -186,10 +197,13 @@ func (c *Coordinator) Resume(ctx context.Context, id, actor, reason string, expe
 		return campaign.Campaign{}, ev, fmt.Errorf("campaign resume admission decision is %s: %v", ev.Decision, ev.Reasons)
 	}
 	entity, err = c.Campaigns.Transition(ctx, id, campaign.TransitionInput{Action: campaign.ActionResume, ActorID: actor, Reason: reason, ExpectedVersion: expected})
-	if err == nil {
-		_ = c.Store.RecordEvent(ctx, id, "CAMPAIGN_RESUMED", actor, reason, map[string]any{"forecastCompletionAt": ev.ForecastCompletionAt}, c.now())
+	if err != nil {
+		return entity, ev, err
 	}
-	return entity, ev, err
+	if err := c.Store.RecordEvent(ctx, id, "CAMPAIGN_RESUMED", actor, reason, map[string]any{"forecastCompletionAt": ev.ForecastCompletionAt}, c.now()); err != nil {
+		return entity, ev, fmt.Errorf("campaign resumed but execution event could not be recorded: %w", err)
+	}
+	return entity, ev, nil
 }
 func (c *Coordinator) Cancel(ctx context.Context, id, actor, reason string, expected int64) (campaign.Campaign, error) {
 	if strings.TrimSpace(reason) == "" {
@@ -198,12 +212,18 @@ func (c *Coordinator) Cancel(ctx context.Context, id, actor, reason string, expe
 	entity, err := c.Campaigns.Transition(ctx, id, campaign.TransitionInput{Action: campaign.ActionCancel, ActorID: actor, Reason: reason, ExpectedVersion: expected})
 	if err == nil {
 		if c.RoutingPlans != nil {
-			plans, _ := c.RoutingPlans.ListByCampaign(ctx, id)
-			if len(plans) > 0 {
-				_ = c.RoutingPlans.Release(ctx, plans[0].ID, actor)
+			plan, planErr := c.RoutingPlans.LatestByCampaign(ctx, id)
+			if planErr == nil {
+				if releaseErr := c.RoutingPlans.Release(ctx, plan.ID, actor); releaseErr != nil {
+					return entity, fmt.Errorf("campaign cancelled but routing reservations could not be released: %w", releaseErr)
+				}
+			} else if !errors.Is(planErr, ErrRoutingPlanNotFound) {
+				return entity, fmt.Errorf("campaign cancelled but routing plan could not be loaded: %w", planErr)
 			}
 		}
-		_ = c.Store.RecordEvent(ctx, id, "CAMPAIGN_CANCELLED", actor, reason, nil, c.now())
+		if eventErr := c.Store.RecordEvent(ctx, id, "CAMPAIGN_CANCELLED", actor, reason, nil, c.now()); eventErr != nil {
+			return entity, fmt.Errorf("campaign cancelled but execution event could not be recorded: %w", eventErr)
+		}
 	}
 	return entity, err
 }
@@ -224,11 +244,17 @@ func (c *Coordinator) AssessAndComplete(ctx context.Context, id, actor string, e
 		return campaign.Campaign{}, a, err
 	}
 	if c.RoutingPlans != nil {
-		plans, _ := c.RoutingPlans.ListByCampaign(ctx, id)
-		if len(plans) > 0 {
-			_ = c.RoutingPlans.Release(ctx, plans[0].ID, actor)
+		plan, planErr := c.RoutingPlans.LatestByCampaign(ctx, id)
+		if planErr == nil {
+			if releaseErr := c.RoutingPlans.Release(ctx, plan.ID, actor); releaseErr != nil {
+				return entity, a, fmt.Errorf("campaign completed but routing reservations could not be released: %w", releaseErr)
+			}
+		} else if !errors.Is(planErr, ErrRoutingPlanNotFound) {
+			return entity, a, fmt.Errorf("campaign completed but routing plan could not be loaded: %w", planErr)
 		}
 	}
-	_ = c.Store.RecordEvent(ctx, id, string(a.State), actor, "automatic completion assessment", map[string]any{"failed": a.Failed, "unknown": a.Unknown}, c.now())
+	if err := c.Store.RecordEvent(ctx, id, string(a.State), actor, "automatic completion assessment", map[string]any{"failed": a.Failed, "unknown": a.Unknown}, c.now()); err != nil {
+		return entity, a, fmt.Errorf("campaign completed but execution event could not be recorded: %w", err)
+	}
 	return entity, a, nil
 }

@@ -110,7 +110,7 @@ func (r *PostgreSQLRepository) ListByCampaign(ctx context.Context, campaignID st
 	if r == nil || r.DB == nil {
 		return nil, errors.New("database is required")
 	}
-	rows, err := r.DB.QueryContext(ctx, messageSelect+` WHERE campaign_id=$1::uuid ORDER BY version DESC`, campaignID)
+	rows, err := r.DB.QueryContext(ctx, messageSelect+` WHERE campaign_id=$1::uuid ORDER BY version DESC LIMIT 1000`, campaignID)
 	if err != nil {
 		return nil, err
 	}

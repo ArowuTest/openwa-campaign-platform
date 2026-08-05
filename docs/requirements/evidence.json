@@ -268,6 +268,7 @@
     "status": "IMPLEMENTED_TESTED"
   },
   "CAM-009": {
+    "status": "IMPLEMENTED_TESTED",
     "evidence": [
       "internal/testmessage/model.go",
       "internal/testmessage/memory.go",
@@ -276,10 +277,10 @@
       "internal/testmessage/service_test.go",
       "internal/platform/httpserver/server.go",
       "cmd/campaign-worker/main.go",
-      "database/migrations/0056_controlled_test_messages.sql"
+      "database/migrations/0056_controlled_test_messages.sql",
+      "database/migrations/0059_backend_hardening_and_provider_binding.sql"
     ],
-    "notes": "Only maker-checker approved test MSISDNs may receive test sends. Test sends freeze the message content hash, explicit OpenWA engine, gateway pool and session; use idempotent provider commands; apply governed pacing; and retain accepted, failed or unknown outcomes.",
-    "status": "IMPLEMENTED_TESTED"
+    "notes": "Only maker-checker approved test MSISDNs may receive test sends. Test sends freeze the message content hash, explicit OpenWA engine, gateway pool, session, provider adapter and exact provider capability definition/version. Scheduling and worker execution revalidate required capabilities and fail closed on route drift; idempotent replay compares the frozen request."
   },
   "CAM-012": {
     "evidence": [
@@ -961,5 +962,22 @@
       "internal/platform/httpserver/server_test.go"
     ],
     "status": "IMPLEMENTED_TESTED"
+  },
+  "GWY-016": {
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/provider/registry.go",
+      "internal/provider/registry_postgres.go",
+      "internal/provider/version.go",
+      "internal/provider/version_test.go",
+      "internal/campaign/service.go",
+      "internal/campaign/provider_capability_test.go",
+      "internal/dispatch/postgres_material.go",
+      "internal/dispatch/governed_route_test.go",
+      "internal/testmessage/postgres.go",
+      "database/migrations/0058_provider_capability_registry.sql",
+      "database/migrations/0059_backend_hardening_and_provider_binding.sql"
+    ],
+    "notes": "The control plane exposes governed provider/engine capability and version definitions, freezes the exact definition into campaign/test-send evidence, and blocks incompatible gateway, adapter, minimum-version or message-capability routes. Genuine engine operation remains an external validation gate."
   }
 }

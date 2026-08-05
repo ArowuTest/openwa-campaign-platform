@@ -2,6 +2,8 @@ package campaign
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"sort"
 	"strings"
@@ -10,6 +12,7 @@ import (
 
 	"campaign-platform/internal/organisation"
 	"campaign-platform/internal/provider"
+	"campaign-platform/internal/sender"
 )
 
 var (
@@ -22,9 +25,19 @@ type Repository interface {
 	Create(context.Context, Campaign) error
 	CompareAndSwap(context.Context, Campaign, int64) error
 	Get(context.Context, string) (Campaign, error)
-	List(context.Context) ([]Campaign, error)
+	ListPage(context.Context, int, *time.Time, string) ([]Campaign, error)
 	AmendMaterial(context.Context, Campaign, MaterialChangeEvent, int64) error
 	ListMaterialChanges(context.Context, string) ([]MaterialChangeEvent, error)
+}
+
+type Page struct {
+	Items      []Campaign `json:"items"`
+	NextCursor string     `json:"nextCursor,omitempty"`
+}
+
+type pageCursor struct {
+	CreatedAt time.Time `json:"createdAt"`
+	ID        string    `json:"id"`
 }
 
 type Service struct {
@@ -43,6 +56,10 @@ type Service struct {
 	}
 	providerCapabilities interface {
 		Require(context.Context, string, provider.Channel, string, time.Time, []provider.Capability) (provider.Definition, error)
+		Get(context.Context, string) (provider.Definition, error)
+	}
+	gatewayPools interface {
+		RequireCapabilities(context.Context, string, sender.GatewayProvider, sender.GatewayEngine, []sender.Capability) (sender.GatewayPool, error)
 	}
 	clock func() time.Time
 }
@@ -74,27 +91,75 @@ func (s *Service) WithOrganisationPolicies(policies interface {
 
 func (s *Service) WithProviderCapabilities(registry interface {
 	Require(context.Context, string, provider.Channel, string, time.Time, []provider.Capability) (provider.Definition, error)
+	Get(context.Context, string) (provider.Definition, error)
 }) *Service {
 	s.providerCapabilities = registry
 	return s
 }
 
-func (s *Service) validateProviderCapabilities(ctx context.Context, transport TransportSelection) error {
+func (s *Service) WithGatewayPools(pools interface {
+	RequireCapabilities(context.Context, string, sender.GatewayProvider, sender.GatewayEngine, []sender.Capability) (sender.GatewayPool, error)
+}) *Service {
+	s.gatewayPools = pools
+	return s
+}
+
+func (s *Service) resolveProviderCapabilities(ctx context.Context, transport TransportSelection, effectiveAt time.Time) (TransportSelection, error) {
 	if s.providerCapabilities == nil {
-		return nil
+		return transport, nil
 	}
 	required := make([]provider.Capability, 0, len(transport.RequiredCapabilities))
+	gatewayRequired := make([]sender.Capability, 0, len(transport.RequiredCapabilities))
 	for _, capability := range transport.RequiredCapabilities {
 		required = append(required, provider.Capability(capability))
+		gatewayRequired = append(gatewayRequired, sender.Capability(capability))
 	}
-	definition, err := s.providerCapabilities.Require(ctx, string(transport.Provider), provider.Channel(strings.ToUpper(strings.TrimSpace(transport.Channel))), string(transport.Engine), s.clock().UTC(), required)
+	if effectiveAt.IsZero() {
+		effectiveAt = s.clock().UTC()
+	}
+	definition, err := s.providerCapabilities.Require(ctx, string(transport.Provider), provider.Channel(strings.ToUpper(strings.TrimSpace(transport.Channel))), string(transport.Engine), effectiveAt.UTC(), required)
 	if err != nil {
-		return err
+		return transport, err
 	}
 	if definition.AdapterVersion != strings.TrimSpace(transport.AdapterVersion) {
-		return errors.New("campaign adapter version does not match the active provider capability definition")
+		return transport, errors.New("campaign adapter version does not match the active provider capability definition")
 	}
-	return nil
+	if transport.ProviderDefinitionID != "" && (transport.ProviderDefinitionID != definition.ID || transport.ProviderDefinitionVersion != definition.Version) {
+		return transport, errors.New("campaign provider capability binding no longer matches the active governed definition; material reapproval is required")
+	}
+	transport.ProviderDefinitionID = definition.ID
+	transport.ProviderDefinitionVersion = definition.Version
+	if s.gatewayPools != nil {
+		pool, poolErr := s.gatewayPools.RequireCapabilities(ctx, transport.GatewayPoolID, sender.GatewayProvider(transport.Provider), sender.GatewayEngine(transport.Engine), gatewayRequired)
+		if poolErr != nil {
+			return transport, poolErr
+		}
+		if strings.TrimSpace(pool.AdapterVersion) != strings.TrimSpace(transport.AdapterVersion) {
+			return transport, errors.New("gateway pool adapter version does not match the campaign provider adapter version")
+		}
+		if transport.GatewayPoolVersion > 0 && transport.GatewayPoolVersion != pool.Version {
+			return transport, errors.New("campaign gateway pool binding no longer matches the governed pool version; material reapproval is required")
+		}
+		transport.GatewayPoolVersion = pool.Version
+		if definition.MinimumGatewayVersion != "" {
+			ok, versionErr := provider.VersionAtLeast(pool.AdapterVersion, definition.MinimumGatewayVersion)
+			if versionErr != nil {
+				return transport, versionErr
+			}
+			if !ok {
+				return transport, errors.New("gateway pool version is below the governed provider minimum")
+			}
+		}
+	}
+	return transport, nil
+}
+
+func (s *Service) providerEffectiveAt(requestedStart *time.Time) time.Time {
+	now := s.clock().UTC()
+	if requestedStart != nil && requestedStart.After(now) {
+		return requestedStart.UTC()
+	}
+	return now
 }
 
 func (s *Service) WithConsentReviews(reader interface {
@@ -126,9 +191,16 @@ func (s *Service) requireActiveOrganisation(ctx context.Context, organisationID 
 }
 
 func (s *Service) Create(ctx context.Context, input CreateInput) (Campaign, error) {
-	if err := s.validateProviderCapabilities(ctx, input.Transport); err != nil {
+	// Provider-definition identity is authoritative server evidence and cannot be
+	// selected by the caller. It is resolved from the active governed registry.
+	input.Transport.ProviderDefinitionID = ""
+	input.Transport.ProviderDefinitionVersion = 0
+	input.Transport.GatewayPoolVersion = 0
+	transport, err := s.resolveProviderCapabilities(ctx, input.Transport, s.providerEffectiveAt(input.RequestedStartAt))
+	if err != nil {
 		return Campaign{}, err
 	}
+	input.Transport = transport
 	if err := s.requireActiveOrganisation(ctx, input.OrganisationID); err != nil {
 		return Campaign{}, err
 	}
@@ -162,6 +234,14 @@ func (s *Service) Clone(ctx context.Context, identifier string, input CloneInput
 	if err != nil {
 		return Campaign{}, err
 	}
+	clone.Transport.ProviderDefinitionID = ""
+	clone.Transport.ProviderDefinitionVersion = 0
+	clone.Transport.GatewayPoolVersion = 0
+	transport, err := s.resolveProviderCapabilities(ctx, clone.Transport, s.providerEffectiveAt(clone.RequestedStartAt))
+	if err != nil {
+		return Campaign{}, err
+	}
+	clone.Transport = transport
 	if err := s.repository.Create(ctx, clone); err != nil {
 		return Campaign{}, err
 	}
@@ -189,9 +269,11 @@ func (s *Service) Transition(ctx context.Context, identifier string, input Trans
 	}
 	switch input.Action {
 	case ActionRequestFinalApproval, ActionApproveFinal, ActionStartDispatch, ActionResume:
-		if err := s.validateProviderCapabilities(ctx, entity.Transport); err != nil {
-			return Campaign{}, err
+		transport, validationErr := s.resolveProviderCapabilities(ctx, entity.Transport, s.providerEffectiveAt(entity.RequestedStartAt))
+		if validationErr != nil {
+			return Campaign{}, validationErr
 		}
+		entity.Transport = transport
 	}
 	if input.Action == ActionApproveCommercial {
 		if s.commercial == nil {
@@ -229,6 +311,16 @@ func (s *Service) AmendMaterial(ctx context.Context, identifier string, input Ma
 	if err != nil {
 		return Campaign{}, err
 	}
+	if input.ChangeTransport {
+		amended.Transport.ProviderDefinitionID = ""
+		amended.Transport.ProviderDefinitionVersion = 0
+		amended.Transport.GatewayPoolVersion = 0
+		transport, validationErr := s.resolveProviderCapabilities(ctx, amended.Transport, s.providerEffectiveAt(amended.RequestedStartAt))
+		if validationErr != nil {
+			return Campaign{}, validationErr
+		}
+		amended.Transport = transport
+	}
 	if err := s.repository.AmendMaterial(ctx, amended, event, entity.Version); err != nil {
 		return Campaign{}, err
 	}
@@ -246,8 +338,43 @@ func (s *Service) Get(ctx context.Context, identifier string) (Campaign, error) 
 	return s.repository.Get(ctx, identifier)
 }
 
-func (s *Service) List(ctx context.Context) ([]Campaign, error) {
-	return s.repository.List(ctx)
+func (s *Service) List(ctx context.Context, limit int, cursor string) (Page, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	var before *time.Time
+	var beforeID string
+	if strings.TrimSpace(cursor) != "" {
+		raw, err := base64.RawURLEncoding.DecodeString(cursor)
+		if err != nil {
+			return Page{}, errors.New("invalid campaign page cursor")
+		}
+		var decoded pageCursor
+		if err := json.Unmarshal(raw, &decoded); err != nil || decoded.CreatedAt.IsZero() || strings.TrimSpace(decoded.ID) == "" {
+			return Page{}, errors.New("invalid campaign page cursor")
+		}
+		value := decoded.CreatedAt.UTC()
+		before = &value
+		beforeID = strings.TrimSpace(decoded.ID)
+	}
+	items, err := s.repository.ListPage(ctx, limit+1, before, beforeID)
+	if err != nil {
+		return Page{}, err
+	}
+	page := Page{Items: items}
+	if len(items) > limit {
+		page.Items = items[:limit]
+		last := page.Items[len(page.Items)-1]
+		raw, marshalErr := json.Marshal(pageCursor{CreatedAt: last.CreatedAt.UTC(), ID: last.ID})
+		if marshalErr != nil {
+			return Page{}, marshalErr
+		}
+		page.NextCursor = base64.RawURLEncoding.EncodeToString(raw)
+	}
+	return page, nil
 }
 
 type MemoryRepository struct {
@@ -294,14 +421,28 @@ func (r *MemoryRepository) Get(_ context.Context, identifier string) (Campaign, 
 	return entity, nil
 }
 
-func (r *MemoryRepository) List(_ context.Context) ([]Campaign, error) {
+func (r *MemoryRepository) ListPage(_ context.Context, limit int, before *time.Time, beforeID string) ([]Campaign, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	if limit <= 0 || limit > 501 {
+		limit = 101
+	}
 	items := make([]Campaign, 0, len(r.items))
 	for _, item := range r.items {
+		if before != nil && (item.CreatedAt.After(*before) || (item.CreatedAt.Equal(*before) && item.ID >= beforeID)) {
+			continue
+		}
 		items = append(items, item)
 	}
-	sort.Slice(items, func(i, j int) bool { return items[i].CreatedAt.After(items[j].CreatedAt) })
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].CreatedAt.Equal(items[j].CreatedAt) {
+			return items[i].ID > items[j].ID
+		}
+		return items[i].CreatedAt.After(items[j].CreatedAt)
+	})
+	if len(items) > limit {
+		items = items[:limit]
+	}
 	return items, nil
 }
 

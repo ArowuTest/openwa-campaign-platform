@@ -313,13 +313,24 @@ ON CONFLICT (campaign_id) DO UPDATE SET
 	return result, nil
 }
 
-func (s *PostgreSQLStore) Recipients(ctx context.Context, campaignID string) []delivery.Recipient {
+func (s *PostgreSQLStore) ListRecipients(ctx context.Context, campaignID, afterContactID, afterID string, limit int) ([]delivery.Recipient, error) {
 	if s == nil || s.DB == nil {
-		return nil
+		return nil, errors.New("database is required")
 	}
-	rows, err := s.DB.QueryContext(ctx, `SELECT id,campaign_id,contact_id,message_version_id,idempotency_key,status,coalesce(highest_acknowledgement,''),coalesce(provider_message_id,''),attempt_count,coalesce(last_error_code,''),coalesce(last_error_detail,''),submitted_at,completed_at,updated_at,last_event_at,reconciliation_required,contradictory_event_count FROM campaign_recipients WHERE ($1='' OR campaign_id=$1::uuid) ORDER BY contact_id`, campaignID)
+	if err := validateRecipientCursor(afterContactID, afterID); err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > 5_000 {
+		limit = 1_000
+	}
+	rows, err := s.DB.QueryContext(ctx, `SELECT id,campaign_id,contact_id,message_version_id,idempotency_key,status,coalesce(highest_acknowledgement,''),coalesce(provider_message_id,''),attempt_count,coalesce(last_error_code,''),coalesce(last_error_detail,''),submitted_at,completed_at,updated_at,last_event_at,reconciliation_required,contradictory_event_count
+FROM campaign_recipients
+WHERE ($1='' OR campaign_id=NULLIF($1,'')::uuid)
+  AND ($2='' OR (contact_id,id) > (NULLIF($2,'')::uuid,NULLIF($3,'')::uuid))
+ORDER BY contact_id,id
+LIMIT $4`, campaignID, afterContactID, afterID, limit)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("list campaign recipients: %w", err)
 	}
 	defer rows.Close()
 	items := []delivery.Recipient{}
@@ -328,7 +339,7 @@ func (s *PostgreSQLStore) Recipients(ctx context.Context, campaignID string) []d
 		var status string
 		var submitted, completed, lastEvent sql.NullTime
 		if err := rows.Scan(&value.ID, &value.CampaignID, &value.ContactID, &value.MessageVersionID, &value.IdempotencyKey, &status, &value.HighestAcknowledgement, &value.ProviderMessageID, &value.AttemptCount, &value.LastErrorCode, &value.LastErrorDetail, &submitted, &completed, &value.UpdatedAt, &lastEvent, &value.ReconciliationRequired, &value.ContradictoryEventCount); err != nil {
-			return nil
+			return nil, fmt.Errorf("scan campaign recipient: %w", err)
 		}
 		value.Status = delivery.Status(status)
 		if submitted.Valid {
@@ -345,24 +356,48 @@ func (s *PostgreSQLStore) Recipients(ctx context.Context, campaignID string) []d
 		}
 		items = append(items, value)
 	}
-	return items
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate campaign recipients: %w", err)
+	}
+	return items, nil
 }
 
-func (s *PostgreSQLStore) Outbox(ctx context.Context) []Outbox {
+func (s *PostgreSQLStore) ListOutbox(ctx context.Context, afterCreatedAt time.Time, afterID string, limit int) ([]Outbox, error) {
 	if s == nil || s.DB == nil {
-		return nil
+		return nil, errors.New("database is required")
 	}
-	rows, err := s.DB.QueryContext(ctx, `SELECT id,deduplication_key,event_type,aggregate_id::text,payload,created_at FROM transactional_outbox ORDER BY created_at`)
+	if err := validateOutboxCursor(afterCreatedAt, afterID); err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > 5_000 {
+		limit = 1_000
+	}
+	rows, err := s.DB.QueryContext(ctx, `SELECT id,deduplication_key,event_type,aggregate_id::text,payload,created_at
+FROM transactional_outbox
+WHERE ($1::timestamptz IS NULL OR (created_at,id) > ($1::timestamptz,NULLIF($2,'')::uuid))
+ORDER BY created_at,id
+LIMIT $3`, nullableTime(afterCreatedAt), afterID, limit)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("list transactional outbox: %w", err)
 	}
 	defer rows.Close()
 	items := []Outbox{}
 	for rows.Next() {
 		var value Outbox
-		if rows.Scan(&value.ID, &value.DedupKey, &value.EventType, &value.AggregateID, &value.Payload, &value.CreatedAt) == nil {
-			items = append(items, value)
+		if err := rows.Scan(&value.ID, &value.DedupKey, &value.EventType, &value.AggregateID, &value.Payload, &value.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan transactional outbox: %w", err)
 		}
+		items = append(items, value)
 	}
-	return items
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate transactional outbox: %w", err)
+	}
+	return items, nil
+}
+
+func nullableTime(value time.Time) any {
+	if value.IsZero() {
+		return nil
+	}
+	return value.UTC()
 }

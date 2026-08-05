@@ -135,12 +135,12 @@ func TestDryRunReleaseRecoveryDispatchAndFinalWithdrawal(t *testing.T) {
 		t.Fatalf("release replay was not idempotent: %+v", second)
 	}
 
-	recipients := releaseStore.Recipients(ctx, campaignEntity.ID)
+	recipients := mustRecipients(t, releaseStore, campaignEntity.ID)
 	ledgerRepo := delivery.NewMemoryRepository(recipients...)
 	ledger := delivery.NewService(ledgerRepo)
 
 	outboxRecords := make([]outbox.Record, 0, 2)
-	for _, value := range releaseStore.Outbox(ctx) {
+	for _, value := range mustOutbox(t, releaseStore) {
 		outboxRecords = append(outboxRecords, outbox.Record{
 			ID: value.ID, DedupKey: value.DedupKey, AggregateType: "CAMPAIGN_RECIPIENT",
 			AggregateID: value.AggregateID, EventType: value.EventType,
@@ -238,4 +238,22 @@ func TestDryRunReleaseRecoveryDispatchAndFinalWithdrawal(t *testing.T) {
 	if gateway.Calls() != 1 {
 		t.Fatalf("gateway was called again during replay: %d", gateway.Calls())
 	}
+}
+
+func mustRecipients(t *testing.T, store orchestration.EvidenceStore, campaignID string) []delivery.Recipient {
+	t.Helper()
+	items, err := store.ListRecipients(context.Background(), campaignID, "", "", 5_000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return items
+}
+
+func mustOutbox(t *testing.T, store orchestration.EvidenceStore) []orchestration.Outbox {
+	t.Helper()
+	items, err := store.ListOutbox(context.Background(), time.Time{}, "", 5_000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return items
 }

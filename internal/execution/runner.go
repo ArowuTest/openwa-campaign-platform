@@ -3,6 +3,7 @@ package execution
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"time"
 
@@ -59,8 +60,17 @@ func (r *Runner) runOnce(ctx context.Context) error {
 	}
 	for _, c := range due {
 		r.active.Add(1)
-		_, _, _ = r.Coordinator.Start(ctx, c.ID, "execution-scheduler", "scheduled start", c.Version)
-		_ = r.Repository.Release(context.WithoutCancel(ctx), c.ID, r.Owner, r.Coordinator.now())
+		_, _, operationErr := r.Coordinator.Start(ctx, c.ID, "execution-scheduler", "scheduled start", c.Version)
+		if operationErr != nil {
+			if eventErr := r.Coordinator.Store.RecordEvent(context.WithoutCancel(ctx), c.ID, "SCHEDULED_START_FAILED", "execution-scheduler", "scheduled start failed", map[string]any{"error": operationErr.Error()}, r.Coordinator.now()); eventErr != nil {
+				r.active.Add(-1)
+				return fmt.Errorf("record scheduled-start failure for campaign %s: %w", c.ID, eventErr)
+			}
+		}
+		if releaseErr := r.Repository.Release(context.WithoutCancel(ctx), c.ID, r.Owner, r.Coordinator.now()); releaseErr != nil {
+			r.active.Add(-1)
+			return fmt.Errorf("release due campaign %s: %w", c.ID, releaseErr)
+		}
 		r.active.Add(-1)
 	}
 	active, err := r.Repository.ClaimActive(ctx, r.Owner, r.Lease, now, r.Batch)
@@ -69,8 +79,17 @@ func (r *Runner) runOnce(ctx context.Context) error {
 	}
 	for _, c := range active {
 		r.active.Add(1)
-		_, _, _ = r.Coordinator.AssessAndComplete(ctx, c.ID, "execution-scheduler", c.Version)
-		_ = r.Repository.Release(context.WithoutCancel(ctx), c.ID, r.Owner, r.Coordinator.now())
+		_, _, operationErr := r.Coordinator.AssessAndComplete(ctx, c.ID, "execution-scheduler", c.Version)
+		if operationErr != nil {
+			if eventErr := r.Coordinator.Store.RecordEvent(context.WithoutCancel(ctx), c.ID, "COMPLETION_ASSESSMENT_FAILED", "execution-scheduler", "completion assessment failed", map[string]any{"error": operationErr.Error()}, r.Coordinator.now()); eventErr != nil {
+				r.active.Add(-1)
+				return fmt.Errorf("record completion-assessment failure for campaign %s: %w", c.ID, eventErr)
+			}
+		}
+		if releaseErr := r.Repository.Release(context.WithoutCancel(ctx), c.ID, r.Owner, r.Coordinator.now()); releaseErr != nil {
+			r.active.Add(-1)
+			return fmt.Errorf("release active campaign %s: %w", c.ID, releaseErr)
+		}
 		r.active.Add(-1)
 	}
 	return nil

@@ -6,10 +6,10 @@ Total requirements: **398**
 
 | Status | Count |
 |---|---:|
-| IMPLEMENTED_TESTED | 64 |
+| IMPLEMENTED_TESTED | 65 |
 | PARTIAL | 34 |
 | BLOCKED_EXTERNAL | 0 |
-| NOT_STARTED | 300 |
+| NOT_STARTED | 299 |
 
 | ID | Priority | Status | Requirement | Evidence / notes |
 |---|---|---|---|---|
@@ -40,7 +40,7 @@ Total requirements: **398**
 | GWY-013 | Must | NOT_STARTED | Use object references for media and enforce size/type limits. |  |
 | GWY-014 | Must | NOT_STARTED | Sanitise logs and exclude raw MSISDN, message content and credentials by default. |  |
 | GWY-015 | Must | NOT_STARTED | Support safe shutdown and uncertain-state reporting. |  |
-| GWY-016 | Must | NOT_STARTED | Expose engine capability and version. |  |
+| GWY-016 | Must | IMPLEMENTED_TESTED | Expose engine capability and version. | `internal/provider/registry.go`, `internal/provider/registry_postgres.go`, `internal/provider/version.go`, `internal/provider/version_test.go`, `internal/campaign/service.go`, `internal/campaign/provider_capability_test.go`, `internal/dispatch/postgres_material.go`, `internal/dispatch/governed_route_test.go`, `internal/testmessage/postgres.go`, `database/migrations/0058_provider_capability_registry.sql`, `database/migrations/0059_backend_hardening_and_provider_binding.sql` — The control plane exposes governed provider/engine capability and version definitions, freezes the exact definition into campaign/test-send evidence, and blocks incompatible gateway, adapter, minimum-version or message-capability routes. Genuine engine operation remains an external validation gate. |
 | GWY-017 | Must | NOT_STARTED | Support per-session stable proxy configuration where legitimately required. |  |
 | GWY-018 | Must | NOT_STARTED | Do not implement rapid IP rotation or enforcement-evasion behaviour. |  |
 | IAM-001 | Must | IMPLEMENTED_TESTED | Permit access only to provisioned internal users. | `internal/identity/administration.go`, `internal/identity/administration_test.go`, `internal/platform/httpserver/identity_admin.go` |
@@ -173,7 +173,7 @@ Total requirements: **398**
 | CAM-006 | Must | NOT_STARTED | Store media in object storage with checksum, type, size and scan status. |  |
 | CAM-007 | Must | NOT_STARTED | Support approved personalisation variables with typed values and fallback. |  |
 | CAM-008 | Must | NOT_STARTED | Preview message using representative test records with masked data. |  |
-| CAM-009 | Must | IMPLEMENTED_TESTED | Send controlled test messages only to approved test numbers. | `internal/testmessage/model.go`, `internal/testmessage/memory.go`, `internal/testmessage/postgres.go`, `internal/testmessage/runner.go`, `internal/testmessage/service_test.go`, `internal/platform/httpserver/server.go`, `cmd/campaign-worker/main.go`, `database/migrations/0056_controlled_test_messages.sql` — Only maker-checker approved test MSISDNs may receive test sends. Test sends freeze the message content hash, explicit OpenWA engine, gateway pool and session; use idempotent provider commands; apply governed pacing; and retain accepted, failed or unknown outcomes. |
+| CAM-009 | Must | IMPLEMENTED_TESTED | Send controlled test messages only to approved test numbers. | `internal/testmessage/model.go`, `internal/testmessage/memory.go`, `internal/testmessage/postgres.go`, `internal/testmessage/runner.go`, `internal/testmessage/service_test.go`, `internal/platform/httpserver/server.go`, `cmd/campaign-worker/main.go`, `database/migrations/0056_controlled_test_messages.sql`, `database/migrations/0059_backend_hardening_and_provider_binding.sql` — Only maker-checker approved test MSISDNs may receive test sends. Test sends freeze the message content hash, explicit OpenWA engine, gateway pool, session, provider adapter and exact provider capability definition/version. Scheduling and worker execution revalidate required capabilities and fail closed on route drift; idempotent replay compares the frozen request. |
 | CAM-010 | Must | NOT_STARTED | Version message text, media, variables and links. |  |
 | CAM-011 | Must | NOT_STARTED | Hash the approved message version and include it in campaign release. |  |
 | CAM-012 | Must | IMPLEMENTED_TESTED | Require reapproval after material message, media, link, audience, sender or schedule change. | `internal/campaign/model.go`, `internal/campaign/model_test.go`, `internal/campaign/service.go`, `internal/persistence/postgres/campaign.go`, `internal/platform/httpserver/server.go`, `database/migrations/0041_campaign_material_change_invalidation.sql`, `contracts/openapi/control-api.yaml` — Material audience, message, entitlement, transport and schedule changes are explicit, MFA-protected, optimistically versioned, recorded append-only and automatically regress the campaign to the required approval stage. |

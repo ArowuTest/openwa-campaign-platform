@@ -35,6 +35,9 @@ func (f *fakeStore) Metrics(context.Context, string) (Metrics, error) { return f
 func (f *fakeStore) Capacity(context.Context, string, time.Time) (int, int64, error) {
 	return f.rate, f.daily, nil
 }
+func (f *fakeStore) RouteCapacity(_ context.Context, route PoolRoute, _ time.Time) (PoolCapacity, error) {
+	return PoolCapacity{SenderPoolID: route.SenderPoolID, GatewayPoolID: route.GatewayPoolID, AvailableMessagesPerMinute: f.rate, AvailableHourlyUnits: int64(f.rate) * 60, AvailableDailyUnits: f.daily, HealthySessions: 1, HealthyNodes: 1, MinimumHealthyNodes: 1}, nil
+}
 func (f *fakeStore) RecordEvent(context.Context, string, string, string, string, map[string]any, time.Time) error {
 	f.events++
 	return nil

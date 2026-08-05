@@ -166,6 +166,13 @@ func (s *Service) Decide(ctx context.Context, definitionID string, expected int6
 	return s.Store.CompareAndSwap(ctx, d, expected)
 }
 
+func (s *Service) Get(ctx context.Context, definitionID string) (Definition, error) {
+	if s == nil || s.Store == nil {
+		return Definition{}, errors.New("provider capability store is required")
+	}
+	return s.Store.Get(ctx, strings.TrimSpace(definitionID))
+}
+
 func (s *Service) ListEvents(ctx context.Context, definitionID string) ([]Event, error) {
 	if s == nil || s.Store == nil {
 		return nil, errors.New("provider capability store is required")
@@ -323,13 +330,28 @@ func (m *MemoryStore) CompareAndSwap(_ context.Context, d Definition, expected i
 		return Definition{}, ErrConflict
 	}
 	if d.Status == StatusActive {
-		for id, x := range m.items {
-			if id != d.ID && x.Status == StatusActive && x.Provider == d.Provider && x.Channel == d.Channel && x.Engine == d.Engine && overlap(x.EffectiveFrom, x.EffectiveTo, d.EffectiveFrom, d.EffectiveTo) {
-				x.Status = StatusRetired
-				x.Version++
-				x.UpdatedAt = d.UpdatedAt
-				m.items[id] = x
+		for identifier, existing := range m.items {
+			if identifier == d.ID || existing.Status != StatusActive || existing.Provider != d.Provider || existing.Channel != d.Channel || existing.Engine != d.Engine || !overlap(existing.EffectiveFrom, existing.EffectiveTo, d.EffectiveFrom, d.EffectiveTo) {
+				continue
 			}
+			supersededAt := d.EffectiveFrom.UTC()
+			if existing.EffectiveFrom.Before(supersededAt) {
+				existing.EffectiveTo = &supersededAt
+			} else {
+				// A replacement that begins at or before the existing definition
+				// retires that definition without manufacturing an invalid period
+				// whose end precedes its start.
+				existing.Status = StatusRetired
+			}
+			if !supersededAt.After(d.UpdatedAt) {
+				existing.Status = StatusRetired
+			}
+			existing.ApprovedBy = d.ApprovedBy
+			existing.Reason = "superseded by provider definition " + d.ID
+			existing.Version++
+			existing.UpdatedAt = d.UpdatedAt
+			m.items[identifier] = existing
+			m.appendEvent(existing, "SUPERSEDED", d.ApprovedBy)
 		}
 	}
 	m.items[d.ID] = d

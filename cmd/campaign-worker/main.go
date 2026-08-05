@@ -116,6 +116,7 @@ func main() {
 			Repository: testMessageRepository,
 			Protector:  protector,
 			Messages:   testMessageService,
+			Routes:     testMessageRepository,
 			Pacing:     &dispatch.PostgreSQLPacingController{DB: db, Policies: pacingPolicies},
 			Gateway:    &dispatch.HTTPGateway{BaseURL: cfg.GatewayURL, CommandSecret: cfg.GatewayCommandSecret, Client: gatewayClient, MaximumResponseBytes: cfg.GatewayMaxResponse},
 			Media:      dispatch.SignedObjectResolver{Signer: storage.URLSigner{BaseURL: cfg.MediaDownloadBaseURL, Secret: []byte(cfg.MediaDownloadSecret)}},

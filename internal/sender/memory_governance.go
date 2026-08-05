@@ -9,15 +9,16 @@ import (
 )
 
 type MemoryGovernanceStore struct {
-	mu       sync.Mutex
-	pools    map[string]Pool
-	nodes    map[string]Node
-	sessions map[string]GovernedSession
-	seq      int64
+	mu           sync.Mutex
+	pools        map[string]Pool
+	nodes        map[string]Node
+	sessions     map[string]GovernedSession
+	gatewayPools map[string]GatewayPool
+	seq          int64
 }
 
 func NewMemoryGovernanceStore() *MemoryGovernanceStore {
-	return &MemoryGovernanceStore{pools: map[string]Pool{}, nodes: map[string]Node{}, sessions: map[string]GovernedSession{}}
+	return &MemoryGovernanceStore{pools: map[string]Pool{}, nodes: map[string]Node{}, sessions: map[string]GovernedSession{}, gatewayPools: map[string]GatewayPool{}}
 }
 func (m *MemoryGovernanceStore) next(prefix string) string {
 	m.seq++
@@ -209,4 +210,62 @@ func (m *MemoryGovernanceStore) Capacity(_ context.Context, pool string, now tim
 		r.AvailableDailyCapacity = 0
 	}
 	return r, nil
+}
+
+func (m *MemoryGovernanceStore) ListGatewayPools(context.Context) ([]GatewayPool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]GatewayPool, 0, len(m.gatewayPools))
+	for _, value := range m.gatewayPools {
+		out = append(out, value)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+func (m *MemoryGovernanceStore) GetGatewayPool(_ context.Context, id string) (GatewayPool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	value, ok := m.gatewayPools[id]
+	if !ok {
+		return GatewayPool{}, ErrSenderNotFound
+	}
+	return value, nil
+}
+
+func (m *MemoryGovernanceStore) CreateGatewayPool(_ context.Context, value GatewayPool, _, _ string) (GatewayPool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, existing := range m.gatewayPools {
+		if existing.Name == value.Name {
+			return GatewayPool{}, errors.New("gateway pool name already exists")
+		}
+	}
+	now := time.Now().UTC()
+	if value.ID == "" {
+		value.ID = m.next("gateway")
+	}
+	value.Version = 1
+	value.CreatedAt = now
+	value.UpdatedAt = now
+	m.gatewayPools[value.ID] = value
+	return value, nil
+}
+
+func (m *MemoryGovernanceStore) UpdateGatewayPool(_ context.Context, id string, expectedVersion int64, value GatewayPool, _, _ string) (GatewayPool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	current, ok := m.gatewayPools[id]
+	if !ok {
+		return GatewayPool{}, ErrSenderNotFound
+	}
+	if current.Version != expectedVersion {
+		return GatewayPool{}, ErrSenderConflict
+	}
+	value.ID = id
+	value.CreatedAt = current.CreatedAt
+	value.UpdatedAt = time.Now().UTC()
+	value.Version = expectedVersion + 1
+	m.gatewayPools[id] = value
+	return value, nil
 }

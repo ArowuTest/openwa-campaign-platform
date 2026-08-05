@@ -166,7 +166,7 @@ func (s *PostgreSQLStore) Members(ctx context.Context, snapshotID, afterContactI
 	if limit <= 0 || limit > 10000 {
 		limit = 1000
 	}
-	rows, err := s.DB.QueryContext(ctx, `SELECT contact_id::text,coalesce(eligibility_evidence->>'hash','') FROM audience_snapshot_members WHERE snapshot_id=$1::uuid AND ($2='' OR contact_id>$2::uuid) ORDER BY contact_id LIMIT $3`, snapshotID, afterContactID, limit)
+	rows, err := s.DB.QueryContext(ctx, `SELECT contact_id::text,coalesce(eligibility_evidence->>'hash','') FROM audience_snapshot_members WHERE snapshot_id=$1::uuid AND ($2='' OR contact_id>NULLIF($2,'')::uuid) ORDER BY contact_id LIMIT $3`, snapshotID, afterContactID, limit)
 	if err != nil {
 		return nil, err
 	}

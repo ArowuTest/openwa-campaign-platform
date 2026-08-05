@@ -179,3 +179,24 @@ func TestQueryPathIndexCorrectionCoversMandatoryCohortAndWorkerClaims(t *testing
 		}
 	}
 }
+
+func TestBackendHardeningMigrationPersistsProviderAndRoutingIdempotencyEvidence(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(migrationDirectory(t), "0059_backend_hardening_and_provider_binding.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlText := string(content)
+	for _, required := range []string{
+		"provider_capability_definition_id uuid REFERENCES provider_capability_definitions(id)",
+		"provider_capability_active_period_exclusion",
+		"idempotency_key text",
+		"request_hash text",
+		"uq_campaign_routing_plan_idempotency",
+		"idx_campaign_recipients_campaign_contact_keyset",
+		"idx_transactional_outbox_evidence_keyset",
+	} {
+		if !strings.Contains(sqlText, required) {
+			t.Errorf("backend hardening migration missing %q", required)
+		}
+	}
+}

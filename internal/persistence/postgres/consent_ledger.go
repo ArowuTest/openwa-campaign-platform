@@ -63,7 +63,10 @@ func (r *ConsentLedgerRepository) WithdrawGrant(ctx context.Context, id string, 
 	if err != nil {
 		return consent.Grant{}, err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return consent.Grant{}, err
+	}
 	if n != 1 {
 		return consent.Grant{}, consent.ErrLedgerConflict
 	}
@@ -145,7 +148,7 @@ func (r *ConsentLedgerRepository) RevokeSuppression(ctx context.Context, id stri
 	return v, nil
 }
 func (r *ConsentLedgerRepository) Events(ctx context.Context, contactID string, limit int) ([]consent.ConsentEvent, error) {
-	rows, err := r.DB.QueryContext(ctx, `SELECT id::text,coalesce(contact_id::text,''),coalesce(grant_id::text,''),coalesce(suppression_id::text,''),event_type,coalesce(actor_id::text,''),coalesce(reason,''),coalesce(source_reference,''),occurred_at FROM consent_events WHERE ($1='' OR contact_id=$1::uuid) ORDER BY occurred_at DESC LIMIT $2`, contactID, limit)
+	rows, err := r.DB.QueryContext(ctx, `SELECT id::text,coalesce(contact_id::text,''),coalesce(grant_id::text,''),coalesce(suppression_id::text,''),event_type,coalesce(actor_id::text,''),coalesce(reason,''),coalesce(source_reference,''),occurred_at FROM consent_events WHERE ($1='' OR contact_id=NULLIF($1,'')::uuid) ORDER BY occurred_at DESC LIMIT $2`, contactID, limit)
 	if err != nil {
 		return nil, err
 	}

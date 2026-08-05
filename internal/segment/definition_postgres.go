@@ -57,7 +57,7 @@ func (r *PostgreSQLDefinitionRepository) List(ctx context.Context, org string, l
 	if r == nil || r.DB == nil {
 		return nil, errors.New("database is required")
 	}
-	rows, err := r.DB.QueryContext(ctx, `SELECT id::text,organisation_id::text,name,coalesce(description,''),definition,status,version,coalesce(created_by::text,''),coalesce(updated_by::text,''),created_at,updated_at FROM segments WHERE ($1='' OR organisation_id=$1::uuid) ORDER BY updated_at DESC,id LIMIT $2`, org, limit)
+	rows, err := r.DB.QueryContext(ctx, `SELECT id::text,organisation_id::text,name,coalesce(description,''),definition,status,version,coalesce(created_by::text,''),coalesce(updated_by::text,''),created_at,updated_at FROM segments WHERE ($1='' OR organisation_id=NULLIF($1,'')::uuid) ORDER BY updated_at DESC,id LIMIT $2`, org, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -93,10 +93,15 @@ func (r *PostgreSQLDefinitionRepository) Update(ctx context.Context, v Definitio
 	if err != nil {
 		return Definition{}, err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return Definition{}, err
+	}
 	if n == 0 {
 		var exists bool
-		_ = tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM segments WHERE id=$1::uuid)`, v.ID).Scan(&exists)
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM segments WHERE id=$1::uuid)`, v.ID).Scan(&exists); err != nil {
+			return Definition{}, err
+		}
 		if !exists {
 			return Definition{}, ErrDefinitionNotFound
 		}
@@ -133,7 +138,9 @@ func (r *PostgreSQLDefinitionRepository) Versions(ctx context.Context, id string
 	}
 	if len(out) == 0 {
 		var exists bool
-		_ = r.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM segments WHERE id=$1::uuid)`, id).Scan(&exists)
+		if err := r.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM segments WHERE id=$1::uuid)`, id).Scan(&exists); err != nil {
+			return nil, err
+		}
 		if !exists {
 			return nil, ErrDefinitionNotFound
 		}

@@ -146,7 +146,7 @@ func (r *PostgreSQLQueryRepository) MembersAfter(ctx context.Context, compiled C
 	if limit <= 0 || limit > 10000 {
 		return nil, errors.New("invalid cohort page limit")
 	}
-	query := "SELECT id::text FROM (" + strings.TrimSpace(compiled.SQL) + ") eligible WHERE ($" + fmt.Sprint(len(compiled.Args)+1) + "='' OR id>$" + fmt.Sprint(len(compiled.Args)+1) + "::uuid) ORDER BY id LIMIT $" + fmt.Sprint(len(compiled.Args)+2)
+	query := "SELECT id::text FROM (" + strings.TrimSpace(compiled.SQL) + ") eligible WHERE ($" + fmt.Sprint(len(compiled.Args)+1) + "='' OR id>NULLIF($" + fmt.Sprint(len(compiled.Args)+1) + ",'')::uuid) ORDER BY id LIMIT $" + fmt.Sprint(len(compiled.Args)+2)
 	args := append(append([]any(nil), compiled.Args...), after, limit)
 	rows, err := r.DB.QueryContext(ctx, query, args...)
 	if err != nil {

@@ -15,11 +15,17 @@ func (r *ConsentRepository) Create(ctx context.Context, v consent.Review) error 
 	if r.DB == nil {
 		return errors.New("database is required")
 	}
-	countries, _ := json.Marshal(v.PermittedCountries)
-	evidence, _ := json.Marshal(v.EvidenceObjectKeys)
+	countries, err := json.Marshal(v.PermittedCountries)
+	if err != nil {
+		return err
+	}
+	evidence, err := json.Marshal(v.EvidenceObjectKeys)
+	if err != nil {
+		return err
+	}
 	const q = `INSERT INTO consent_reviews(id,organisation_id,name,purpose_description,channel,consent_source,wording_version,privacy_notice_reviewed,opt_out_process_reviewed,sample_records_reviewed,permitted_country_iso2,permitted_message_category,restrictions,status,created_at,updated_at,version,decision_reason) VALUES($1,$2,$3,NULLIF($4,''),$5,$6,$7,$8,$9,$10,ARRAY(SELECT jsonb_array_elements_text($11::jsonb)),NULLIF($12,''),NULLIF($13,''),$14,$15,$15,$16,NULL) RETURNING id`
 	var id string
-	err := r.DB.QueryRowContext(ctx, q, v.ID, v.OrganisationID, v.Name, v.PurposeDescription, v.Channel, v.ConsentSource, v.WordingVersion, v.PrivacyNoticeReviewed, v.OptOutProcessReviewed, v.SampleRecordsReviewed, countries, v.PermittedMessageCategory, v.Restrictions, v.Status, v.CreatedAt, v.Version).Scan(&id)
+	err = r.DB.QueryRowContext(ctx, q, v.ID, v.OrganisationID, v.Name, v.PurposeDescription, v.Channel, v.ConsentSource, v.WordingVersion, v.PrivacyNoticeReviewed, v.OptOutProcessReviewed, v.SampleRecordsReviewed, countries, v.PermittedMessageCategory, v.Restrictions, v.Status, v.CreatedAt, v.Version).Scan(&id)
 	if err != nil {
 		return err
 	}
@@ -32,13 +38,19 @@ func (r *ConsentRepository) CompareAndSwap(ctx context.Context, v consent.Review
 	if r.DB == nil {
 		return errors.New("database is required")
 	}
-	countries, _ := json.Marshal(v.PermittedCountries)
+	countries, err := json.Marshal(v.PermittedCountries)
+	if err != nil {
+		return err
+	}
 	const q = `UPDATE consent_reviews SET status=$2,reviewed_by=NULLIF($3,'')::uuid,reviewed_at=$4,expires_at=$5,restrictions=NULLIF($6,''),permitted_country_iso2=ARRAY(SELECT jsonb_array_elements_text($7::jsonb)),version=$8,updated_at=$9 WHERE id=$1 AND version=$10`
 	res, err := r.DB.ExecContext(ctx, q, v.ID, v.Status, v.ReviewedBy, v.ReviewedAt, v.ExpiresAt, v.Restrictions, countries, v.Version, v.UpdatedAt, expected)
 	if err != nil {
 		return err
 	}
-	n, _ := res.RowsAffected()
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
 	if n == 0 {
 		return consent.ErrConflict
 	}
@@ -86,8 +98,12 @@ func scanConsent(row scanner) (consent.Review, error) {
 		return consent.Review{}, err
 	}
 	v.Status = consent.ReviewStatus(status)
-	_ = json.Unmarshal([]byte(evidence), &v.EvidenceObjectKeys)
-	_ = json.Unmarshal([]byte(countries), &v.PermittedCountries)
+	if err := json.Unmarshal([]byte(evidence), &v.EvidenceObjectKeys); err != nil {
+		return consent.Review{}, err
+	}
+	if err := json.Unmarshal([]byte(countries), &v.PermittedCountries); err != nil {
+		return consent.Review{}, err
+	}
 	if reviewed.Valid {
 		t := reviewed.Time
 		v.ReviewedAt = &t

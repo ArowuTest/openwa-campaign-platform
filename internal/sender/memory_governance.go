@@ -112,6 +112,17 @@ func (m *MemoryGovernanceStore) ListSessions(context.Context) ([]GovernedSession
 	}
 	return out, nil
 }
+
+func (m *MemoryGovernanceStore) GetSession(_ context.Context, id string) (GovernedSession, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	v, ok := m.sessions[id]
+	if !ok {
+		return GovernedSession{}, ErrSenderNotFound
+	}
+	return v, nil
+}
+
 func (m *MemoryGovernanceStore) RegisterSession(_ context.Context, v GovernedSession, _ []byte, _, _ string) (GovernedSession, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -120,7 +131,7 @@ func (m *MemoryGovernanceStore) RegisterSession(_ context.Context, v GovernedSes
 	m.sessions[v.ID] = v
 	return v, nil
 }
-func (m *MemoryGovernanceStore) TransitionSession(_ context.Context, id string, e int64, status Status, _, _ string) (GovernedSession, error) {
+func (m *MemoryGovernanceStore) TransitionSession(_ context.Context, id string, e int64, status Status, _, reason string) (GovernedSession, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	cur, ok := m.sessions[id]
@@ -130,7 +141,22 @@ func (m *MemoryGovernanceStore) TransitionSession(_ context.Context, id string, 
 	if cur.Version != e {
 		return GovernedSession{}, ErrSenderConflict
 	}
+	if status == StatusQuarantined && (cur.Status == StatusRetired || cur.Status == StatusQuarantined) {
+		return GovernedSession{}, ErrSenderConflict
+	}
+	if status == StatusReady && cur.QuarantinedAt != nil && cur.Status != StatusQuarantined {
+		return GovernedSession{}, ErrSenderConflict
+	}
 	cur.Status = status
+	now := time.Now().UTC()
+	if status == StatusQuarantined {
+		cur.QuarantinedAt = &now
+		cur.QuarantineReason = reason
+		cur.ReinstatedAt = nil
+	} else if status == StatusReady && cur.QuarantinedAt != nil {
+		cur.ReinstatedAt = &now
+		cur.QuarantineReason = ""
+	}
 	cur.Version++
 	m.sessions[id] = cur
 	return cur, nil
@@ -145,7 +171,9 @@ func (m *MemoryGovernanceStore) HeartbeatSession(_ context.Context, id string, e
 	if cur.Version != e {
 		return GovernedSession{}, ErrSenderConflict
 	}
-	cur.Status = v.Status
+	if cur.Status != StatusQuarantined && cur.Status != StatusRetired && cur.Status != StatusRestricted {
+		cur.Status = v.Status
+	}
 	cur.EngineVersion = v.EngineVersion
 	cur.SafeMessagesPerMinute = v.SafeMessagesPerMinute
 	cur.SafeDailyCapacity = v.SafeDailyCapacity

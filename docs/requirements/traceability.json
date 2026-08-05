@@ -2014,9 +2014,17 @@
     "requirement": "Support ready, connecting, disconnected, paused, draining, restricted, retired and quarantined sender states.",
     "priority": "Must",
     "acceptance": "Scheduler uses only eligible states.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/sender/governance.go",
+      "internal/sender/governance_test.go",
+      "internal/sender/memory_governance.go",
+      "internal/sender/postgres_governance.go",
+      "internal/sender/allocator.go",
+      "internal/platform/httpserver/sender_governance.go",
+      "database/migrations/0047_sender_session_quarantine.sql"
+    ],
+    "notes": "Governed sender lifecycle includes quarantine; quarantined/restricted/retired sessions are excluded from allocation and runtime heartbeats cannot silently re-enable them."
   },
   {
     "id": "SND-007",
@@ -2315,9 +2323,17 @@
     "requirement": "Avoid automatic resend after an uncertain provider outcome.",
     "priority": "Must",
     "acceptance": "Unknown outcome enters reconciliation/manual policy.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/dispatch/handler.go",
+      "internal/operations/service.go",
+      "internal/operations/service_test.go",
+      "internal/delivery/service.go",
+      "internal/delivery/postgres.go",
+      "internal/platform/httpserver/operations.go",
+      "database/migrations/0048_delivery_exception_resolution.sql"
+    ],
+    "notes": "Uncertain outcomes remain reconciliation-required and can only be resolved through an MFA-protected, evidence-backed operator action; confirmed non-submission is blocked when provider evidence exists."
   },
   {
     "id": "DLV-016",
@@ -2468,9 +2484,16 @@
     "requirement": "Correlate events using provider ID and fallback identifiers where safe.",
     "priority": "Must",
     "acceptance": "Unmatched events enter reconciliation queue.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/delivery/postgres.go",
+      "internal/delivery/service.go",
+      "internal/operations/service.go",
+      "internal/operations/service_test.go",
+      "internal/platform/httpserver/operations.go",
+      "database/migrations/0048_delivery_exception_resolution.sql"
+    ],
+    "notes": "Provider and fallback correlation feed a reconciliation queue, and exceptions can be resolved with append-only operator evidence."
   },
   {
     "id": "EVT-008",
@@ -3233,9 +3256,14 @@
     "requirement": "Unknown outcomes are reconciled before any resend decision.",
     "priority": "Must",
     "acceptance": "See acceptance criteria and linked tests.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/dispatch/handler.go",
+      "internal/operations/service.go",
+      "internal/operations/service_test.go",
+      "database/migrations/0048_delivery_exception_resolution.sql"
+    ],
+    "notes": "Unknown outcomes require reconciliation evidence before any resend-safe outcome can be established."
   },
   {
     "id": "BR-016",

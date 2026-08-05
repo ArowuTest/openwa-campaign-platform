@@ -1,5 +1,5 @@
 # Build checkpoint
 
-Current version: **0.5.2**
+Current version: **0.8.15**
 
-The current checkpoint completes governed gateway-pool and capability foundations plus signed internal gateway command admission. It does not claim live WhatsApp integration.
+The current checkpoint extends the messaging operational core with governed sender quarantine, health assessment, and evidence-backed delivery-exception reconciliation. It remains a pre-production workspace checkpoint and does not claim live OpenWA or WhatsApp validation.

@@ -6,10 +6,10 @@ Total requirements: **398**
 
 | Status | Count |
 |---|---:|
-| IMPLEMENTED_TESTED | 56 |
+| IMPLEMENTED_TESTED | 60 |
 | PARTIAL | 32 |
 | BLOCKED_EXTERNAL | 0 |
-| NOT_STARTED | 310 |
+| NOT_STARTED | 306 |
 
 | ID | Priority | Status | Requirement | Evidence / notes |
 |---|---|---|---|---|
@@ -209,7 +209,7 @@ Total requirements: **398**
 | SND-003 | Must | NOT_STARTED | Record ownership, registration country, profile/display name, recovery information reference and lifecycle status. |  |
 | SND-004 | Must | NOT_STARTED | Support logical sender pools that map to one or more actual sender accounts. |  |
 | SND-005 | Must | NOT_STARTED | Clearly disclose that logical sender is not an alphanumeric WhatsApp sender ID. |  |
-| SND-006 | Must | NOT_STARTED | Support ready, connecting, disconnected, paused, draining, restricted, retired and quarantined sender states. |  |
+| SND-006 | Must | IMPLEMENTED_TESTED | Support ready, connecting, disconnected, paused, draining, restricted, retired and quarantined sender states. | `internal/sender/governance.go`, `internal/sender/governance_test.go`, `internal/sender/memory_governance.go`, `internal/sender/postgres_governance.go`, `internal/sender/allocator.go`, `internal/platform/httpserver/sender_governance.go`, `database/migrations/0047_sender_session_quarantine.sql` — Governed sender lifecycle includes quarantine; quarantined/restricted/retired sessions are excluded from allocation and runtime heartbeats cannot silently re-enable them. |
 | SND-007 | Must | NOT_STARTED | Allow each session to have exactly one active worker lease. |  |
 | SND-008 | Must | NOT_STARTED | Renew leases through heartbeat and expire stale leases safely. |  |
 | SND-009 | Must | NOT_STARTED | Require manual or controlled recovery before another worker activates an uncertain live session. |  |
@@ -240,7 +240,7 @@ Total requirements: **398**
 | DLV-012 | Must | NOT_STARTED | Record every delivery attempt separately from final recipient state. |  |
 | DLV-013 | Must | NOT_STARTED | Use configurable retry policy by failure category. |  |
 | DLV-014 | Must | NOT_STARTED | Apply exponential/backoff with jitter for infrastructure errors. |  |
-| DLV-015 | Must | NOT_STARTED | Avoid automatic resend after an uncertain provider outcome. |  |
+| DLV-015 | Must | IMPLEMENTED_TESTED | Avoid automatic resend after an uncertain provider outcome. | `internal/dispatch/handler.go`, `internal/operations/service.go`, `internal/operations/service_test.go`, `internal/delivery/service.go`, `internal/delivery/postgres.go`, `internal/platform/httpserver/operations.go`, `database/migrations/0048_delivery_exception_resolution.sql` — Uncertain outcomes remain reconciliation-required and can only be resolved through an MFA-protected, evidence-backed operator action; confirmed non-submission is blocked when provider evidence exists. |
 | DLV-016 | Must | NOT_STARTED | Support safe operator retry only when duplicate risk is understood and approved. |  |
 | DLV-017 | Must | NOT_STARTED | Support campaign pause that stops new claims while allowing controlled treatment of in-flight jobs. |  |
 | DLV-018 | Must | NOT_STARTED | Support campaign cancellation that marks undispatched obligations cancelled and preserves attempts. |  |
@@ -257,7 +257,7 @@ Total requirements: **398**
 | EVT-004 | Must | NOT_STARTED | Handle out-of-order events using monotonic state precedence and event history. |  |
 | EVT-005 | Must | NOT_STARTED | Preserve raw redacted event metadata for diagnosis according to retention. |  |
 | EVT-006 | Must | NOT_STARTED | Map provider-specific states and errors to canonical statuses/reason codes. |  |
-| EVT-007 | Must | NOT_STARTED | Correlate events using provider ID and fallback identifiers where safe. |  |
+| EVT-007 | Must | IMPLEMENTED_TESTED | Correlate events using provider ID and fallback identifiers where safe. | `internal/delivery/postgres.go`, `internal/delivery/service.go`, `internal/operations/service.go`, `internal/operations/service_test.go`, `internal/platform/httpserver/operations.go`, `database/migrations/0048_delivery_exception_resolution.sql` — Provider and fallback correlation feed a reconciliation queue, and exceptions can be resolved with append-only operator evidence. |
 | EVT-008 | Must | NOT_STARTED | Never downgrade a terminal higher-confidence state because of a late lower state. |  |
 | EVT-009 | Must | IMPLEMENTED_TESTED | Process inbound STOP and configured opt-out commands promptly. | `internal/gateway/inbound.go`, `internal/platform/httpserver/server.go`, `internal/platform/httpserver/inbound_optout_test.go` — Authenticated inbound callbacks process recognised opt-out commands immediately and idempotently. |
 | EVT-010 | Must | IMPLEMENTED_TESTED | Store inbound replies with minimised content and access restrictions. | `internal/inbound/service.go`, `internal/inbound/service_test.go`, `internal/platform/httpserver/server.go`, `database/migrations/0025_inbound_reply_privacy_retention.sql`, `internal/inbound/postgres.go`, `database/migrations/0026_inbound_reply_content_encryption.sql` — Inbound reply content is permission-separated, purpose-bound encrypted in PostgreSQL, audited on reveal, and securely cleared by retention while preserving minimised operational evidence. |
@@ -332,7 +332,7 @@ Total requirements: **398**
 | BR-012 | Must | NOT_STARTED | Stable worker IPs may be used for isolation; rapid IP rotation or evasion logic is prohibited. |  |
 | BR-013 | Must | NOT_STARTED | A sender’s safe capacity is based on measured evidence and configured headroom, not theoretical batch concurrency. |  |
 | BR-014 | Must | NOT_STARTED | The platform shall not accept a hard deadline when measured safe capacity is insufficient without an explicit exception. |  |
-| BR-015 | Must | NOT_STARTED | Unknown outcomes are reconciled before any resend decision. |  |
+| BR-015 | Must | IMPLEMENTED_TESTED | Unknown outcomes are reconciled before any resend decision. | `internal/dispatch/handler.go`, `internal/operations/service.go`, `internal/operations/service_test.go`, `database/migrations/0048_delivery_exception_resolution.sql` — Unknown outcomes require reconciliation evidence before any resend-safe outcome can be established. |
 | BR-016 | Must | NOT_STARTED | Contact profile updates cannot silently broaden consent. |  |
 | BR-017 | Must | NOT_STARTED | Reported age remains as collected; derived estimated age is labelled approximate. |  |
 | BR-018 | Must | NOT_STARTED | No gender, age, location or interest value shall be inferred without an approved source and policy. |  |

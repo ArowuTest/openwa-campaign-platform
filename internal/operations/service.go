@@ -2,11 +2,14 @@ package operations
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"time"
 
 	"campaign-platform/internal/audit"
+	"campaign-platform/internal/delivery"
 	"campaign-platform/internal/shared/id"
 )
 
@@ -26,6 +29,7 @@ type Service struct {
 	Repo            Repository
 	AuditRepository audit.Repository
 	Audit           *audit.Recorder
+	Deliveries      *delivery.Service
 	Clock           func() time.Time
 }
 
@@ -160,4 +164,78 @@ func (s *Service) DecideExport(ctx context.Context, id string, expected int64, a
 		_, err = s.Audit.Record(ctx, audit.Input{ActorType: "USER", ActorID: actor, Action: action, ObjectType: "EXPORT_REQUEST", ObjectID: id, After: map[string]any{"status": out.Status, "expiresAt": out.ExpiresAt}, Reason: reason, CorrelationID: correlation, OccurredAt: now})
 	}
 	return out, err
+}
+
+type DeliveryResolutionAction string
+
+const (
+	ResolutionConfirmSent         DeliveryResolutionAction = "CONFIRM_SENT"
+	ResolutionConfirmDelivered    DeliveryResolutionAction = "CONFIRM_DELIVERED"
+	ResolutionConfirmRead         DeliveryResolutionAction = "CONFIRM_READ"
+	ResolutionMarkFailedPermanent DeliveryResolutionAction = "MARK_FAILED_PERMANENT"
+	ResolutionConfirmNotSubmitted DeliveryResolutionAction = "CONFIRM_NOT_SUBMITTED"
+)
+
+type DeliveryResolution struct {
+	RecipientID  string                   `json:"recipientId"`
+	Action       DeliveryResolutionAction `json:"action"`
+	EvidenceRef  string                   `json:"evidenceRef"`
+	Reason       string                   `json:"reason"`
+	ActorID      string                   `json:"actorId"`
+	ResolvedAt   time.Time                `json:"resolvedAt"`
+	ResultStatus delivery.Status          `json:"resultStatus"`
+}
+
+func (s *Service) ResolveDeliveryException(ctx context.Context, recipientID string, action DeliveryResolutionAction, evidenceRef, reason, actor, correlation string) (DeliveryResolution, error) {
+	if s == nil || s.Deliveries == nil {
+		return DeliveryResolution{}, errors.New("delivery reconciliation is unavailable")
+	}
+	recipientID, evidenceRef, reason, actor = strings.TrimSpace(recipientID), strings.TrimSpace(evidenceRef), strings.TrimSpace(reason), strings.TrimSpace(actor)
+	if recipientID == "" || actor == "" || len(evidenceRef) < 6 || len(reason) < 8 {
+		return DeliveryResolution{}, ErrInvalid
+	}
+	current, err := s.Deliveries.Get(ctx, recipientID)
+	if err != nil {
+		return DeliveryResolution{}, err
+	}
+	if current.Status != delivery.StatusUnknown && !current.ReconciliationRequired {
+		return DeliveryResolution{}, ErrConflict
+	}
+	var eventType delivery.EventType
+	switch action {
+	case ResolutionConfirmSent:
+		eventType = delivery.EventSent
+	case ResolutionConfirmDelivered:
+		eventType = delivery.EventDelivered
+	case ResolutionConfirmRead:
+		eventType = delivery.EventRead
+	case ResolutionMarkFailedPermanent:
+		eventType = delivery.EventFailedPermanent
+	case ResolutionConfirmNotSubmitted:
+		if current.ProviderMessageID != "" || current.HighestAcknowledgement != "" {
+			return DeliveryResolution{}, ErrConflict
+		}
+		eventType = delivery.EventFailedRetryable
+	default:
+		return DeliveryResolution{}, ErrInvalid
+	}
+	now := s.now()
+	sum := sha256.Sum256([]byte(strings.Join([]string{recipientID, string(action), evidenceRef}, "")))
+	key := "operator-resolution:" + hex.EncodeToString(sum[:])
+	result, _, err := s.Deliveries.ApplyEvent(ctx, recipientID, delivery.Event{DeduplicationKey: key, Type: eventType, ProviderMessageID: current.ProviderMessageID, ErrorCode: "OPERATOR_RECONCILIATION", ErrorDetail: reason, OccurredAt: now})
+	if err != nil {
+		return DeliveryResolution{}, err
+	}
+	result, err = s.Deliveries.ResolveReconciliation(ctx, recipientID, result.Status, actor, string(action), evidenceRef, reason, now)
+	if err != nil {
+		return DeliveryResolution{}, err
+	}
+	resolution := DeliveryResolution{RecipientID: recipientID, Action: action, EvidenceRef: evidenceRef, Reason: reason, ActorID: actor, ResolvedAt: now, ResultStatus: result.Status}
+	if s.Audit != nil {
+		_, err = s.Audit.Record(ctx, audit.Input{ActorType: "USER", ActorID: actor, Action: "DELIVERY_EXCEPTION_RESOLVED", ObjectType: "CAMPAIGN_RECIPIENT", ObjectID: recipientID, After: map[string]any{"action": action, "evidenceRef": evidenceRef, "resultStatus": result.Status}, Reason: reason, CorrelationID: correlation, OccurredAt: now})
+		if err != nil {
+			return DeliveryResolution{}, err
+		}
+	}
+	return resolution, nil
 }

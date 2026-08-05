@@ -53,3 +53,21 @@ Governed rolling frequency caps are now stored in effective-dated organisation p
 ## 0.8.13 audience operational-core update
 
 Durable asynchronous audience materialisation now supports bounded pages, fenced leases, persistent progress, restart-safe continuation, retries, cancellation evidence and atomic immutable snapshot completion. Live PostgreSQL and production-scale performance evidence remain open.
+
+## 0.8.15 messaging operational-core update
+
+- Sender sessions can be quarantined and reinstated only through dedicated MFA-protected operations with optimistic versions and durable reasons.
+- Runtime heartbeats cannot override quarantined, restricted or retired governance states.
+- Quarantined sessions are excluded from sender-pool throughput and daily-capacity calculations.
+- Sender health assessment exposes heartbeat age, capacity use, evidence-based score and an allocation recommendation.
+- Unknown and contradictory delivery outcomes can be resolved using reviewed provider evidence without silently resending uncertain submissions.
+- Confirmed non-submission can become retryable only when no provider identifier or acknowledgement exists.
+- Append-only delivery-resolution evidence is introduced by migration 0048.
+
+## Messaging operations II — 0.8.15
+
+- Governed sender quarantine and reinstatement are implemented.
+- Runtime heartbeats cannot silently restore quarantined, restricted or retired sessions.
+- Health-aware allocation evidence and operator recommendations are exposed.
+- Unknown/contradictory delivery exceptions support MFA-protected evidence-backed resolution.
+- Append-only resolution evidence is stored in PostgreSQL.

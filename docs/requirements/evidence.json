@@ -203,6 +203,16 @@
     ],
     "status": "PARTIAL"
   },
+  "BR-015": {
+    "evidence": [
+      "internal/dispatch/handler.go",
+      "internal/operations/service.go",
+      "internal/operations/service_test.go",
+      "database/migrations/0048_delivery_exception_resolution.sql"
+    ],
+    "notes": "Unknown outcomes require reconciliation evidence before any resend-safe outcome can be established.",
+    "status": "IMPLEMENTED_TESTED"
+  },
   "BR-019": {
     "evidence": [
       "internal/shared/crypto/msisdn.go",
@@ -363,6 +373,31 @@
       "internal/delivery/model.go",
       "internal/delivery/model_test.go"
     ],
+    "status": "IMPLEMENTED_TESTED"
+  },
+  "DLV-015": {
+    "evidence": [
+      "internal/dispatch/handler.go",
+      "internal/operations/service.go",
+      "internal/operations/service_test.go",
+      "internal/delivery/service.go",
+      "internal/delivery/postgres.go",
+      "internal/platform/httpserver/operations.go",
+      "database/migrations/0048_delivery_exception_resolution.sql"
+    ],
+    "notes": "Uncertain outcomes remain reconciliation-required and can only be resolved through an MFA-protected, evidence-backed operator action; confirmed non-submission is blocked when provider evidence exists.",
+    "status": "IMPLEMENTED_TESTED"
+  },
+  "EVT-007": {
+    "evidence": [
+      "internal/delivery/postgres.go",
+      "internal/delivery/service.go",
+      "internal/operations/service.go",
+      "internal/operations/service_test.go",
+      "internal/platform/httpserver/operations.go",
+      "database/migrations/0048_delivery_exception_resolution.sql"
+    ],
+    "notes": "Provider and fallback correlation feed a reconciliation queue, and exceptions can be resolved with append-only operator evidence.",
     "status": "IMPLEMENTED_TESTED"
   },
   "EVT-009": {
@@ -830,6 +865,19 @@
       "internal/platform/httpserver/server.go"
     ],
     "notes": "Durable asynchronous multi-million audience materialisation uses bounded pages, fenced leases, persistent cursors, rolling hashes, progress, retries, cancellation evidence and restart-safe continuation without duplicate membership.",
+    "status": "IMPLEMENTED_TESTED"
+  },
+  "SND-006": {
+    "evidence": [
+      "internal/sender/governance.go",
+      "internal/sender/governance_test.go",
+      "internal/sender/memory_governance.go",
+      "internal/sender/postgres_governance.go",
+      "internal/sender/allocator.go",
+      "internal/platform/httpserver/sender_governance.go",
+      "database/migrations/0047_sender_session_quarantine.sql"
+    ],
+    "notes": "Governed sender lifecycle includes quarantine; quarantined/restricted/retired sessions are excluded from allocation and runtime heartbeats cannot silently re-enable them.",
     "status": "IMPLEMENTED_TESTED"
   },
   "UX-015": {

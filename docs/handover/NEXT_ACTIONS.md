@@ -58,3 +58,18 @@ Proceed with the messaging and dispatch core: bounded dispatch shards, queue bac
 3. Add campaign-level queue sharding and measurable admission/backlog forecasting.
 4. Resolve the pinned PostgreSQL driver and execute the migration chain against live PostgreSQL.
 5. Complete a dependency-resolved OpenWA gateway build and live session validation.
+
+## After 0.8.15
+
+1. Add measured sender failure, latency, reconnect, complaint and block telemetry to the health score.
+2. Add automated threshold-driven drain recommendations and incident creation, while keeping quarantine/reinstatement governed.
+3. Complete backlog forecasting and sender-capacity reservation across active campaigns.
+4. Exercise migrations 0047-0048 against live PostgreSQL when the external database gate is available.
+
+## Messaging continuation after 0.8.15
+
+1. Add measured provider telemetry inputs to sender health scoring.
+2. Add automated quarantine policy with governed thresholds and manual override safeguards.
+3. Complete scheduled unknown-outcome reconciliation windows and final-unknown policy.
+4. Add campaign backlog forecasting and deadline breach alerts.
+5. Complete dependency-resolved OpenWA gateway builds and live session validation.

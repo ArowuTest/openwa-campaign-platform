@@ -26,6 +26,23 @@ func (s *Server) requireSenderGovernance(w http.ResponseWriter, r *http.Request)
 	}
 	return true
 }
+
+func (s *Server) requireSenderStepUp(w http.ResponseWriter, r *http.Request) bool {
+	principal, ok := identity.PrincipalFromContext(r.Context())
+	if !ok {
+		httpx.WriteError(w, r, http.StatusUnauthorized, "AUTHENTICATION_REQUIRED", "Authentication is required.", nil)
+		return false
+	}
+	if !identity.StepUpSatisfied(principal.Session, time.Now().UTC(), 10*time.Minute) {
+		if s.deps.Identity != nil {
+			s.deps.Identity.RecordStepUpRequired(r.Context(), principal.User.ID, "sender.session.quarantine", authenticationAttempt(r, principal.User.Email))
+		}
+		httpx.WriteError(w, r, http.StatusForbidden, "STEP_UP_REQUIRED", "Recent multi-factor verification is required for this sender action.", nil)
+		return false
+	}
+	return true
+}
+
 func (s *Server) listSenderPools(w http.ResponseWriter, r *http.Request) {
 	if !s.requireSenderGovernance(w, r) {
 		return
@@ -163,6 +180,18 @@ func (s *Server) listSenderSessions(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, 200, map[string]any{"items": v, "count": len(v)})
 }
 
+func (s *Server) getSenderSessionHealth(w http.ResponseWriter, r *http.Request) {
+	if !s.requireSenderGovernance(w, r) {
+		return
+	}
+	v, err := s.deps.SenderGovernance.AssessSession(r.Context(), r.PathValue("id"), time.Now().UTC())
+	if err != nil {
+		s.writeSenderError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, v)
+}
+
 type senderSessionRequest struct {
 	NodeID                string        `json:"nodeId"`
 	PoolID                string        `json:"poolId"`
@@ -222,6 +251,43 @@ func (s *Server) transitionSenderSession(w http.ResponseWriter, r *http.Request)
 	}
 	httpx.WriteJSON(w, 200, v)
 }
+
+func (s *Server) quarantineSenderSession(w http.ResponseWriter, r *http.Request) {
+	if !s.requireSenderGovernance(w, r) || !s.requireSenderStepUp(w, r) {
+		return
+	}
+	var in senderSessionRequest
+	if err := httpx.DecodeJSON(w, r, 64<<10, &in); err != nil {
+		httpx.WriteError(w, r, 400, "INVALID_JSON", "The sender quarantine request is invalid.", nil)
+		return
+	}
+	actor, _ := s.senderActor(r)
+	v, err := s.deps.SenderGovernance.QuarantineSession(r.Context(), r.PathValue("id"), in.ExpectedVersion, actor, in.Reason)
+	if err != nil {
+		s.writeSenderError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, v)
+}
+
+func (s *Server) reinstateSenderSession(w http.ResponseWriter, r *http.Request) {
+	if !s.requireSenderGovernance(w, r) || !s.requireSenderStepUp(w, r) {
+		return
+	}
+	var in senderSessionRequest
+	if err := httpx.DecodeJSON(w, r, 64<<10, &in); err != nil {
+		httpx.WriteError(w, r, 400, "INVALID_JSON", "The sender reinstatement request is invalid.", nil)
+		return
+	}
+	actor, _ := s.senderActor(r)
+	v, err := s.deps.SenderGovernance.ReinstateSession(r.Context(), r.PathValue("id"), in.ExpectedVersion, actor, in.Reason)
+	if err != nil {
+		s.writeSenderError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, v)
+}
+
 func (s *Server) heartbeatSenderSession(w http.ResponseWriter, r *http.Request) {
 	if !s.requireSenderGovernance(w, r) {
 		return

@@ -62,3 +62,10 @@ This first audit pass reviewed repository recoverability, build coverage, organi
 **Status:** Closed in 0.8.10
 
 The SRS requires organisation/purpose/channel frequency caps in both cohort and final eligibility. The prior implementation had no governed cap definition and did not exclude recently contacted recipients. Version 0.8.10 extends effective-dated organisation policy with bounded rolling-window caps and enforces them during cohort compilation, recipient release and final dispatch with the explicit `FREQUENCY_CAPPED` reason.
+
+### AUD-009 — Sender quarantine and delivery-exception resolution lacked governed operational controls
+
+**Severity:** High
+**Status:** Closed in 0.8.15
+
+The scheduler excluded only basic unhealthy states, while runtime heartbeats could restore a manually isolated session. Unknown and contradictory delivery outcomes were surfaced but lacked a complete evidence-backed resolution workflow. Version 0.8.15 adds governed quarantine/reinstatement, heartbeat protection, zero-capacity exclusion, health assessments, MFA-protected delivery-exception resolution and append-only resolution evidence.

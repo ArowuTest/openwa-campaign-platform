@@ -117,7 +117,7 @@ func buildMemoryRuntime(cfg config.Config, protector *sharedcrypto.MSISDNProtect
 	senderGovernance := &sender.GovernanceService{Store: sender.NewMemoryGovernanceStore()}
 	executionStore := execution.NewMemoryStore()
 	executionCoordinator := &execution.Coordinator{Campaigns: campaigns, Store: executionStore, SafetyMarginPercent: 15}
-	operationsService := &operations.Service{Repo: operations.NewMemoryRepository(), Audit: auditRecorder, AuditRepository: auditRepository}
+	operationsService := &operations.Service{Repo: operations.NewMemoryRepository(), Audit: auditRecorder, AuditRepository: auditRepository, Deliveries: deliveryEvents}
 	imports := &importer.ImportService{Repository: importer.NewMemoryImportRepository(), Organisations: orgs}
 	conflictRepository := importer.NewMemoryConflictRepository()
 	audienceConflicts := &importer.ConflictService{Repository: conflictRepository}
@@ -218,7 +218,7 @@ func buildPostgreSQLRuntime(ctx context.Context, cfg config.Config, protector *s
 	metrics := delivery.NewMetricsService(&delivery.PostgreSQLMetricsRepository{DB: db})
 	senderGovernance := &sender.GovernanceService{Store: &sender.PostgreSQLGovernanceStore{DB: db}}
 	executionCoordinator := &execution.Coordinator{Campaigns: campaigns, Store: &execution.PostgreSQLStore{DB: db}, SafetyMarginPercent: 15}
-	operationsService := &operations.Service{Repo: &operations.PostgreSQLRepository{DB: db}, Audit: auditRecorder, AuditRepository: auditRepository}
+	operationsService := &operations.Service{Repo: &operations.PostgreSQLRepository{DB: db}, Audit: auditRecorder, AuditRepository: auditRepository, Deliveries: deliveryEvents}
 	jobOperations := &jobs.AdministrationService{Repository: &jobs.PostgreSQLRepository{DB: db}}
 	imports := &importer.ImportService{Repository: &importer.PostgreSQLImportRepository{DB: db}, Organisations: orgs}
 	audienceConflicts := &importer.ConflictService{Repository: &importer.PostgreSQLConflictRepository{DB: db}}

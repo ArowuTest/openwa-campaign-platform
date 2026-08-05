@@ -195,7 +195,7 @@ func (r *PostgreSQLRepository) ListExceptions(ctx context.Context, campaignID st
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	rows, err := r.DB.QueryContext(ctx, `SELECT id::text,campaign_id::text,status,coalesce(assigned_session_id::text,''),coalesce(provider_message_id,''),attempt_count,coalesce(last_error_code,''),updated_at FROM campaign_recipients WHERE ($1='' OR campaign_id=$1::uuid) AND status IN('FAILED_RETRYABLE','FAILED_PERMANENT','UNKNOWN') ORDER BY updated_at DESC LIMIT $2`, campaignID, limit)
+	rows, err := r.DB.QueryContext(ctx, `SELECT id::text,campaign_id::text,status,coalesce(assigned_session_id::text,''),coalesce(provider_message_id,''),attempt_count,coalesce(last_error_code,''),updated_at FROM campaign_recipients WHERE ($1='' OR campaign_id=$1::uuid) AND (status IN('FAILED_RETRYABLE','FAILED_PERMANENT','UNKNOWN') OR reconciliation_required=true) ORDER BY updated_at DESC LIMIT $2`, campaignID, limit)
 	if err != nil {
 		return nil, err
 	}

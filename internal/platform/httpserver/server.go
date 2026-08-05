@@ -225,6 +225,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/operations/incidents", s.require("operations.read", s.listOperationsIncidents))
 	mux.Handle("GET /api/v1/operations/audit-events", s.require("audit.read", s.searchAuditEvents))
 	mux.Handle("GET /api/v1/operations/delivery-exceptions", s.require("operations.read", s.listDeliveryExceptions))
+	mux.Handle("POST /api/v1/operations/delivery-exceptions/{id}/resolve", s.require("operations.write", s.resolveDeliveryException))
 	mux.Handle("GET /api/v1/operations/jobs", s.require("operations.read", s.listOperationalJobs))
 	mux.Handle("GET /api/v1/operations/jobs/summary", s.require("operations.read", s.getOperationalJobSummary))
 	mux.Handle("GET /api/v1/operations/jobs/{id}", s.require("operations.read", s.getOperationalJob))
@@ -248,8 +249,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/sender-nodes", s.require("sender.admin", s.registerSenderNode))
 	mux.Handle("POST /api/v1/internal/sender-nodes/{id}/heartbeat", s.require("sender.operate", s.heartbeatSenderNode))
 	mux.Handle("GET /api/v1/sender-sessions", s.require("sender.read", s.listSenderSessions))
+	mux.Handle("GET /api/v1/sender-sessions/{id}/health", s.require("sender.read", s.getSenderSessionHealth))
 	mux.Handle("POST /api/v1/sender-sessions", s.require("sender.admin", s.registerSenderSession))
 	mux.Handle("POST /api/v1/sender-sessions/{id}/transition", s.require("sender.operate", s.transitionSenderSession))
+	mux.Handle("POST /api/v1/sender-sessions/{id}/quarantine", s.require("sender.operate", s.quarantineSenderSession))
+	mux.Handle("POST /api/v1/sender-sessions/{id}/reinstate", s.require("sender.admin", s.reinstateSenderSession))
 	mux.Handle("POST /api/v1/internal/sender-sessions/{id}/heartbeat", s.require("sender.operate", s.heartbeatSenderSession))
 
 	var handler http.Handler = mux

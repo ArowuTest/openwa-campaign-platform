@@ -181,6 +181,39 @@ func (s *Server) listDeliveryExceptions(w http.ResponseWriter, r *http.Request) 
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
 }
 
+type deliveryResolutionRequest struct {
+	Action      operations.DeliveryResolutionAction `json:"action"`
+	EvidenceRef string                              `json:"evidenceRef"`
+	Reason      string                              `json:"reason"`
+}
+
+func (s *Server) resolveDeliveryException(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Operations == nil {
+		httpx.WriteError(w, r, 503, "OPERATIONS_UNAVAILABLE", "Delivery reconciliation is unavailable.", nil)
+		return
+	}
+	p, ok := identity.PrincipalFromContext(r.Context())
+	if !ok {
+		httpx.WriteError(w, r, 401, "AUTHENTICATION_REQUIRED", "Authentication is required.", nil)
+		return
+	}
+	if !identity.StepUpSatisfied(p.Session, time.Now().UTC(), 10*time.Minute) {
+		httpx.WriteError(w, r, 403, "STEP_UP_REQUIRED", "Recent multi-factor verification is required for delivery reconciliation.", nil)
+		return
+	}
+	var in deliveryResolutionRequest
+	if err := httpx.DecodeJSON(w, r, 64<<10, &in); err != nil {
+		httpx.WriteError(w, r, 400, "INVALID_JSON", "The delivery-resolution request is invalid.", nil)
+		return
+	}
+	v, err := s.deps.Operations.ResolveDeliveryException(r.Context(), r.PathValue("id"), in.Action, in.EvidenceRef, in.Reason, p.User.ID, r.Header.Get("X-Request-ID"))
+	if err != nil {
+		writeOperationsError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, v)
+}
+
 type operationalJobActionRequest struct {
 	Reason string `json:"reason"`
 }

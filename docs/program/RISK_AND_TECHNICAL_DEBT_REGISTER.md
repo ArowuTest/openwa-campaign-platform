@@ -35,3 +35,4 @@
 3. Accepted risks require expiry date, approver and compensating controls.
 4. New audit findings are added here before remediation work starts.
 5. Closed items remain in the register for historical traceability.
+| R-014 | Operations | Sender isolation and delivery-exception resolution lacked governed operational controls. | High | Closed | No | Closed in 0.8.15 with quarantine/reinstatement, health assessment, MFA-protected resolution and append-only evidence. |

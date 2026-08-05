@@ -824,6 +824,18 @@ paths:
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500 } }
       responses:
         '200': { description: Delivery exception queue }
+  /operations/delivery-exceptions/{id}/resolve:
+    post:
+      operationId: resolveDeliveryException
+      summary: Resolve an unknown or contradictory delivery outcome using reviewed evidence
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Delivery exception resolved }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission or MFA step-up required }
+        '409': { description: Exception is no longer eligible or retry would create duplicate risk }
   /operations/jobs:
     get:
       operationId: listOperationalJobs
@@ -1352,6 +1364,39 @@ paths:
         '400': { description: Invalid request }
         '401': { description: Authentication required }
         '403': { description: Permission denied }
+  /sender-sessions/{id}/health:
+    get:
+      operationId: getSenderSessionHealth
+      summary: Assess current sender-session health and allocation recommendation
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Sender health assessment }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+        '404': { description: Sender session not found }
+  /sender-sessions/{id}/quarantine:
+    post:
+      operationId: quarantineSenderSession
+      summary: Quarantine a sender session and remove it from allocation
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Sender session quarantined }
+        '401': { description: Authentication required }
+        '403': { description: Permission or MFA step-up required }
+        '409': { description: Version or lifecycle conflict }
+  /sender-sessions/{id}/reinstate:
+    post:
+      operationId: reinstateSenderSession
+      summary: Reinstate a quarantined sender after health verification
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Sender session reinstated }
+        '401': { description: Authentication required }
+        '403': { description: Permission or MFA step-up required }
+        '409': { description: Version or lifecycle conflict }
   /sender-sessions/{id}/transition:
     post:
       operationId: transitionSenderSession

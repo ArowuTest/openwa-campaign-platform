@@ -74,7 +74,7 @@ func (p *PostgreSQLGovernanceStore) HeartbeatNode(ctx context.Context, id string
 	return v, err
 }
 func (p *PostgreSQLGovernanceStore) ListSessions(ctx context.Context) ([]GovernedSession, error) {
-	rows, err := p.DB.QueryContext(ctx, `SELECT id::text,coalesce(node_id::text,''),coalesce(sender_pool_id::text,''),masked_msisdn,engine_type,coalesce(engine_version,''),status,coalesce(safe_messages_per_minute,0)::int,coalesce(safe_daily_capacity,0),in_flight_limit,sent_today,last_heartbeat_at,last_success_at,governance_version FROM sender_sessions ORDER BY masked_msisdn`)
+	rows, err := p.DB.QueryContext(ctx, `SELECT id::text,coalesce(node_id::text,''),coalesce(sender_pool_id::text,''),masked_msisdn,engine_type,coalesce(engine_version,''),status,coalesce(safe_messages_per_minute,0)::int,coalesce(safe_daily_capacity,0),in_flight_limit,sent_today,last_heartbeat_at,last_success_at,quarantined_at,coalesce(quarantine_reason,''),reinstated_at,governance_version FROM sender_sessions ORDER BY masked_msisdn`)
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +83,7 @@ func (p *PostgreSQLGovernanceStore) ListSessions(ctx context.Context) ([]Governe
 	for rows.Next() {
 		var v GovernedSession
 		var hb, success sql.NullTime
-		if err := rows.Scan(&v.ID, &v.NodeID, &v.PoolID, &v.MaskedMSISDN, &v.EngineType, &v.EngineVersion, &v.Status, &v.SafeMessagesPerMinute, &v.SafeDailyCapacity, &v.InFlightLimit, &v.SentToday, &hb, &success, &v.Version); err != nil {
+		if err := rows.Scan(&v.ID, &v.NodeID, &v.PoolID, &v.MaskedMSISDN, &v.EngineType, &v.EngineVersion, &v.Status, &v.SafeMessagesPerMinute, &v.SafeDailyCapacity, &v.InFlightLimit, &v.SentToday, &hb, &success, &v.QuarantinedAt, &v.QuarantineReason, &v.ReinstatedAt, &v.Version); err != nil {
 			return nil, err
 		}
 		if hb.Valid {
@@ -96,14 +96,37 @@ func (p *PostgreSQLGovernanceStore) ListSessions(ctx context.Context) ([]Governe
 	}
 	return out, rows.Err()
 }
+
+func (p *PostgreSQLGovernanceStore) GetSession(ctx context.Context, id string) (GovernedSession, error) {
+	var v GovernedSession
+	var hb, success, quarantined, reinstated sql.NullTime
+	err := p.DB.QueryRowContext(ctx, `SELECT id::text,coalesce(node_id::text,''),coalesce(sender_pool_id::text,''),masked_msisdn,engine_type,coalesce(engine_version,''),status,coalesce(safe_messages_per_minute,0)::int,coalesce(safe_daily_capacity,0),in_flight_limit,sent_today,last_heartbeat_at,last_success_at,quarantined_at,coalesce(quarantine_reason,''),reinstated_at,governance_version FROM sender_sessions WHERE id=$1::uuid`, id).Scan(&v.ID, &v.NodeID, &v.PoolID, &v.MaskedMSISDN, &v.EngineType, &v.EngineVersion, &v.Status, &v.SafeMessagesPerMinute, &v.SafeDailyCapacity, &v.InFlightLimit, &v.SentToday, &hb, &success, &quarantined, &v.QuarantineReason, &reinstated, &v.Version)
+	if errors.Is(err, sql.ErrNoRows) {
+		return GovernedSession{}, ErrSenderNotFound
+	}
+	if hb.Valid {
+		v.LastHeartbeatAt = &hb.Time
+	}
+	if success.Valid {
+		v.LastSuccessAt = &success.Time
+	}
+	if quarantined.Valid {
+		v.QuarantinedAt = &quarantined.Time
+	}
+	if reinstated.Valid {
+		v.ReinstatedAt = &reinstated.Time
+	}
+	return v, err
+}
+
 func (p *PostgreSQLGovernanceStore) RegisterSession(ctx context.Context, v GovernedSession, cipher []byte, actor, reason string) (GovernedSession, error) {
-	err := p.DB.QueryRowContext(ctx, `WITH inserted AS (INSERT INTO sender_sessions(node_id,sender_pool_id,logical_sender_pool,encrypted_msisdn,masked_msisdn,engine_type,engine_version,status,safe_messages_per_minute,safe_daily_capacity,in_flight_limit,sent_today,governance_version) VALUES(nullif($1,'')::uuid,nullif($2,'')::uuid,'',$3,$4,$5,$6,$7,$8,$9,$10,0,1) RETURNING id,node_id,sender_pool_id,masked_msisdn,engine_type,engine_version,status,safe_messages_per_minute,safe_daily_capacity,in_flight_limit,sent_today,last_heartbeat_at,last_success_at,governance_version),audit AS (INSERT INTO sender_governance_events(object_type,object_id,action,actor_id,reason,object_version) SELECT 'SESSION',id,'REGISTERED',$11::uuid,$12,governance_version FROM inserted) SELECT id::text,coalesce(node_id::text,''),coalesce(sender_pool_id::text,''),masked_msisdn,engine_type,coalesce(engine_version,''),status,safe_messages_per_minute::int,safe_daily_capacity,in_flight_limit,sent_today,last_heartbeat_at,last_success_at,governance_version FROM inserted`, v.NodeID, v.PoolID, cipher, v.MaskedMSISDN, v.EngineType, v.EngineVersion, v.Status, v.SafeMessagesPerMinute, v.SafeDailyCapacity, v.InFlightLimit, actor, reason).Scan(&v.ID, &v.NodeID, &v.PoolID, &v.MaskedMSISDN, &v.EngineType, &v.EngineVersion, &v.Status, &v.SafeMessagesPerMinute, &v.SafeDailyCapacity, &v.InFlightLimit, &v.SentToday, &v.LastHeartbeatAt, &v.LastSuccessAt, &v.Version)
+	err := p.DB.QueryRowContext(ctx, `WITH inserted AS (INSERT INTO sender_sessions(node_id,sender_pool_id,logical_sender_pool,encrypted_msisdn,masked_msisdn,engine_type,engine_version,status,safe_messages_per_minute,safe_daily_capacity,in_flight_limit,sent_today,governance_version) VALUES(nullif($1,'')::uuid,nullif($2,'')::uuid,'',$3,$4,$5,$6,$7,$8,$9,$10,0,1) RETURNING id,node_id,sender_pool_id,masked_msisdn,engine_type,engine_version,status,safe_messages_per_minute,safe_daily_capacity,in_flight_limit,sent_today,last_heartbeat_at,last_success_at,quarantined_at,coalesce(quarantine_reason,''),reinstated_at,governance_version),audit AS (INSERT INTO sender_governance_events(object_type,object_id,action,actor_id,reason,object_version) SELECT 'SESSION',id,'REGISTERED',$11::uuid,$12,governance_version FROM inserted) SELECT id::text,coalesce(node_id::text,''),coalesce(sender_pool_id::text,''),masked_msisdn,engine_type,coalesce(engine_version,''),status,safe_messages_per_minute::int,safe_daily_capacity,in_flight_limit,sent_today,last_heartbeat_at,last_success_at,quarantined_at,coalesce(quarantine_reason,''),reinstated_at,governance_version FROM inserted`, v.NodeID, v.PoolID, cipher, v.MaskedMSISDN, v.EngineType, v.EngineVersion, v.Status, v.SafeMessagesPerMinute, v.SafeDailyCapacity, v.InFlightLimit, actor, reason).Scan(&v.ID, &v.NodeID, &v.PoolID, &v.MaskedMSISDN, &v.EngineType, &v.EngineVersion, &v.Status, &v.SafeMessagesPerMinute, &v.SafeDailyCapacity, &v.InFlightLimit, &v.SentToday, &v.LastHeartbeatAt, &v.LastSuccessAt, &v.QuarantinedAt, &v.QuarantineReason, &v.ReinstatedAt, &v.Version)
 	return v, err
 }
 func (p *PostgreSQLGovernanceStore) TransitionSession(ctx context.Context, id string, e int64, status Status, actor, reason string) (GovernedSession, error) {
 	var v GovernedSession
 	var hb, success sql.NullTime
-	err := p.DB.QueryRowContext(ctx, `WITH updated AS (UPDATE sender_sessions SET status=$3,governance_version=governance_version+1,updated_at=now() WHERE id=$1::uuid AND governance_version=$2 RETURNING *),audit AS (INSERT INTO sender_governance_events(object_type,object_id,action,actor_id,reason,object_version) SELECT 'SESSION',id,$4,$5::uuid,$6,governance_version FROM updated) SELECT id::text,coalesce(node_id::text,''),coalesce(sender_pool_id::text,''),masked_msisdn,engine_type,coalesce(engine_version,''),status,safe_messages_per_minute::int,safe_daily_capacity,in_flight_limit,sent_today,last_heartbeat_at,last_success_at,governance_version FROM updated`, id, e, status, "STATUS_"+string(status), actor, reason).Scan(&v.ID, &v.NodeID, &v.PoolID, &v.MaskedMSISDN, &v.EngineType, &v.EngineVersion, &v.Status, &v.SafeMessagesPerMinute, &v.SafeDailyCapacity, &v.InFlightLimit, &v.SentToday, &hb, &success, &v.Version)
+	err := p.DB.QueryRowContext(ctx, `WITH updated AS (UPDATE sender_sessions SET status=$3,quarantined_at=CASE WHEN $3='QUARANTINED' THEN now() ELSE quarantined_at END,quarantine_reason=CASE WHEN $3='QUARANTINED' THEN $6 WHEN $3='READY' THEN NULL ELSE quarantine_reason END,reinstated_at=CASE WHEN $3='READY' AND quarantined_at IS NOT NULL THEN now() ELSE reinstated_at END,governance_version=governance_version+1,updated_at=now() WHERE id=$1::uuid AND governance_version=$2 AND ($3<>'READY' OR status='QUARANTINED' OR quarantined_at IS NULL) AND ($3<>'QUARANTINED' OR status NOT IN('RETIRED','QUARANTINED')) RETURNING *),audit AS (INSERT INTO sender_governance_events(object_type,object_id,action,actor_id,reason,object_version) SELECT 'SESSION',id,$4,$5::uuid,$6,governance_version FROM updated) SELECT id::text,coalesce(node_id::text,''),coalesce(sender_pool_id::text,''),masked_msisdn,engine_type,coalesce(engine_version,''),status,safe_messages_per_minute::int,safe_daily_capacity,in_flight_limit,sent_today,last_heartbeat_at,last_success_at,quarantined_at,coalesce(quarantine_reason,''),reinstated_at,governance_version FROM updated`, id, e, status, "STATUS_"+string(status), actor, reason).Scan(&v.ID, &v.NodeID, &v.PoolID, &v.MaskedMSISDN, &v.EngineType, &v.EngineVersion, &v.Status, &v.SafeMessagesPerMinute, &v.SafeDailyCapacity, &v.InFlightLimit, &v.SentToday, &hb, &success, &v.QuarantinedAt, &v.QuarantineReason, &v.ReinstatedAt, &v.Version)
 	if errors.Is(err, sql.ErrNoRows) {
 		return GovernedSession{}, ErrSenderConflict
 	}
@@ -117,7 +140,7 @@ func (p *PostgreSQLGovernanceStore) TransitionSession(ctx context.Context, id st
 }
 func (p *PostgreSQLGovernanceStore) HeartbeatSession(ctx context.Context, id string, e int64, v GovernedSession, now time.Time) (GovernedSession, error) {
 	var hb, success sql.NullTime
-	err := p.DB.QueryRowContext(ctx, `UPDATE sender_sessions SET status=$3,engine_version=$4,safe_messages_per_minute=$5,safe_daily_capacity=$6,in_flight_limit=$7,sent_today=$8,last_heartbeat_at=$9,governance_version=governance_version+1,updated_at=now() WHERE id=$1::uuid AND governance_version=$2 RETURNING id::text,coalesce(node_id::text,''),coalesce(sender_pool_id::text,''),masked_msisdn,engine_type,coalesce(engine_version,''),status,safe_messages_per_minute::int,safe_daily_capacity,in_flight_limit,sent_today,last_heartbeat_at,last_success_at,governance_version`, id, e, v.Status, v.EngineVersion, v.SafeMessagesPerMinute, v.SafeDailyCapacity, v.InFlightLimit, v.SentToday, now).Scan(&v.ID, &v.NodeID, &v.PoolID, &v.MaskedMSISDN, &v.EngineType, &v.EngineVersion, &v.Status, &v.SafeMessagesPerMinute, &v.SafeDailyCapacity, &v.InFlightLimit, &v.SentToday, &hb, &success, &v.Version)
+	err := p.DB.QueryRowContext(ctx, `UPDATE sender_sessions SET status=CASE WHEN status IN('QUARANTINED','RESTRICTED','RETIRED') THEN status ELSE $3 END,engine_version=$4,safe_messages_per_minute=$5,safe_daily_capacity=$6,in_flight_limit=$7,sent_today=$8,last_heartbeat_at=$9,governance_version=governance_version+1,updated_at=now() WHERE id=$1::uuid AND governance_version=$2 RETURNING id::text,coalesce(node_id::text,''),coalesce(sender_pool_id::text,''),masked_msisdn,engine_type,coalesce(engine_version,''),status,safe_messages_per_minute::int,safe_daily_capacity,in_flight_limit,sent_today,last_heartbeat_at,last_success_at,quarantined_at,coalesce(quarantine_reason,''),reinstated_at,governance_version`, id, e, v.Status, v.EngineVersion, v.SafeMessagesPerMinute, v.SafeDailyCapacity, v.InFlightLimit, v.SentToday, now).Scan(&v.ID, &v.NodeID, &v.PoolID, &v.MaskedMSISDN, &v.EngineType, &v.EngineVersion, &v.Status, &v.SafeMessagesPerMinute, &v.SafeDailyCapacity, &v.InFlightLimit, &v.SentToday, &hb, &success, &v.QuarantinedAt, &v.QuarantineReason, &v.ReinstatedAt, &v.Version)
 	if errors.Is(err, sql.ErrNoRows) {
 		return GovernedSession{}, ErrSenderConflict
 	}

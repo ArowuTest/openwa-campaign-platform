@@ -23,6 +23,7 @@ const (
 	StatusPaused       Status = "PAUSED"
 	StatusDisconnected Status = "DISCONNECTED"
 	StatusRestricted   Status = "RESTRICTED"
+	StatusQuarantined  Status = "QUARANTINED"
 	StatusRetired      Status = "RETIRED"
 )
 

@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "programme": "OpenWA Internal Campaign Platform",
+  "release_candidate_version": "1.0.0",
+  "required_documents": [
+    "docs/program/MASTER_IMPLEMENTATION_ROADMAP.md",
+    "docs/program/PRODUCTION_READINESS_CHECKLIST.md",
+    "docs/program/RISK_AND_TECHNICAL_DEBT_REGISTER.md",
+    "docs/decisions/README.md",
+    "docs/audit/INDEPENDENT_ENGINEERING_AUDIT_PLAN.md",
+    "docs/requirements/TRACEABILITY.md",
+    "docs/handover/CURRENT_STATUS.md",
+    "docs/handover/NEXT_ACTIONS.md"
+  ],
+  "hard_gates": [
+    {
+      "id": "RG-001",
+      "name": "Authoritative requirements traceability",
+      "criterion": "All Must requirements are IMPLEMENTED_TESTED or have an approved, time-bounded external waiver.",
+      "evidence": "docs/requirements/traceability.json",
+      "status": "OPEN"
+    },
+    {
+      "id": "RG-002",
+      "name": "Live PostgreSQL migration validation",
+      "criterion": "All migrations execute successfully on a clean production-equivalent PostgreSQL instance and rollback/recovery is demonstrated.",
+      "evidence": "Deployment evidence pending",
+      "status": "BLOCKED_EXTERNAL"
+    },
+    {
+      "id": "RG-003",
+      "name": "Live OpenWA transport validation",
+      "criterion": "Real sessions prove pairing, text/media send, inbound events, sent/delivered/read acknowledgements and uncertain-outcome handling.",
+      "evidence": "VPS and genuine WhatsApp sessions required",
+      "status": "BLOCKED_EXTERNAL"
+    },
+    {
+      "id": "RG-004",
+      "name": "Capacity and performance evidence",
+      "criterion": "10M-contact query tests, campaign-ledger scale tests and measured per-session sustainable capacity are complete.",
+      "evidence": "Production-like infrastructure required",
+      "status": "OPEN"
+    },
+    {
+      "id": "RG-005",
+      "name": "Security assurance",
+      "criterion": "Threat model, dependency/container scans, secret scan, SAST and independent penetration test have no unresolved critical/high findings.",
+      "evidence": "Security evidence pack pending",
+      "status": "OPEN"
+    },
+    {
+      "id": "RG-006",
+      "name": "Backup and disaster recovery proof",
+      "criterion": "Encrypted backups, point-in-time recovery, object restore and OpenWA session recovery are tested against agreed RPO/RTO.",
+      "evidence": "Live recovery exercise pending",
+      "status": "BLOCKED_EXTERNAL"
+    },
+    {
+      "id": "RG-007",
+      "name": "Operational readiness",
+      "criterion": "Monitoring, alerting, runbooks, on-call ownership, incident process and maintenance controls are exercised.",
+      "evidence": "Operations exercise pending",
+      "status": "OPEN"
+    },
+    {
+      "id": "RG-008",
+      "name": "Frontend workflow completion",
+      "criterion": "All required UI/UX workflows and exceptional states are implemented, accessible and permission-aware.",
+      "evidence": "Production Next.js implementation pending",
+      "status": "OPEN"
+    }
+  ]
+}

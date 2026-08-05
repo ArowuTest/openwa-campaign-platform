@@ -1,0 +1,18 @@
+{
+  "name": "campaign-platform",
+  "private": true,
+  "version": "0.2.0",
+  "workspaces": [
+    "apps/admin-web",
+    "services/openwa-gateway"
+  ],
+  "scripts": {
+    "build:web": "npm --workspace @campaign-platform/admin-web run build",
+    "build:gateway": "npm --workspace @campaign-platform/openwa-gateway run build",
+    "typecheck:web": "npm --workspace @campaign-platform/admin-web run typecheck",
+    "typecheck:gateway": "npm --workspace @campaign-platform/openwa-gateway run typecheck"
+  },
+  "engines": {
+    "node": ">=22.16.0"
+  }
+}

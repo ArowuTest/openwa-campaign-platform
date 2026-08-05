@@ -1,0 +1,406 @@
+name: campaign-platform
+
+x-service-defaults: &service-defaults
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+  logging:
+    driver: json-file
+    options:
+      max-size: 20m
+      max-file: "5"
+
+services:
+  postgres:
+    <<: *service-defaults
+    image: postgres:17.5-alpine
+    environment:
+      POSTGRES_DB: campaign
+      POSTGRES_USER: campaign
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-campaign-development-only}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ../../database/bootstrap/001_bootstrap.sh:/docker-entrypoint-initdb.d/001_bootstrap.sh:ro
+      - ../../database/migrations:/opt/campaign/migrations:ro
+      - ../../database/reference-data/geography:/opt/campaign/geography:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U campaign -d campaign"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    networks: [private]
+
+  redis:
+    <<: *service-defaults
+    image: redis:8.0.3-alpine
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --requirepass
+      - ${REDIS_PASSWORD:-campaign-development-only}
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-campaign-development-only}", "PING"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks: [private]
+
+  clamav:
+    <<: *service-defaults
+    # Official ClamAV image. Release automation must resolve and record the
+    # immutable multi-architecture digest before a production deployment.
+    image: clamav/clamav:1.5.3-debian13-slim
+    volumes:
+      - clamav-db:/var/lib/clamav
+    healthcheck:
+      test: ["CMD-SHELL", "clamdscan --ping 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 12
+      start_period: 90s
+    networks: [private]
+
+  control-api:
+    <<: *service-defaults
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/control-api.Dockerfile
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      HTTP_ADDR: :8080
+      DATABASE_URL: postgres://campaign:${POSTGRES_PASSWORD:-campaign-development-only}@postgres:5432/campaign?sslmode=disable
+      REDIS_ADDR: redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-campaign-development-only}
+      OBJECT_STORE_ROOT: /var/lib/campaign-platform/objects
+      MAX_IMPORT_FILE_BYTES: ${MAX_IMPORT_FILE_BYTES:-536870912}
+      CLAMAV_ADDRESS: clamav:3310
+      CLAMAV_DIAL_TIMEOUT: ${CLAMAV_DIAL_TIMEOUT:-5s}
+      CLAMAV_SCAN_TIMEOUT: ${CLAMAV_SCAN_TIMEOUT:-2m}
+      MSISDN_ENCRYPTION_KEY_BASE64: ${MSISDN_ENCRYPTION_KEY_BASE64:-}
+      MSISDN_LOOKUP_KEY_BASE64: ${MSISDN_LOOKUP_KEY_BASE64:-}
+      OPENWA_GATEWAY_URL: http://openwa-gateway:2785
+      GATEWAY_COMMAND_SECRET: ${GATEWAY_COMMAND_SECRET:-development-command-secret-change-me-32}
+      MEDIA_DOWNLOAD_BASE_URL: http://control-api:8080/api/v1/internal/media
+      MEDIA_DOWNLOAD_SECRET: ${MEDIA_DOWNLOAD_SECRET:-development-media-download-secret-change-me}
+      GATEWAY_CALLBACK_SECRET: ${GATEWAY_CALLBACK_SECRET:-development-gateway-callback-secret-change-me}
+      GATEWAY_CALLBACK_MAX_SKEW: ${GATEWAY_CALLBACK_MAX_SKEW:-5m}
+    volumes:
+      - object-data:/var/lib/campaign-platform/objects
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      clamav: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "/control-api", "healthcheck", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks: [private]
+
+  audience-worker:
+    <<: *service-defaults
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/audience-worker.Dockerfile
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      WORKER_HEALTH_ADDR: :8091
+      POSTGRES_DRIVER: ${POSTGRES_DRIVER:-pgx}
+      DATABASE_URL: postgres://campaign:${POSTGRES_PASSWORD:-campaign-development-only}@postgres:5432/campaign?sslmode=disable
+      WORKER_ID: ${AUDIENCE_WORKER_ID:-audience-worker-01}
+      OBJECT_STORE_ROOT: /var/lib/campaign-platform/objects
+      MSISDN_ENCRYPTION_KEY_BASE64: ${MSISDN_ENCRYPTION_KEY_BASE64:-}
+      MSISDN_LOOKUP_KEY_BASE64: ${MSISDN_LOOKUP_KEY_BASE64:-}
+      DB_MAX_OPEN: ${AUDIENCE_DB_MAX_OPEN:-20}
+      DB_MAX_IDLE: ${AUDIENCE_DB_MAX_IDLE:-5}
+      AUDIENCE_WORKER_CONCURRENCY: ${AUDIENCE_WORKER_CONCURRENCY:-2}
+      AUDIENCE_WORKER_CLAIM_BATCH: ${AUDIENCE_WORKER_CLAIM_BATCH:-2}
+      AUDIENCE_VALIDATION_LEASE_DURATION: ${AUDIENCE_VALIDATION_LEASE_DURATION:-2m}
+      AUDIENCE_STAGE_BATCH_SIZE: ${AUDIENCE_STAGE_BATCH_SIZE:-1000}
+      MAX_IMPORT_ROWS: ${MAX_IMPORT_ROWS:-2000000}
+      MAX_IMPORT_ISSUES: ${MAX_IMPORT_ISSUES:-1000}
+      DEFAULT_COUNTRY_ISO2: ${DEFAULT_COUNTRY_ISO2:-NG}
+    volumes:
+      - object-data:/var/lib/campaign-platform/objects
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "/audience-worker", "healthcheck", "http://127.0.0.1:8091/readyz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks: [private]
+
+  campaign-worker:
+    <<: *service-defaults
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/campaign-worker.Dockerfile
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      WORKER_HEALTH_ADDR: :8092
+      POSTGRES_DRIVER: ${POSTGRES_DRIVER:-pgx}
+      DATABASE_URL: postgres://campaign:${POSTGRES_PASSWORD:-campaign-development-only}@postgres:5432/campaign?sslmode=disable
+      WORKER_ID: ${CAMPAIGN_WORKER_ID:-campaign-worker-01}
+      MSISDN_ENCRYPTION_KEY_BASE64: ${MSISDN_ENCRYPTION_KEY_BASE64:-}
+      MSISDN_LOOKUP_KEY_BASE64: ${MSISDN_LOOKUP_KEY_BASE64:-}
+      OPENWA_GATEWAY_URL: http://openwa-gateway:2785
+      GATEWAY_COMMAND_SECRET: ${GATEWAY_COMMAND_SECRET:-development-command-secret-change-me-32}
+      MEDIA_DOWNLOAD_BASE_URL: http://control-api:8080/api/v1/internal/media
+      MEDIA_DOWNLOAD_SECRET: ${MEDIA_DOWNLOAD_SECRET:-development-media-download-secret-change-me}
+      DB_MAX_OPEN: ${CAMPAIGN_DB_MAX_OPEN:-40}
+      DB_MAX_IDLE: ${CAMPAIGN_DB_MAX_IDLE:-10}
+      CAMPAIGN_JOB_CONCURRENCY: ${CAMPAIGN_JOB_CONCURRENCY:-8}
+      CAMPAIGN_JOB_CLAIM_BATCH: ${CAMPAIGN_JOB_CLAIM_BATCH:-8}
+      CAMPAIGN_JOB_LEASE: ${CAMPAIGN_JOB_LEASE:-2m}
+      OUTBOX_CONCURRENCY: ${OUTBOX_CONCURRENCY:-4}
+      OUTBOX_CLAIM_BATCH: ${OUTBOX_CLAIM_BATCH:-4}
+      OUTBOX_LEASE: ${OUTBOX_LEASE:-2m}
+      WORKER_OPERATION_TIMEOUT: ${WORKER_OPERATION_TIMEOUT:-10s}
+      SENDER_HEARTBEAT_TTL: ${SENDER_HEARTBEAT_TTL:-90s}
+      GATEWAY_HTTP_TIMEOUT: ${GATEWAY_HTTP_TIMEOUT:-30s}
+    depends_on:
+      postgres: { condition: service_healthy }
+      openwa-gateway: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "/campaign-worker", "healthcheck", "http://127.0.0.1:8092/readyz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks: [private]
+
+  export-worker:
+    <<: *service-defaults
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/export-worker.Dockerfile
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid
+    environment:
+      DATABASE_URL: postgres://campaign:${POSTGRES_PASSWORD:-campaign-development-only}@postgres:5432/campaign?sslmode=disable
+      EXPORT_WORKER_ID: ${EXPORT_WORKER_ID:-export-worker-01}
+      EXPORT_POLL_INTERVAL: ${EXPORT_POLL_INTERVAL:-2s}
+      EXPORT_EXPIRY_INTERVAL: ${EXPORT_EXPIRY_INTERVAL:-1m}
+      EXPORT_READY_TTL: ${EXPORT_READY_TTL:-24h}
+      OBJECT_STORE_ROOT: /var/lib/campaign-platform/objects
+    volumes:
+      - object-data:/var/lib/campaign-platform/objects
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [private]
+
+  inbound-governance-worker:
+    <<: *service-defaults
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/inbound-governance-worker.Dockerfile
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      WORKER_HEALTH_ADDR: :8094
+      POSTGRES_DRIVER: ${POSTGRES_DRIVER:-pgx}
+      DATABASE_URL: postgres://campaign:${POSTGRES_PASSWORD:-campaign-development-only}@postgres:5432/campaign?sslmode=disable
+      WORKER_ID: ${INBOUND_GOVERNANCE_WORKER_ID:-inbound-governance-worker-01}
+      INBOUND_CONTENT_KEYS_JSON: ${INBOUND_CONTENT_KEYS_JSON:-}
+      INBOUND_CONTENT_ACTIVE_KEY_VERSION: ${INBOUND_CONTENT_ACTIVE_KEY_VERSION:-v1}
+      INBOUND_ROTATION_BATCH_SIZE: ${INBOUND_ROTATION_BATCH_SIZE:-100}
+      INBOUND_ROTATION_LEASE: ${INBOUND_ROTATION_LEASE:-1m}
+      INBOUND_ROTATION_POLL_INTERVAL: ${INBOUND_ROTATION_POLL_INTERVAL:-5s}
+      INBOUND_RETENTION_SWEEP_INTERVAL: ${INBOUND_RETENTION_SWEEP_INTERVAL:-1h}
+      WORKER_SHUTDOWN_TIMEOUT: ${WORKER_SHUTDOWN_TIMEOUT:-30s}
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "/inbound-governance-worker", "healthcheck", "http://127.0.0.1:8094/readyz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks: [private]
+
+  metrics-worker:
+    <<: *service-defaults
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/metrics-worker.Dockerfile
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,noexec,nosuid
+    environment:
+      APP_ENV: ${APP_ENV:-development}
+      WORKER_HEALTH_ADDR: :8093
+      POSTGRES_DRIVER: ${POSTGRES_DRIVER:-pgx}
+      DATABASE_URL: postgres://campaign:${POSTGRES_PASSWORD:-campaign-development-only}@postgres:5432/campaign?sslmode=disable
+      WORKER_ID: ${METRICS_WORKER_ID:-metrics-worker-01}
+      DB_MAX_OPEN: ${METRICS_DB_MAX_OPEN:-12}
+      DB_MAX_IDLE: ${METRICS_DB_MAX_IDLE:-4}
+      METRICS_WORKER_CONCURRENCY: ${METRICS_WORKER_CONCURRENCY:-2}
+      METRICS_WORKER_CLAIM_BATCH: ${METRICS_WORKER_CLAIM_BATCH:-2}
+      METRICS_RECONCILIATION_LEASE: ${METRICS_RECONCILIATION_LEASE:-1m}
+      METRICS_WORKER_POLL_INTERVAL: ${METRICS_WORKER_POLL_INTERVAL:-5s}
+      METRICS_MATCH_INTERVAL: ${METRICS_MATCH_INTERVAL:-1m}
+      METRICS_DRIFT_INTERVAL: ${METRICS_DRIFT_INTERVAL:-10s}
+      METRICS_FAILURE_INTERVAL: ${METRICS_FAILURE_INTERVAL:-1m}
+      WORKER_SHUTDOWN_TIMEOUT: ${WORKER_SHUTDOWN_TIMEOUT:-30s}
+    depends_on:
+      postgres: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "/metrics-worker", "healthcheck", "http://127.0.0.1:8093/readyz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    networks: [private]
+
+  admin-web:
+    <<: *service-defaults
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/admin-web.Dockerfile
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,noexec,nosuid
+    environment:
+      CONTROL_API_INTERNAL_URL: http://control-api:8080
+    depends_on:
+      control-api: { condition: service_healthy }
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "require('http').get('http://127.0.0.1:3000',r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks: [private]
+
+  openwa-upstream:
+    <<: *service-defaults
+    build:
+      context: ../../third_party/openwa/upstream
+      dockerfile: Dockerfile
+    read_only: true
+    shm_size: 1gb
+    tmpfs:
+      - /tmp:size=512m,nosuid
+    environment:
+      NODE_ENV: ${APP_ENV:-development}
+      PORT: 2785
+      API_MASTER_KEY: ${OPENWA_UPSTREAM_API_KEY:-development-openwa-upstream-key-change-me}
+      API_KEY_PEPPER: ${OPENWA_API_KEY_PEPPER:-development-openwa-pepper-change-me-32}
+      ENGINE_TYPE: ${OPENWA_ENGINE_TYPE:-whatsapp-web.js}
+      DATABASE_TYPE: sqlite
+      SESSION_DATA_PATH: /app/data/sessions
+      BAILEYS_AUTH_DIR: /app/data/baileys
+      PUPPETEER_HEADLESS: "true"
+      WEBHOOK_MAX_PAYLOAD_BYTES: ${OPENWA_WEBHOOK_MAX_PAYLOAD_BYTES:-1048576}
+      WEBHOOK_MEDIA_INLINE_MAX_BYTES: "0"
+    volumes:
+      - openwa-upstream-data:/app/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:2785/api/health/ready"]
+      interval: 15s
+      timeout: 10s
+      retries: 8
+      start_period: 45s
+    networks: [private, egress]
+
+  openwa-gateway:
+    <<: *service-defaults
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/openwa-gateway.Dockerfile
+    read_only: true
+    shm_size: 1gb
+    tmpfs:
+      - /tmp:size=512m,nosuid
+    environment:
+      PORT: 2785
+      NODE_ENV: ${APP_ENV:-development}
+      GATEWAY_PROVIDER_MODE: openwa
+      OPENWA_ENGINE: ${OPENWA_ENGINE:-WHATSAPP_WEB_JS}
+      GATEWAY_POOL_ID: ${GATEWAY_POOL_ID:-00000000-0000-4000-8000-000000000101}
+      GATEWAY_NODE_ID: ${GATEWAY_NODE_ID:-00000000-0000-4000-8000-000000000201}
+      GATEWAY_ADAPTER_VERSION: ${GATEWAY_ADAPTER_VERSION:-0.13.0+platform.1}
+      GATEWAY_CAPABILITIES: ${GATEWAY_CAPABILITIES:-SEND_TEXT,SEND_IMAGE,SEND_VIDEO,SEND_DOCUMENT,DELIVERY_EVENTS,READ_EVENTS,INBOUND_MESSAGES}
+      OPENWA_ALLOW_INSECURE_INTERNAL: ${OPENWA_ALLOW_INSECURE_INTERNAL:-true}
+      OPENWA_UPSTREAM_URL: http://openwa-upstream:2785
+      OPENWA_UPSTREAM_API_KEY: ${OPENWA_UPSTREAM_API_KEY:-development-openwa-upstream-key-change-me}
+      OPENWA_WEBHOOK_SECRET: ${OPENWA_WEBHOOK_SECRET:-development-openwa-webhook-secret-change-me-32}
+      OPENWA_WEBHOOK_TARGET_URL: http://openwa-gateway:2785/internal/openwa/events
+      GATEWAY_COMMAND_SECRET: ${GATEWAY_COMMAND_SECRET:-development-command-secret-change-me-32}
+      MEDIA_DOWNLOAD_BASE_URL: http://control-api:8080/api/v1/internal/media
+      MEDIA_DOWNLOAD_SECRET: ${MEDIA_DOWNLOAD_SECRET:-development-media-download-secret-change-me}
+      CONTROL_API_CALLBACK_URL: http://control-api:8080/api/v1/internal/gateway/events
+      GATEWAY_CALLBACK_SECRET: ${GATEWAY_CALLBACK_SECRET:-development-gateway-callback-secret-change-me}
+      CALLBACK_TIMEOUT_MS: ${CALLBACK_TIMEOUT_MS:-5000}
+    volumes:
+      - openwa-gateway-data:/data
+    depends_on:
+      openwa-upstream: { condition: service_healthy }
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "require('http').get('http://127.0.0.1:2785/healthz',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+    networks: [private, egress]
+
+  nginx:
+    <<: *service-defaults
+    image: nginx:1.29.0-alpine
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    volumes:
+      - ../nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      admin-web: { condition: service_healthy }
+      control-api: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks: [edge, private]
+
+networks:
+  edge:
+    driver: bridge
+  private:
+    driver: bridge
+    internal: true
+  egress:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  redis-data:
+  clamav-db:
+  object-data:
+  openwa-upstream-data:
+  openwa-gateway-data:

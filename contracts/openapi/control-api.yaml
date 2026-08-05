@@ -1,0 +1,1187 @@
+openapi: 3.1.0
+info:
+  title: Internal Audience & Campaign Control API
+  version: 0.8.0
+  description: >
+    Internal-only API for organisation records, offline consent reviews, secure audience imports,
+    governed cohort definitions and controlled campaign lifecycle management.
+servers:
+  - url: /api/v1
+security:
+  - internalSession: []
+paths:
+  /auth/login:
+    post:
+      operationId: login
+      summary: Authenticate an internal user
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200': { description: MFA challenge or authenticated session }
+        '401': { description: Credentials could not be verified }
+        '429': { description: Account temporarily locked }
+  /auth/mfa/verify:
+    post:
+      operationId: verifyMFA
+      summary: Complete the login MFA challenge
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MFAVerificationRequest' }
+      responses:
+        '200': { description: Authenticated session created }
+        '401': { description: MFA challenge invalid or expired }
+  /auth/step-up:
+    post:
+      operationId: stepUpMFA
+      summary: Refresh MFA assurance for the existing session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StepUpRequest' }
+      responses:
+        '200': { description: Session MFA assurance refreshed }
+        '401': { description: MFA code or session invalid }
+  /auth/sessions:
+    get:
+      operationId: listActiveSessions
+      summary: List the current user's active sessions
+      responses:
+        '200': { description: Active session list }
+  /auth/sessions/revoke-all:
+    post:
+      operationId: revokeAllOwnSessions
+      summary: Revoke every active session for the current user
+      responses:
+        '200': { description: All sessions revoked }
+  /inbound-replies/{id}/content:
+    get:
+      operationId: getInboundReplyContent
+      summary: Reveal retained inbound reply content under a separate permission
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Retained reply content and retention metadata }
+        '410': { description: Content redacted under retention policy }
+  /admin/inbound-replies/retention-sweep:
+    post:
+      operationId: runInboundReplyRetentionSweep
+      summary: Redact expired inbound reply content while preserving fingerprints and metrics
+      responses:
+        '200': { description: Retention sweep result }
+  /admin/inbound-retention-policies:
+    get:
+      operationId: listInboundRetentionPolicies
+      summary: List governed effective-dated inbound content retention policies
+      responses:
+        '200': { description: Retention policy list }
+    post:
+      operationId: createInboundRetentionPolicy
+      summary: Create a draft inbound content retention policy
+      responses:
+        '201': { description: Draft retention policy created }
+  /admin/inbound-retention-policies/{id}/submit:
+    post:
+      operationId: submitInboundRetentionPolicy
+      summary: Submit an inbound retention policy for independent approval
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Retention policy awaiting approval }
+  /admin/inbound-retention-policies/{id}/decision:
+    post:
+      operationId: decideInboundRetentionPolicy
+      summary: Approve or reject a submitted inbound retention policy
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Decision recorded }
+  /admin/inbound-replies/reencrypt:
+    post:
+      operationId: reencryptInboundReplyContent
+      summary: Schedule a resumable retained-content re-encryption run
+      responses:
+        '202': { description: Re-encryption run accepted }
+  /admin/inbound-reencryption-runs:
+    get:
+      operationId: listInboundReencryptionRuns
+      summary: List resumable inbound-content re-encryption runs
+      responses:
+        '200': { description: Re-encryption run list }
+  /admin/inbound-reencryption-runs/{id}:
+    get:
+      operationId: getInboundReencryptionRun
+      summary: Read one resumable inbound-content re-encryption run
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Re-encryption run }
+        '404': { description: Run not found }
+  /admin/opt-out-policies:
+    get:
+      operationId: listOptOutPolicies
+      summary: List governed effective-dated opt-out policies
+      responses:
+        '200': { description: Policy list }
+    post:
+      operationId: createOptOutPolicy
+      summary: Create a draft exact-match opt-out policy
+      responses:
+        '201': { description: Draft policy created }
+  /admin/opt-out-policies/{id}/submit:
+    post:
+      operationId: submitOptOutPolicy
+      summary: Submit an opt-out policy for independent approval
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Policy awaiting approval }
+  /admin/opt-out-policies/{id}/decision:
+    post:
+      operationId: decideOptOutPolicy
+      summary: Approve or reject a submitted opt-out policy
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Decision recorded }
+  /admin/users:
+    get:
+      operationId: listInternalUsers
+      summary: List provisioned internal users
+      responses:
+        '200': { description: Internal user list }
+    post:
+      operationId: createInternalUser
+      summary: Provision a named internal user
+      description: Requires identity.admin permission and recent MFA step-up. Returns the TOTP secret once.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateInternalUser' }
+      responses:
+        '201': { description: Internal user provisioned }
+        '403': { description: Recent MFA step-up required }
+        '409': { description: Email already exists or last-super-admin protection }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /admin/users/{id}:
+    put:
+      operationId: updateInternalUser
+      summary: Update roles, status and MFA policy for an internal user
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateInternalUser' }
+      responses:
+        '200': { description: Internal user updated }
+        '403': { description: Recent MFA step-up required }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Version conflict or last-super-admin protection }
+  /admin/users/{id}/reset-credentials:
+    post:
+      operationId: resetInternalUserCredentials
+      summary: Reset password and MFA enrolment and revoke active sessions
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ResetInternalUserCredentials' }
+      responses:
+        '200': { description: Credentials reset; TOTP secret returned once }
+        '403': { description: Recent MFA step-up required }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Version conflict }
+  /admin/users/{id}/unlock:
+    post:
+      operationId: unlockInternalUser
+      summary: Clear failed-login lock state for an internal user
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VersionedAdministrationReason' }
+      responses:
+        '200': { description: Account unlocked }
+        '403': { description: Recent MFA step-up required }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Version conflict }
+  /admin/users/{id}/revoke-sessions:
+    post:
+      operationId: revokeInternalUserSessions
+      summary: Revoke every active session for an internal user
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AdministrationReason' }
+      responses:
+        '200': { description: Sessions revoked }
+        '403': { description: Recent MFA step-up required }
+  /internal/gateway/events:
+    post:
+      operationId: ingestSignedGatewayEvent
+      summary: Ingest one signed provider delivery event
+      description: >
+        Gateway-only endpoint. The HMAC is calculated over "<unix timestamp>.<exact raw body>".
+        Exact replays return the original ledger outcome; event-ID reuse with different evidence is rejected.
+      security: []
+      parameters:
+        - name: X-Gateway-Timestamp
+          in: header
+          required: true
+          schema: { type: string, pattern: '^[0-9]{10,}$' }
+        - name: X-Gateway-Signature
+          in: header
+          required: true
+          schema: { type: string, pattern: '^sha256=[a-f0-9]{64}$' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '../events/provider-message-event.schema.json' }
+      responses:
+        '200': { description: Event applied or accepted as an exact replay }
+        '401': { description: Signature missing, invalid or outside the replay window }
+        '409': { description: Event identifier reused with different evidence }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /internal/gateway/inbound:
+    post:
+      operationId: ingestSignedGatewayInboundMessage
+      summary: Ingest one signed inbound reply and enforce recognised opt-outs
+      description: >
+        Gateway-only endpoint. The HMAC is calculated over "<unix timestamp>.<exact raw body>".
+        The control plane resolves the contact from clientReference, applies exact configured STOP classification,
+        and creates an idempotent global suppression without persisting non-opt-out message content.
+      security: []
+      parameters:
+        - name: X-Gateway-Timestamp
+          in: header
+          required: true
+          schema: { type: string, pattern: '^[0-9]{10,}$' }
+        - name: X-Gateway-Signature
+          in: header
+          required: true
+          schema: { type: string, pattern: '^sha256=[a-f0-9]{64}$' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '../events/provider-inbound-message.schema.json' }
+      responses:
+        '200': { description: Inbound message accepted; response states whether an opt-out was recognised }
+        '401': { description: Signature missing, invalid or outside the replay window }
+        '404': { description: Campaign recipient reference not found }
+        '409': { description: Inbound event identifier reused with different evidence }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /filter-definitions:
+    get:
+      operationId: listFilterDefinitions
+      summary: List active filter definitions available to the current user
+      responses:
+        '200':
+          description: Active filter definitions
+  /cohorts/validate:
+    post:
+      operationId: validateCohort
+      summary: Validate a typed cohort definition
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/FilterGroup' }
+      responses:
+        '200': { description: Valid definition }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /cohorts/compile:
+    post:
+      operationId: compileCohort
+      summary: Compile a validated cohort against mandatory consent and suppression rules
+      description: Internal engineering endpoint. Production UIs must not expose generated SQL.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CompileCohortRequest' }
+      responses:
+        '200': { description: Parameterised cohort query }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /geography/countries:
+    get:
+      operationId: listCountries
+      summary: List configured countries
+      responses:
+        '200': { description: Country catalogue }
+  /geography/areas:
+    get:
+      operationId: listAdministrativeAreas
+      summary: List states, regions, LGAs or other administrative areas
+      parameters:
+        - { name: country, in: query, schema: { type: string, minLength: 2, maxLength: 2 } }
+        - { name: parent, in: query, schema: { type: string } }
+        - { name: level, in: query, schema: { type: integer, minimum: 1, maximum: 4 } }
+      responses:
+        '200': { description: Administrative areas }
+  /organisations:
+    get:
+      operationId: listOrganisations
+      summary: List internal organisation records
+      responses:
+        '200': { description: Organisation list }
+    post:
+      operationId: createOrganisation
+      summary: Create an internal organisation record
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateOrganisation' }
+      responses:
+        '201': { description: Organisation created }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /organisations/{id}:
+    get:
+      operationId: getOrganisation
+      summary: Retrieve an internal organisation record
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Organisation record }
+        '404': { $ref: '#/components/responses/NotFound' }
+    put:
+      operationId: updateOrganisation
+      summary: Update an organisation using optimistic concurrency
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateOrganisation' }
+      responses:
+        '200': { description: Organisation updated }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Organisation version conflict }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /organisations/{id}/status:
+    post:
+      operationId: setOrganisationStatus
+      summary: Govern an organisation lifecycle status
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OrganisationStatusChange' }
+      responses:
+        '200': { description: Organisation status changed }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Organisation version conflict }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /organisations/{id}/events:
+    get:
+      operationId: listOrganisationEvents
+      summary: List immutable organisation lifecycle events
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Organisation event history }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /consent-reviews:
+    get:
+      operationId: listConsentReviews
+      summary: List offline consent reviews
+      parameters:
+        - { name: organisationId, in: query, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Consent review list }
+    post:
+      operationId: createConsentReview
+      summary: Record an offline consent review for compliance decision
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateConsentReview' }
+      responses:
+        '201': { description: Consent review created in pending state }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /consent-reviews/{id}/decision:
+    post:
+      operationId: decideConsentReview
+      summary: Approve or reject a pending consent review
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConsentReviewDecision' }
+      responses:
+        '200': { description: Decision recorded }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /audience-imports/preview:
+    post:
+      operationId: previewAudienceImport
+      summary: Validate a CSV audience file without persisting raw identifiers
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+                defaultCountry: { type: string, default: NG }
+                msisdnColumn: { type: string, default: msisdn }
+                countryColumn: { type: string, default: country }
+                stateColumn: { type: string, default: state }
+                lgaColumn: { type: string, default: lga }
+                ageColumn: { type: string, default: age }
+                genderColumn: { type: string, default: gender }
+      responses:
+        '200':
+          description: Aggregate preview and row-level issues; no raw MSISDNs
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /campaigns:
+    get:
+      operationId: listCampaigns
+      summary: List internal campaigns
+      responses:
+        '200': { description: Campaign list }
+    post:
+      operationId: createCampaign
+      summary: Create a draft campaign
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateCampaign' }
+      responses:
+        '201': { description: Draft campaign created }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /campaigns/{id}/transition:
+    post:
+      operationId: transitionCampaign
+      summary: Apply a controlled campaign lifecycle transition
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CampaignTransition' }
+      responses:
+        '200': { description: Campaign transitioned }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /inbound-replies:
+    get:
+      summary: List governed inbound replies for authorised operations users
+      responses:
+        '200':
+          description: Inbound reply work queue
+  /inbound-replies/{id}/review:
+    post:
+      summary: Classify and optionally escalate one inbound reply
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expectedVersion, classification]
+              properties:
+                expectedVersion: { type: integer, format: int64, minimum: 1 }
+                classification: { type: string, enum: [OPT_OUT, QUESTION, COMPLAINT, OTHER] }
+                escalated: { type: boolean }
+                escalationReason: { type: string }
+      responses:
+        '200':
+          description: Updated inbound reply
+  /inbound-replies/{id}/legal-hold:
+    post:
+      summary: Apply or release a governed legal hold on retained inbound content
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expectedVersion, legalHold, reason]
+              properties:
+                expectedVersion: { type: integer, format: int64, minimum: 1 }
+                legalHold: { type: boolean }
+                reason: { type: string, minLength: 1 }
+      responses:
+        '200': { description: Legal hold state updated and audited }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Optimistic concurrency conflict }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /campaigns/{id}/inbound-metrics:
+    get:
+      summary: Read governed inbound reply and opt-out counts for one campaign
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200':
+          description: Inbound campaign metrics
+  /campaigns/{id}/execution-plan:
+    get:
+      summary: Evaluate measured sender capacity and forecast campaign completion
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Capacity evidence and admission decision }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /campaigns/{id}/execution/{action}:
+    post:
+      summary: Start, pause, resume, cancel or complete a governed campaign execution
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+        - in: path
+          name: action
+          required: true
+          schema: { type: string, enum: [start, pause, resume, cancel, complete] }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [expectedVersion]
+              properties:
+                expectedVersion: { type: integer, format: int64, minimum: 1 }
+                reason: { type: string }
+      responses:
+        '200': { description: Updated campaign and execution evidence }
+        '409': { description: Capacity, lifecycle or concurrency conflict }
+
+  /operations/dashboard:
+    get:
+      operationId: getOperationsDashboard
+      summary: Get authoritative operational campaign, queue, sender and incident counters
+      responses:
+        '200': { description: Operational dashboard snapshot }
+  /operations/incidents:
+    get:
+      operationId: listOperationsIncidents
+      summary: List operational incidents
+      responses:
+        '200': { description: Incident list }
+    post:
+      operationId: createOperationsIncident
+      summary: Create a governed operational incident
+      responses:
+        '201': { description: Incident created }
+  /operations/incidents/{id}:
+    put:
+      operationId: updateOperationsIncident
+      summary: Acknowledge, assign or resolve an incident using optimistic concurrency
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Incident updated }
+        '409': { description: Incident version conflict }
+  /operations/audit-events:
+    get:
+      operationId: searchAuditEvents
+      summary: Page through tamper-evident audit events
+      parameters:
+        - { name: afterSequence, in: query, schema: { type: integer, format: int64, minimum: 0 } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 1000 } }
+      responses:
+        '200': { description: Audit event page }
+  /operations/delivery-exceptions:
+    get:
+      operationId: listDeliveryExceptions
+      summary: List retryable, permanent and unknown delivery exceptions without exposing recipient MSISDNs
+      parameters:
+        - { name: campaignId, in: query, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500 } }
+      responses:
+        '200': { description: Delivery exception queue }
+  /campaigns/{id}/report:
+    get:
+      operationId: getCampaignReport
+      summary: Get an authoritative organisation-facing campaign report snapshot
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Campaign report snapshot }
+  /exports:
+    post:
+      operationId: requestControlledExport
+      summary: Request a purpose-bound controlled report or audit export
+      responses:
+        '202': { description: Export submitted for maker-checker approval }
+        '403': { description: Recent MFA step-up required }
+  /exports/{id}/decision:
+    post:
+      operationId: decideControlledExport
+      summary: Approve or reject an export request; the requester cannot approve their own export
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Export decision recorded }
+        '403': { description: Recent MFA step-up required }
+        '409': { description: Export state or version conflict }
+  /admin/filter-definitions:
+    get:
+      operationId: listAllFilterDefinitions
+      summary: listAllFilterDefinitions
+      responses:
+        '200': { description: Request completed }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+    post:
+      operationId: createFilterDefinition
+      summary: createFilterDefinition
+      responses:
+        '200': { description: Request completed }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+  /admin/filter-definitions/{code}:
+    put:
+      operationId: updateFilterDefinition
+      summary: updateFilterDefinition
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Request completed }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+  /audience-imports:
+    post:
+      operationId: intakeAudienceImport
+      summary: intakeAudienceImport
+      responses:
+        '200': { description: Request completed }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+  /audience-imports/{id}:
+    get:
+      operationId: getAudienceImport
+      summary: getAudienceImport
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Request completed }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+  /audience-imports/{id}/approve:
+    post:
+      operationId: approveAudienceImport
+      summary: approveAudienceImport
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Request completed }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+  /audience-snapshots/{id}:
+    get:
+      operationId: getAudienceSnapshot
+      summary: getAudienceSnapshot
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Request completed }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+  /auth/logout:
+    post:
+      operationId: logout
+      summary: logout
+      responses:
+        '200': { description: Request completed }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+  /auth/me:
+    get:
+      operationId: me
+      summary: me
+      responses:
+        '200': { description: Request completed }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+  /campaigns/{id}/audience-snapshots:
+    post:
+      operationId: createAudienceSnapshot
+      summary: createAudienceSnapshot
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Request completed }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+  /campaigns/{id}/message-versions:
+    get:
+      operationId: listMessageVersions
+      summary: listMessageVersions
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Request completed }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+    post:
+      operationId: createMessageVersion
+      summary: createMessageVersion
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Request completed }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+  /campaigns/{id}/metrics:
+    get:
+      operationId: getCampaignMetrics
+      summary: getCampaignMetrics
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Request completed }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+  /campaigns/{id}/release:
+    post:
+      operationId: releaseCampaignAudience
+      summary: releaseCampaignAudience
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Request completed }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+  /consent-events:
+    get:
+      operationId: listConsentEvents
+      summary: listConsentEvents
+      responses:
+        '200': { description: Request completed }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+  /consent-grants:
+    post:
+      operationId: createConsentGrant
+      summary: createConsentGrant
+      responses:
+        '200': { description: Request completed }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+  /consent-grants/{id}/withdraw:
+    post:
+      operationId: withdrawConsentGrant
+      summary: withdrawConsentGrant
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Request completed }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+  /internal/media:
+    get:
+      operationId: downloadSignedMedia
+      summary: downloadSignedMedia
+      responses:
+        '200': { description: Request completed }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+  /internal/sender-nodes/{id}/heartbeat:
+    post:
+      operationId: heartbeatSenderNode
+      summary: heartbeatSenderNode
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Request completed }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+  /internal/sender-sessions/{id}/heartbeat:
+    post:
+      operationId: heartbeatSenderSession
+      summary: heartbeatSenderSession
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Request completed }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+  /message-versions/{id}/approve:
+    post:
+      operationId: approveMessageVersion
+      summary: approveMessageVersion
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Request completed }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+  /sender-nodes:
+    get:
+      operationId: listSenderNodes
+      summary: listSenderNodes
+      responses:
+        '200': { description: Request completed }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+    post:
+      operationId: registerSenderNode
+      summary: registerSenderNode
+      responses:
+        '200': { description: Request completed }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+  /sender-pools:
+    get:
+      operationId: listSenderPools
+      summary: listSenderPools
+      responses:
+        '200': { description: Request completed }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+    post:
+      operationId: createSenderPool
+      summary: createSenderPool
+      responses:
+        '200': { description: Request completed }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+  /sender-pools/{id}:
+    put:
+      operationId: updateSenderPool
+      summary: updateSenderPool
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Request completed }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+  /sender-pools/{id}/capacity:
+    get:
+      operationId: getSenderPoolCapacity
+      summary: getSenderPoolCapacity
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Request completed }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+  /sender-sessions:
+    get:
+      operationId: listSenderSessions
+      summary: listSenderSessions
+      responses:
+        '200': { description: Request completed }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+    post:
+      operationId: registerSenderSession
+      summary: registerSenderSession
+      responses:
+        '200': { description: Request completed }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+  /sender-sessions/{id}/transition:
+    post:
+      operationId: transitionSenderSession
+      summary: transitionSenderSession
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Request completed }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+  /suppressions:
+    post:
+      operationId: createSuppression
+      summary: createSuppression
+      responses:
+        '200': { description: Request completed }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+  /suppressions/{id}/revoke:
+    post:
+      operationId: revokeSuppression
+      summary: revokeSuppression
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Request completed }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+components:
+  securitySchemes:
+    internalSession:
+      type: apiKey
+      in: cookie
+      name: campaign_session
+  responses:
+    ValidationError:
+      description: Request failed domain or validation rules
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+    NotFound:
+      description: Requested record does not exist
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorResponse' }
+  schemas:
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, minLength: 1 }
+    MFAVerificationRequest:
+      type: object
+      required: [challengeToken, code]
+      properties:
+        challengeToken: { type: string, minLength: 16 }
+        code: { type: string, pattern: '^[0-9]{6}$' }
+    StepUpRequest:
+      type: object
+      required: [code]
+      properties:
+        code: { type: string, pattern: '^[0-9]{6}$' }
+    InternalUserAccount:
+      type: object
+      required: [id, email, displayName, status, mfaRequired, roleCodes, version, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        displayName: { type: string }
+        status: { type: string, enum: [INVITED, ACTIVE, SUSPENDED, DISABLED] }
+        mfaRequired: { type: boolean }
+        roleCodes: { type: array, minItems: 1, items: { type: string } }
+        version: { type: integer, format: int64, minimum: 1 }
+        lastLoginAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    CreateInternalUser:
+      type: object
+      required: [email, displayName, temporaryPassword, roleCodes, reason]
+      properties:
+        email: { type: string, format: email }
+        displayName: { type: string, minLength: 2, maxLength: 200 }
+        temporaryPassword: { type: string, minLength: 20 }
+        roleCodes: { type: array, minItems: 1, items: { type: string } }
+        reason: { type: string, minLength: 5, maxLength: 500 }
+    UpdateInternalUser:
+      type: object
+      required: [displayName, status, roleCodes, mfaRequired, expectedVersion, reason]
+      properties:
+        displayName: { type: string, minLength: 2, maxLength: 200 }
+        status: { type: string, enum: [INVITED, ACTIVE, SUSPENDED, DISABLED] }
+        roleCodes: { type: array, minItems: 1, items: { type: string } }
+        mfaRequired: { type: boolean }
+        expectedVersion: { type: integer, format: int64, minimum: 1 }
+        reason: { type: string, minLength: 5, maxLength: 500 }
+    ResetInternalUserCredentials:
+      type: object
+      required: [temporaryPassword, expectedVersion, reason]
+      properties:
+        temporaryPassword: { type: string, minLength: 20 }
+        expectedVersion: { type: integer, format: int64, minimum: 1 }
+        reason: { type: string, minLength: 5, maxLength: 500 }
+    VersionedAdministrationReason:
+      type: object
+      required: [expectedVersion, reason]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 1 }
+        reason: { type: string, minLength: 5, maxLength: 500 }
+    AdministrationReason:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 5, maxLength: 500 }
+    ErrorResponse:
+      type: object
+      required: [error, message]
+      properties:
+        error: { type: string }
+        message: { type: string }
+        requestId: { type: string }
+        details: { type: object, additionalProperties: true }
+    FilterRule:
+      type: object
+      required: [definitionCode, operator, values]
+      properties:
+        definitionCode: { type: string }
+        operator: { type: string }
+        values: { type: array, items: {} }
+    FilterGroup:
+      type: object
+      required: [join]
+      properties:
+        join: { type: string, enum: [AND, OR] }
+        rules:
+          type: array
+          items: { $ref: '#/components/schemas/FilterRule' }
+        children:
+          type: array
+          items: { $ref: '#/components/schemas/FilterGroup' }
+    CompileCohortRequest:
+      type: object
+      required: [definition, organisationId, purposeId]
+      properties:
+        definition: { $ref: '#/components/schemas/FilterGroup' }
+        organisationId: { type: string, format: uuid }
+        purposeId: { type: string, format: uuid }
+        channel: { type: string, default: WHATSAPP }
+        asOf: { type: string, format: date-time }
+    CreateOrganisation:
+      type: object
+      required: [legalName]
+      properties:
+        legalName: { type: string, minLength: 1 }
+        tradingName: { type: string }
+        countryISO2: { type: string, minLength: 2, maxLength: 2 }
+        primaryContactName: { type: string }
+        primaryContactEmail: { type: string, format: email }
+        internalNotes: { type: string }
+    UpdateOrganisation:
+      allOf:
+        - { $ref: '#/components/schemas/CreateOrganisation' }
+        - type: object
+          required: [expectedVersion]
+          properties:
+            expectedVersion: { type: integer, minimum: 1 }
+            reason: { type: string }
+    OrganisationStatusChange:
+      type: object
+      required: [expectedVersion, status, reason]
+      properties:
+        expectedVersion: { type: integer, minimum: 1 }
+        status: { type: string, enum: [ACTIVE, SUSPENDED, UNDER_REVIEW, CLOSED] }
+        reason: { type: string, minLength: 1 }
+    CreateConsentReview:
+      type: object
+      required: [organisationId, name, channel, consentSource, wordingVersion]
+      properties:
+        organisationId: { type: string, format: uuid }
+        name: { type: string }
+        purposeDescription: { type: string }
+        channel: { type: string, enum: [WHATSAPP] }
+        consentSource: { type: string }
+        wordingVersion: { type: string }
+        evidenceObjectKeys: { type: array, items: { type: string } }
+        privacyNoticeReviewed: { type: boolean }
+        optOutProcessReviewed: { type: boolean }
+        sampleRecordsReviewed: { type: boolean }
+        permittedCountries: { type: array, items: { type: string } }
+        permittedMessageCategory: { type: string }
+        restrictions: { type: string }
+    ConsentReviewDecision:
+      type: object
+      required: [reviewerId, decision]
+      properties:
+        reviewerId: { type: string, format: uuid }
+        decision: { type: string, enum: [APPROVED, REJECTED] }
+        expiresAt: { type: string, format: date-time }
+        reason: { type: string }
+    CreateCampaign:
+      type: object
+      required:
+        [organisationId, name, purposeId, consentReviewId, maximumUniqueRecipients, senderPool, createdBy]
+      properties:
+        organisationId: { type: string, format: uuid }
+        name: { type: string }
+        purposeId: { type: string, format: uuid }
+        consentReviewId: { type: string, format: uuid }
+        requestedStartAt: { type: string, format: date-time }
+        completionDeadlineAt: { type: string, format: date-time }
+        maximumUniqueRecipients: { type: integer, format: int64, minimum: 1 }
+        maximumMessagesPerRecipient: { type: integer, enum: [1], default: 1 }
+        senderPool: { type: string }
+        createdBy: { type: string, format: uuid }
+    CampaignTransition:
+      type: object
+      required: [action, actorId]
+      properties:
+        action:
+          type: string
+          enum:
+            [SUBMIT_CONSENT_REVIEW, APPROVE_CONSENT, START_AUDIENCE_BUILD, VALIDATE_AUDIENCE,
+             SUBMIT_MESSAGE, APPROVE_MESSAGE, APPROVE_COMMERCIAL, REQUEST_FINAL_APPROVAL,
+             APPROVE_FINAL, START_DISPATCH, PAUSE, RESUME, COMPLETE, CANCEL]
+        actorId: { type: string, format: uuid }
+        reason: { type: string }
+        audienceSnapshotId: { type: string, format: uuid }
+        audienceSnapshotHash: { type: string }
+        eligibleAudienceCount: { type: integer, format: int64 }
+        messageVersionId: { type: string, format: uuid }
+        messageBody: { type: string }
+        failedCount: { type: integer, format: int64 }
+        unknownCount: { type: integer, format: int64 }

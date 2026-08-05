@@ -1,0 +1,118 @@
+package campaign
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"testing"
+	"time"
+)
+
+func baseCampaign(t *testing.T) Campaign {
+	t.Helper()
+	start := time.Date(2026, 8, 5, 8, 0, 0, 0, time.UTC)
+	deadline := time.Date(2026, 8, 5, 20, 0, 0, 0, time.UTC)
+	entity, err := New(CreateInput{
+		Transport:      validTransport(),
+		OrganisationID: "org-1", Name: "Festival reminder", PurposeID: "purpose-1",
+		ConsentReviewID: "review-1", RequestedStartAt: &start, CompletionDeadlineAt: &deadline,
+		MaximumUniqueRecipients: 50_000, MaximumMessagesPerRecipient: 1, SenderPool: "EVENTS-NG", CreatedBy: "operator-1",
+	}, time.Date(2026, 8, 4, 6, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return entity
+}
+
+func transition(t *testing.T, entity Campaign, input TransitionInput, now time.Time) Campaign {
+	t.Helper()
+	input.ExpectedVersion = entity.Version
+	next, err := entity.Transition(input, now)
+	if err != nil {
+		t.Fatalf("transition %s: %v", input.Action, err)
+	}
+	return next
+}
+
+func TestCampaignFourEyesFinalApproval(t *testing.T) {
+	entity := baseCampaign(t)
+	now := time.Date(2026, 8, 4, 6, 0, 0, 0, time.UTC)
+	steps := []TransitionInput{
+		{Action: ActionSubmitConsentReview, ActorID: "operator-1"},
+		{Action: ActionApproveConsent, ActorID: "compliance-1"},
+		{Action: ActionStartAudienceBuild, ActorID: "operator-1"},
+		{Action: ActionValidateAudience, ActorID: "operator-1", AudienceSnapshotID: "snap-1", AudienceSnapshotHash: "hash", EligibleAudienceCount: 49_000},
+		{Action: ActionSubmitMessage, ActorID: "operator-1", MessageVersionID: "msg-1", MessageContentHash: HashMessage("Approved message")},
+		{Action: ActionApproveMessage, ActorID: "approver-1"},
+		{Action: ActionApproveCommercial, ActorID: "finance-1"},
+		{Action: ActionRequestFinalApproval, ActorID: "operator-1"},
+	}
+	for _, step := range steps {
+		entity = transition(t, entity, step, now)
+	}
+	if _, err := entity.Transition(TransitionInput{Action: ActionApproveFinal, ActorID: "operator-1", ExpectedVersion: entity.Version}, now); err == nil {
+		t.Fatal("creator should not be able to provide final approval")
+	}
+	entity = transition(t, entity, TransitionInput{Action: ActionApproveFinal, ActorID: "approver-2"}, now)
+	if entity.Status != StatusScheduled {
+		t.Fatalf("unexpected status %s", entity.Status)
+	}
+}
+
+func TestAudienceCannotExceedAuthorisedMaximum(t *testing.T) {
+	entity := baseCampaign(t)
+	now := time.Now()
+	entity = transition(t, entity, TransitionInput{Action: ActionSubmitConsentReview, ActorID: "operator"}, now)
+	entity = transition(t, entity, TransitionInput{Action: ActionApproveConsent, ActorID: "reviewer"}, now)
+	entity = transition(t, entity, TransitionInput{Action: ActionStartAudienceBuild, ActorID: "operator"}, now)
+	_, err := entity.Transition(TransitionInput{
+		Action: ActionValidateAudience, ActorID: "operator", AudienceSnapshotID: "snap",
+		AudienceSnapshotHash: "hash", EligibleAudienceCount: 50_001, ExpectedVersion: entity.Version,
+	}, now)
+	if err == nil {
+		t.Fatal("expected entitlement limit rejection")
+	}
+}
+
+func TestConcurrentTransitionsUseOptimisticConcurrency(t *testing.T) {
+	repo := NewMemoryRepository()
+	service := NewService(repo)
+	entity := baseCampaign(t)
+	entity.Status = StatusScheduled
+	entity.Version = 9
+	if err := repo.Create(context.Background(), entity); err != nil {
+		t.Fatal(err)
+	}
+
+	inputs := []TransitionInput{
+		{Action: ActionStartDispatch, ActorID: "operator-a", ExpectedVersion: 9},
+		{Action: ActionCancel, ActorID: "operator-b", Reason: "client cancelled", ExpectedVersion: 9},
+	}
+	var wg sync.WaitGroup
+	errorsSeen := make(chan error, len(inputs))
+	for _, input := range inputs {
+		wg.Add(1)
+		go func(in TransitionInput) {
+			defer wg.Done()
+			_, err := service.Transition(context.Background(), entity.ID, in)
+			errorsSeen <- err
+		}(input)
+	}
+	wg.Wait()
+	close(errorsSeen)
+
+	successes, conflicts := 0, 0
+	for err := range errorsSeen {
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, ErrConflict):
+			conflicts++
+		default:
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Fatalf("expected one success and one conflict, got successes=%d conflicts=%d", successes, conflicts)
+	}
+}

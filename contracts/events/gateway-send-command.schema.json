@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://campaign-platform.internal/contracts/gateway-send-command.schema.json",
+  "title": "Signed OpenWA Gateway Send Command",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "idempotencyKey",
+    "gatewayPoolId",
+    "sessionId",
+    "recipientMsisdn",
+    "messageType",
+    "clientReference"
+  ],
+  "properties": {
+    "idempotencyKey": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9:_-]{16,200}$"
+    },
+    "sessionId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9:_-]{1,128}$"
+    },
+    "recipientMsisdn": {
+      "type": "string",
+      "pattern": "^\\+[1-9][0-9]{7,14}$"
+    },
+    "messageType": {
+      "enum": [
+        "text",
+        "image",
+        "video",
+        "document"
+      ]
+    },
+    "body": {
+      "type": "string",
+      "maxLength": 16384
+    },
+    "mediaUrl": {
+      "type": "string",
+      "format": "uri",
+      "maxLength": 2048
+    },
+    "clientReference": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "gatewayPoolId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9:_-]{1,128}$"
+    }
+  }
+}

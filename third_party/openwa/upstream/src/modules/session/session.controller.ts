@@ -1,0 +1,411 @@
+import { Controller, Get, Post, Delete, Param, Query, Body, HttpCode, HttpStatus, ParseUUIDPipe } from '@nestjs/common';
+import { ApiTags, ApiOperation, ApiResponse, ApiParam, ApiQuery } from '@nestjs/swagger';
+import { SessionService } from './session.service';
+import {
+  CreateSessionDto,
+  SessionResponseDto,
+  QRCodeResponseDto,
+  MarkChatReadDto,
+  DeleteChatDto,
+  SendChatStateDto,
+  RequestPairingCodeDto,
+  PairingCodeResponseDto,
+  ChatSummaryDto,
+} from './dto';
+import { Session } from './entities/session.entity';
+import { ChatSummary } from '../../engine/interfaces/whatsapp-engine.interface';
+import { AuditService } from '../audit/audit.service';
+import { AuditAction } from '../audit/entities/audit-log.entity';
+import { RequireRole, CurrentApiKey, SessionScoped, RequireUnscopedKey } from '../auth/decorators/auth.decorators';
+import { ApiKey, ApiKeyRole } from '../auth/entities/api-key.entity';
+
+@ApiTags('sessions')
+@Controller('sessions')
+// The `:id` route param here is a WhatsApp session id, so the ApiKeyGuard enforces a key's
+// allowedSessions scope against it (other controllers' `:id` is an unrelated resource id).
+@SessionScoped()
+export class SessionController {
+  constructor(
+    private readonly sessionService: SessionService,
+    private readonly auditService: AuditService,
+  ) {}
+
+  private transformSession(session: Session): SessionResponseDto {
+    // isActive() is the engine map itself, so this is read at response time — a session that just
+    // finished reconnecting reports the engine in the same response that reports its status.
+    return SessionResponseDto.fromEntity(session, this.sessionService.isActive(session.id));
+  }
+
+  @Post()
+  @RequireRole(ApiKeyRole.OPERATOR)
+  // Creating a session has no existing session id for the class-level @SessionScoped fence to check,
+  // and the new session is outside the caller's allowlist by construction — so a key restricted to
+  // specific sessions cannot create one. Different metadata key from @SessionScoped; they coexist.
+  @RequireUnscopedKey()
+  @ApiOperation({ summary: 'Create a new WhatsApp session' })
+  @ApiResponse({
+    status: 201,
+    description: 'Session created',
+    type: SessionResponseDto,
+  })
+  @ApiResponse({ status: 409, description: 'Session name already exists' })
+  async create(@Body() dto: CreateSessionDto): Promise<SessionResponseDto> {
+    const session = await this.sessionService.create(dto);
+    await this.auditService.logInfo(AuditAction.SESSION_CREATED, {
+      sessionId: session.id,
+      sessionName: session.name,
+    });
+    return this.transformSession(session);
+  }
+
+  @Get()
+  @ApiOperation({ summary: 'List all sessions' })
+  @ApiResponse({
+    status: 200,
+    description: 'List of sessions',
+    type: [SessionResponseDto],
+  })
+  @ApiQuery({ name: 'limit', required: false, description: 'Max sessions to return (1-1000, default 1000)' })
+  @ApiQuery({ name: 'offset', required: false, description: 'Number of sessions to skip (for paging)' })
+  async findAll(
+    @CurrentApiKey() apiKey?: ApiKey,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ): Promise<SessionResponseDto[]> {
+    // Scope to the key's allowedSessions so a session-restricted key cannot enumerate every
+    // session. A null/empty allowlist (e.g. ADMIN) still lists all.
+    const sessions = await this.sessionService.findAll(apiKey?.allowedSessions, {
+      limit: limit ? parseInt(limit, 10) : undefined,
+      offset: offset ? parseInt(offset, 10) : undefined,
+    });
+    return sessions.map(s => this.transformSession(s));
+  }
+
+  @Get(':id')
+  @ApiOperation({ summary: 'Get session by ID' })
+  @ApiParam({ name: 'id', description: 'Session ID' })
+  @ApiResponse({
+    status: 200,
+    description: 'Session details',
+    type: SessionResponseDto,
+  })
+  @ApiResponse({ status: 404, description: 'Session not found' })
+  async findOne(@Param('id', ParseUUIDPipe) id: string): Promise<SessionResponseDto> {
+    const session = await this.sessionService.findOne(id);
+    return this.transformSession(session);
+  }
+
+  @Delete(':id')
+  @RequireRole(ApiKeyRole.OPERATOR)
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({ summary: 'Delete a session' })
+  @ApiParam({ name: 'id', description: 'Session ID' })
+  @ApiResponse({ status: 204, description: 'Session deleted' })
+  @ApiResponse({ status: 404, description: 'Session not found' })
+  @ApiResponse({
+    status: 409,
+    description:
+      'A credential teardown for the same session name is still in flight. Retryable — the body ' +
+      "carries `code: 'SESSION_NAME_TEARDOWN_PENDING'`; wait for it to settle and retry. No " +
+      'destructive side effect runs before this refusal.',
+  })
+  async delete(@Param('id', ParseUUIDPipe) id: string): Promise<void> {
+    const session = await this.sessionService.findOne(id);
+    await this.sessionService.delete(id);
+    await this.auditService.logInfo(AuditAction.SESSION_DELETED, {
+      sessionId: id,
+      sessionName: session.name,
+    });
+  }
+
+  @Post(':id/start')
+  @RequireRole(ApiKeyRole.OPERATOR)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Start a session and initialize WhatsApp connection',
+  })
+  @ApiParam({ name: 'id', description: 'Session ID' })
+  @ApiResponse({
+    status: 200,
+    description: 'Session started',
+    type: SessionResponseDto,
+  })
+  @ApiResponse({ status: 400, description: 'Session already started' })
+  @ApiResponse({ status: 404, description: 'Session not found' })
+  @ApiResponse({
+    status: 409,
+    description:
+      'A credential teardown for the same session name is still in flight (e.g. a prior logout ' +
+      'that owns destructive cleanup). Retryable — the body carries `code: ' +
+      'SESSION_NAME_TEARDOWN_PENDING`; wait for it to settle and retry. No destructive side ' +
+      'effect runs before this refusal.',
+  })
+  async start(@Param('id', ParseUUIDPipe) id: string): Promise<SessionResponseDto> {
+    const session = await this.sessionService.start(id);
+    await this.auditService.logInfo(AuditAction.SESSION_STARTED, {
+      sessionId: session.id,
+      sessionName: session.name,
+    });
+    return this.transformSession(session);
+  }
+
+  @Post(':id/stop')
+  @RequireRole(ApiKeyRole.OPERATOR)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Stop a session and disconnect WhatsApp' })
+  @ApiParam({ name: 'id', description: 'Session ID' })
+  @ApiResponse({
+    status: 200,
+    description: 'Session stopped',
+    type: SessionResponseDto,
+  })
+  @ApiResponse({ status: 404, description: 'Session not found' })
+  async stop(@Param('id', ParseUUIDPipe) id: string): Promise<SessionResponseDto> {
+    const session = await this.sessionService.stop(id);
+    await this.auditService.logInfo(AuditAction.SESSION_STOPPED, {
+      sessionId: session.id,
+      sessionName: session.name,
+    });
+    return this.transformSession(session);
+  }
+
+  @Post(':id/logout')
+  @RequireRole(ApiKeyRole.OPERATOR)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Log out of WhatsApp (unlinks this device) and stop the session',
+    description:
+      'Attempts an engine-native unlink of this companion device, then tears the session down ' +
+      'locally. `200` means the engine-native unlink operation completed AND the required local ' +
+      'credential cleanup completed — for Baileys a valid companion identity, an acknowledged ' +
+      '`remove-companion-device` IQ response, and removal of the on-disk auth dir; for ' +
+      'whatsapp-web.js the native `Client.logout()` promise settled. `200` is NOT an independent ' +
+      'observation that the handset UI no longer shows the linked device. Because a completed ' +
+      'unlink wipes the stored credentials, reconnecting after a `200` always requires a fresh QR ' +
+      'scan or pairing code.',
+  })
+  @ApiParam({ name: 'id', description: 'Session ID' })
+  @ApiResponse({
+    status: 200,
+    description:
+      'Unlink operation and required local cleanup completed; session is stopped and `phone` is ' +
+      'cleared. Recorded in the audit log as `session_logged_out`.',
+    content: {
+      'application/json': {
+        schema: { $ref: '#/components/schemas/SessionResponseDto' },
+        example: {
+          id: '8f3c2b1a-9d4e-4c7a-8b2f-1e6d5a4c3b2a',
+          name: 'my-bot',
+          status: 'disconnected',
+          phone: null,
+          pushName: null,
+          connectedAt: null,
+          lastActive: '2026-06-25T09:01:55.000Z',
+          createdAt: '2026-06-20T11:30:00.000Z',
+          updatedAt: '2026-06-25T09:11:00.000Z',
+          lastError: null,
+        },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'Session is not started (no engine to send through); the row is left untouched',
+  })
+  @ApiResponse({ status: 404, description: 'Session not found' })
+  @ApiResponse({
+    status: 502,
+    description:
+      'Session was stopped locally, but the logout operation is incomplete (no send, no ' +
+      'acknowledgement, timeout/transport error, or local-cleanup failure). Retryable — the ' +
+      "body carries `code: 'SESSION_LOGOUT_INCOMPLETE'`; `phone` is cleared and no success audit " +
+      'is written. Start the session again and retry the logout.',
+  })
+  async logout(@Param('id', ParseUUIDPipe) id: string): Promise<SessionResponseDto> {
+    const session = await this.sessionService.logout(id);
+    await this.auditService.logInfo(AuditAction.SESSION_LOGGED_OUT, {
+      sessionId: session.id,
+      sessionName: session.name,
+    });
+    return this.transformSession(session);
+  }
+
+  @Post(':id/force-kill')
+  @RequireRole(ApiKeyRole.OPERATOR)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Force-kill a stuck session (SIGKILL its wedged engine, then tear it down)' })
+  @ApiParam({ name: 'id', description: 'Session ID' })
+  @ApiResponse({
+    status: 200,
+    description: 'Session force-killed',
+    type: SessionResponseDto,
+  })
+  @ApiResponse({ status: 400, description: 'Session is not started' })
+  @ApiResponse({ status: 404, description: 'Session not found' })
+  async forceKill(@Param('id', ParseUUIDPipe) id: string): Promise<SessionResponseDto> {
+    const session = await this.sessionService.forceKill(id);
+    await this.auditService.logInfo(AuditAction.SESSION_FORCE_KILLED, {
+      sessionId: session.id,
+      sessionName: session.name,
+    });
+    return this.transformSession(session);
+  }
+
+  @Get(':id/qr')
+  @RequireRole(ApiKeyRole.OPERATOR)
+  @ApiOperation({ summary: 'Get QR code for session authentication' })
+  @ApiParam({ name: 'id', description: 'Session ID' })
+  @ApiResponse({
+    status: 200,
+    description: 'QR code data',
+    type: QRCodeResponseDto,
+  })
+  @ApiResponse({
+    status: 400,
+    description: 'QR code not ready or session already authenticated',
+  })
+  @ApiResponse({ status: 404, description: 'Session not found' })
+  async getQRCode(@Param('id', ParseUUIDPipe) id: string): Promise<QRCodeResponseDto> {
+    const qrCode = await this.sessionService.getQRCode(id);
+    await this.auditService.logInfo(AuditAction.SESSION_QR_GENERATED, {
+      sessionId: id,
+    });
+    return qrCode;
+  }
+
+  @Post(':id/pairing-code')
+  @RequireRole(ApiKeyRole.OPERATOR)
+  @ApiOperation({ summary: 'Request an 8-char pairing code to link via phone number (alternative to QR)' })
+  @ApiParam({ name: 'id', description: 'Session ID' })
+  @ApiResponse({ status: 201, description: 'Pairing code generated', type: PairingCodeResponseDto })
+  @ApiResponse({ status: 400, description: 'Session not started or already authenticated' })
+  @ApiResponse({ status: 404, description: 'Session not found' })
+  async requestPairingCode(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: RequestPairingCodeDto,
+  ): Promise<PairingCodeResponseDto> {
+    return this.sessionService.requestPairingCode(id, dto.phoneNumber);
+  }
+
+  @Get(':id/groups')
+  @ApiOperation({ summary: 'Get all groups for a session' })
+  @ApiParam({ name: 'id', description: 'Session ID' })
+  @ApiResponse({
+    status: 200,
+    description: 'List of groups the session is a member of',
+  })
+  @ApiResponse({ status: 400, description: 'Session not ready' })
+  @ApiResponse({ status: 404, description: 'Session not found' })
+  @ApiQuery({ name: 'limit', required: false, description: 'Max groups to return (1–1000, default 1000)' })
+  @ApiQuery({ name: 'offset', required: false, description: 'Number of groups to skip (for paging)' })
+  async getGroups(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ): Promise<{ id: string; name: string; linkedParentJID?: string | null }[]> {
+    return this.sessionService.getGroups(id, {
+      limit: limit ? parseInt(limit, 10) : undefined,
+      offset: offset ? parseInt(offset, 10) : undefined,
+    });
+  }
+
+  @Get(':id/chats')
+  @ApiOperation({ summary: 'Get active chats for a session' })
+  @ApiParam({ name: 'id', description: 'Session ID' })
+  @ApiResponse({ status: 200, description: 'List of active chats (most recent first)', type: [ChatSummaryDto] })
+  @ApiResponse({ status: 400, description: 'Session not ready' })
+  @ApiResponse({ status: 404, description: 'Session not found' })
+  @ApiQuery({ name: 'limit', required: false, description: 'Max chats to return (1–1000, default 1000)' })
+  @ApiQuery({ name: 'offset', required: false, description: 'Number of chats to skip (for paging)' })
+  async getChats(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ): Promise<ChatSummary[]> {
+    return this.sessionService.getChats(id, {
+      limit: limit ? parseInt(limit, 10) : undefined,
+      offset: offset ? parseInt(offset, 10) : undefined,
+    });
+  }
+
+  @Post(':id/chats/read')
+  @RequireRole(ApiKeyRole.OPERATOR)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Mark a chat as read/seen' })
+  @ApiParam({ name: 'id', description: 'Session ID' })
+  @ApiResponse({ status: 200, description: 'Chat marked as read successfully' })
+  @ApiResponse({ status: 400, description: 'Session not ready' })
+  @ApiResponse({ status: 404, description: 'Session not found' })
+  async markChatRead(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: MarkChatReadDto,
+  ): Promise<{ success: boolean }> {
+    const success = await this.sessionService.sendSeen(id, dto.chatId);
+    return { success };
+  }
+
+  @Post(':id/chats/unread')
+  @RequireRole(ApiKeyRole.OPERATOR)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Mark a chat as unread' })
+  @ApiParam({ name: 'id', description: 'Session ID' })
+  @ApiResponse({ status: 200, description: 'Chat marked as unread successfully' })
+  @ApiResponse({ status: 400, description: 'Session not ready' })
+  @ApiResponse({ status: 404, description: 'Session not found' })
+  async markChatUnread(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: MarkChatReadDto,
+  ): Promise<{ success: boolean }> {
+    const success = await this.sessionService.markUnread(id, dto.chatId);
+    return { success };
+  }
+
+  @Post(':id/chats/delete')
+  @RequireRole(ApiKeyRole.OPERATOR)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Delete a chat from the chat list (e.g. a group you have left)' })
+  @ApiParam({ name: 'id', description: 'Session ID' })
+  @ApiResponse({ status: 200, description: 'Chat deleted successfully' })
+  @ApiResponse({ status: 400, description: 'Session not ready' })
+  @ApiResponse({ status: 404, description: 'Session not found' })
+  async deleteChat(@Param('id', ParseUUIDPipe) id: string, @Body() dto: DeleteChatDto): Promise<{ success: boolean }> {
+    const success = await this.sessionService.deleteChat(id, dto.chatId);
+    return { success };
+  }
+
+  @Post(':id/chats/typing')
+  @RequireRole(ApiKeyRole.OPERATOR)
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: "Send a typing/recording presence indicator to a chat (or clear it with 'paused')" })
+  @ApiParam({ name: 'id', description: 'Session ID' })
+  @ApiResponse({ status: 200, description: 'Presence sent' })
+  @ApiResponse({ status: 404, description: 'Session not found' })
+  async sendChatState(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: SendChatStateDto,
+  ): Promise<{ success: boolean }> {
+    await this.sessionService.sendChatState(id, dto.chatId, dto.state);
+    return { success: true };
+  }
+
+  @Get('stats/overview')
+  @ApiOperation({
+    summary: 'Get session statistics for multi-session monitoring',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Session statistics including counts and memory usage',
+  })
+  async getStats(@CurrentApiKey() apiKey?: ApiKey): Promise<{
+    total: number;
+    active: number;
+    ready: number;
+    disconnected: number;
+    byStatus: Record<string, number>;
+    memoryUsage: { heapUsed: number; heapTotal: number; rss: number };
+  }> {
+    // Scope aggregate stats to the key's allowedSessions so a session-restricted key cannot enumerate
+    // global session counts/status (the route carries no :id for the guard to scope against).
+    return this.sessionService.getStats(apiKey?.allowedSessions);
+  }
+}

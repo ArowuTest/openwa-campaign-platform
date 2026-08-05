@@ -1,0 +1,147 @@
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import {
+  IsString,
+  IsNotEmpty,
+  IsOptional,
+  MaxLength,
+  IsUrl,
+  ValidateIf,
+  IsArray,
+  ArrayMaxSize,
+  IsBoolean,
+} from 'class-validator';
+import { ToStrictBoolean } from '../../../common/utils/strict-boolean';
+
+const MENTIONS_DESCRIPTION =
+  'WIDs to @mention (e.g. ["62811@c.us"]). The text/caption must also contain the @<number> token.';
+
+// Single source of truth for the text-body cap, shared with the agent-tool input schemas
+// (src/core/agent-tools/tools/message.tools.ts) so MCP and REST enforce the same limit.
+export const MESSAGE_TEXT_MAX_LENGTH = 4096;
+
+export class SendTextMessageDto {
+  @ApiProperty({
+    description: 'WhatsApp chat ID (phone@c.us for individual, groupId@g.us for groups)',
+    example: '628123456789@c.us',
+  })
+  @IsString()
+  @IsNotEmpty()
+  chatId: string;
+
+  @ApiProperty({
+    description: 'Text message content',
+    example: 'Hello from OpenWA!',
+    maxLength: MESSAGE_TEXT_MAX_LENGTH,
+  })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(MESSAGE_TEXT_MAX_LENGTH)
+  text: string;
+
+  @ApiPropertyOptional({ description: MENTIONS_DESCRIPTION, example: ['628123456789@c.us'], type: [String] })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(1024)
+  @IsString({ each: true })
+  @MaxLength(64, { each: true })
+  mentions?: string[];
+}
+
+export class SendMediaMessageDto {
+  @ApiProperty({
+    description: 'WhatsApp chat ID',
+    example: '628123456789@c.us',
+  })
+  @IsString()
+  @IsNotEmpty()
+  chatId: string;
+
+  @ApiPropertyOptional({
+    description: 'Media URL (http/https)',
+    example: 'https://example.com/image.jpg',
+  })
+  @IsOptional()
+  @IsUrl()
+  @ValidateIf((o: SendMediaMessageDto) => !o.base64)
+  url?: string;
+
+  @ApiPropertyOptional({
+    description: 'Base64 encoded media data',
+  })
+  @IsOptional()
+  @IsString()
+  @ValidateIf((o: SendMediaMessageDto) => !o.url)
+  base64?: string;
+
+  @ApiPropertyOptional({
+    description: 'Media MIME type (required when using base64)',
+    example: 'image/jpeg',
+  })
+  @IsOptional()
+  @IsString()
+  mimetype?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "Filename for the media. Only rendered on document sends — defaults to 'file' when omitted (a URL-based document send on whatsapp-web.js first derives the URL basename)",
+    example: 'image.jpg',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  filename?: string;
+
+  @ApiPropertyOptional({
+    description: 'Caption for the media',
+    example: 'Check out this image!',
+    maxLength: 1024,
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(1024)
+  caption?: string;
+
+  @ApiPropertyOptional({ description: MENTIONS_DESCRIPTION, example: ['628123456789@c.us'], type: [String] })
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(1024)
+  @IsString({ each: true })
+  @MaxLength(64, { each: true })
+  mentions?: string[];
+}
+
+export class SendAudioMessageDto extends SendMediaMessageDto {
+  @ApiPropertyOptional({
+    description:
+      'Send as a WhatsApp voice note (PTT — mic bubble + waveform). Provide audio/ogg; codecs=opus ' +
+      'bytes for reliable playback; when the mimetype is omitted it defaults to that for voice notes. ' +
+      'Expects a JSON boolean. Default false = plain audio file. Only valid on send-audio.',
+  })
+  @ToStrictBoolean()
+  @IsOptional()
+  @IsBoolean()
+  ptt?: boolean;
+}
+
+export class MessageResponseDto {
+  @ApiProperty({
+    description:
+      'The message id, assigned when the gateway accepts the message for sending. A 201 here means the ' +
+      'message was handed to the WhatsApp client — it does NOT confirm delivery. WhatsApp does not reject ' +
+      'an unregistered recipient synchronously, so a message to a number that is not on WhatsApp still ' +
+      'returns 201 with a valid messageId; whether it later delivers, stalls, or is reported as an error ' +
+      'reaches you asynchronously, if at all. To confirm a number is on WhatsApp before ' +
+      'sending, use GET /api/sessions/{sessionId}/contacts/check/{number}; track real delivery via the ' +
+      'message `status` field (sent → delivered → read, or failed if WhatsApp reports an error for it). ' +
+      'A message resting at `sent` is not diagnostic on its own: a registered recipient whose device has ' +
+      'not come online since the send stays at `sent` too.',
+    example: 'true_628123456789@c.us_3EB0123456789',
+  })
+  messageId: string;
+
+  @ApiProperty({
+    description: 'Unix timestamp (seconds) at which the gateway accepted the message for sending.',
+    example: 1706868000,
+  })
+  timestamp: number;
+}

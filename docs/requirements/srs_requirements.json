@@ -1,0 +1,3882 @@
+[
+  {
+    "id": "REP-001",
+    "cells": [
+      "REP-001",
+      "Create a new private repository with no public fork relationship.",
+      "Must",
+      "Repository visibility tests confirm access is restricted to approved organisation members."
+    ],
+    "table": 13
+  },
+  {
+    "id": "REP-002",
+    "cells": [
+      "REP-002",
+      "Retain the OpenWA MIT licence and original notices.",
+      "Must",
+      "Licence and NOTICE/UPSTREAM files are present in every release artefact."
+    ],
+    "table": 13
+  },
+  {
+    "id": "REP-003",
+    "cells": [
+      "REP-003",
+      "Record the exact imported upstream URL, commit SHA and import date.",
+      "Must",
+      "UPSTREAM.md and build metadata identify the baseline."
+    ],
+    "table": 13
+  },
+  {
+    "id": "REP-004",
+    "cells": [
+      "REP-004",
+      "Configure upstream as read-only reference only.",
+      "Must",
+      "No automated push or merge path exists from upstream."
+    ],
+    "table": 13
+  },
+  {
+    "id": "REP-005",
+    "cells": [
+      "REP-005",
+      "Fetch upstream changes into an isolated review branch.",
+      "Must",
+      "Changes cannot reach main without internal pull request and required checks."
+    ],
+    "table": 13
+  },
+  {
+    "id": "REP-006",
+    "cells": [
+      "REP-006",
+      "Disable or restrict private repository forking.",
+      "Must",
+      "Organisation and repository policy evidence exists."
+    ],
+    "table": 13
+  },
+  {
+    "id": "REP-007",
+    "cells": [
+      "REP-007",
+      "Protect main and release branches.",
+      "Must",
+      "Direct push, force push and unreviewed merge are blocked."
+    ],
+    "table": 13
+  },
+  {
+    "id": "REP-008",
+    "cells": [
+      "REP-008",
+      "Require code-owner approval for gateway, security, database and infrastructure changes.",
+      "Must",
+      "A test pull request demonstrates enforcement."
+    ],
+    "table": 13
+  },
+  {
+    "id": "REP-009",
+    "cells": [
+      "REP-009",
+      "Pin dependencies and container images.",
+      "Must",
+      "Lockfiles and immutable image references are committed."
+    ],
+    "table": 13
+  },
+  {
+    "id": "REP-010",
+    "cells": [
+      "REP-010",
+      "Generate a software bill of materials for releases.",
+      "Must",
+      "Release pipeline produces and retains an SBOM."
+    ],
+    "table": 13
+  },
+  {
+    "id": "REP-011",
+    "cells": [
+      "REP-011",
+      "Scan source, dependencies, secrets and images.",
+      "Must",
+      "CI fails for configured critical findings unless an approved exception exists."
+    ],
+    "table": 13
+  },
+  {
+    "id": "REP-012",
+    "cells": [
+      "REP-012",
+      "Do not automatically deploy upstream or dependency updates.",
+      "Must",
+      "All updates require review, tests and staging approval."
+    ],
+    "table": 13
+  },
+  {
+    "id": "GWY-001",
+    "cells": [
+      "GWY-001",
+      "Expose a versioned internal provider API independent of the OpenWA public API.",
+      "Must",
+      "Contract tests pass against the provider interface."
+    ],
+    "table": 14
+  },
+  {
+    "id": "GWY-002",
+    "cells": [
+      "GWY-002",
+      "Require an idempotency key for every delivery command.",
+      "Must",
+      "Duplicate command returns the original outcome and does not perform another send."
+    ],
+    "table": 14
+  },
+  {
+    "id": "GWY-003",
+    "cells": [
+      "GWY-003",
+      "Own each live session on exactly one worker node.",
+      "Must",
+      "Lease/ownership tests prevent concurrent activation."
+    ],
+    "table": 14
+  },
+  {
+    "id": "GWY-004",
+    "cells": [
+      "GWY-004",
+      "Persist session state on an encrypted worker volume.",
+      "Must",
+      "Restart test restores authorised sessions without re-pairing where provider permits."
+    ],
+    "table": 14
+  },
+  {
+    "id": "GWY-005",
+    "cells": [
+      "GWY-005",
+      "Report heartbeat, build version, capacity, queue depth and resource health.",
+      "Must",
+      "Control plane marks stale worker unavailable within configured threshold."
+    ],
+    "table": 14
+  },
+  {
+    "id": "GWY-006",
+    "cells": [
+      "GWY-006",
+      "Report session connection, authentication, last-success and failure state.",
+      "Must",
+      "Operations dashboard reflects forced disconnects and reconnections."
+    ],
+    "table": 14
+  },
+  {
+    "id": "GWY-007",
+    "cells": [
+      "GWY-007",
+      "Accept work only for sessions currently leased to the worker.",
+      "Must",
+      "Cross-node assignment is rejected and audited."
+    ],
+    "table": 14
+  },
+  {
+    "id": "GWY-008",
+    "cells": [
+      "GWY-008",
+      "Use a bounded per-session pipeline and configurable in-flight limit.",
+      "Must",
+      "Load test proves the configured bound is enforced."
+    ],
+    "table": 14
+  },
+  {
+    "id": "GWY-009",
+    "cells": [
+      "GWY-009",
+      "Support graceful drain before deployment or maintenance.",
+      "Must",
+      "No new jobs accepted; active jobs reach a recorded outcome."
+    ],
+    "table": 14
+  },
+  {
+    "id": "GWY-010",
+    "cells": [
+      "GWY-010",
+      "Return provider message identifiers and raw provider status metadata where safe.",
+      "Must",
+      "Delivery attempt record stores the identifier and redacted metadata."
+    ],
+    "table": 14
+  },
+  {
+    "id": "GWY-011",
+    "cells": [
+      "GWY-011",
+      "Forward inbound messages and delivery/read events through signed callbacks or a trusted event channel.",
+      "Must",
+      "Forged and replayed events are rejected."
+    ],
+    "table": 14
+  },
+  {
+    "id": "GWY-012",
+    "cells": [
+      "GWY-012",
+      "Never store full campaign audience lists locally.",
+      "Must",
+      "Worker storage review confirms only bounded active-job data and session state."
+    ],
+    "table": 14
+  },
+  {
+    "id": "GWY-013",
+    "cells": [
+      "GWY-013",
+      "Use object references for media and enforce size/type limits.",
+      "Must",
+      "Large media campaign does not hold the entire batch in memory."
+    ],
+    "table": 14
+  },
+  {
+    "id": "GWY-014",
+    "cells": [
+      "GWY-014",
+      "Sanitise logs and exclude raw MSISDN, message content and credentials by default.",
+      "Must",
+      "Automated log-content tests pass."
+    ],
+    "table": 14
+  },
+  {
+    "id": "GWY-015",
+    "cells": [
+      "GWY-015",
+      "Support safe shutdown and uncertain-state reporting.",
+      "Must",
+      "Kill-during-send test produces an UNKNOWN state rather than automatic duplicate resend."
+    ],
+    "table": 14
+  },
+  {
+    "id": "GWY-016",
+    "cells": [
+      "GWY-016",
+      "Expose engine capability and version.",
+      "Must",
+      "Control plane can block an incompatible campaign/message type."
+    ],
+    "table": 14
+  },
+  {
+    "id": "GWY-017",
+    "cells": [
+      "GWY-017",
+      "Support per-session stable proxy configuration where legitimately required.",
+      "Must",
+      "Configuration change is audited and connectivity tested."
+    ],
+    "table": 14
+  },
+  {
+    "id": "GWY-018",
+    "cells": [
+      "GWY-018",
+      "Do not implement rapid IP rotation or enforcement-evasion behaviour.",
+      "Must",
+      "Security review confirms prohibited capabilities are absent."
+    ],
+    "table": 14
+  },
+  {
+    "id": "IAM-001",
+    "cells": [
+      "IAM-001",
+      "Permit access only to provisioned internal users.",
+      "Must",
+      "Unprovisioned identities cannot authenticate."
+    ],
+    "table": 15
+  },
+  {
+    "id": "IAM-002",
+    "cells": [
+      "IAM-002",
+      "Support mandatory multi-factor authentication.",
+      "Must",
+      "Login without the second factor is rejected."
+    ],
+    "table": 15
+  },
+  {
+    "id": "IAM-003",
+    "cells": [
+      "IAM-003",
+      "Support configurable passwordless/SSO integration later without replacing domain authorisation.",
+      "Must",
+      "Identity provider can be swapped through configuration."
+    ],
+    "table": 15
+  },
+  {
+    "id": "IAM-004",
+    "cells": [
+      "IAM-004",
+      "Implement role-based access control with granular permissions.",
+      "Must",
+      "Permission matrix tests cover every protected action."
+    ],
+    "table": 15
+  },
+  {
+    "id": "IAM-005",
+    "cells": [
+      "IAM-005",
+      "Support users holding multiple roles with least-privilege union of permissions.",
+      "Must",
+      "Effective permissions are displayed and tested."
+    ],
+    "table": 15
+  },
+  {
+    "id": "IAM-006",
+    "cells": [
+      "IAM-006",
+      "Enforce maker-checker separation for campaign release.",
+      "Must",
+      "Campaign creator cannot perform final release when policy requires separation."
+    ],
+    "table": 15
+  },
+  {
+    "id": "IAM-007",
+    "cells": [
+      "IAM-007",
+      "Require step-up authentication for exports, key changes, emergency overrides and destructive actions.",
+      "Must",
+      "Protected action prompts for fresh authentication."
+    ],
+    "table": 15
+  },
+  {
+    "id": "IAM-008",
+    "cells": [
+      "IAM-008",
+      "Enforce configurable idle and absolute session expiry.",
+      "Must",
+      "Expired sessions cannot call APIs."
+    ],
+    "table": 15
+  },
+  {
+    "id": "IAM-009",
+    "cells": [
+      "IAM-009",
+      "Provide account disable, lock and credential reset.",
+      "Must",
+      "Disabled account loses access immediately."
+    ],
+    "table": 15
+  },
+  {
+    "id": "IAM-010",
+    "cells": [
+      "IAM-010",
+      "Detect repeated failed login attempts and apply configurable controls.",
+      "Must",
+      "Threshold alert/lock is produced."
+    ],
+    "table": 15
+  },
+  {
+    "id": "IAM-011",
+    "cells": [
+      "IAM-011",
+      "Record authentication, authorisation failure and privileged-action events.",
+      "Must",
+      "Audit search returns complete events with actor and time."
+    ],
+    "table": 15
+  },
+  {
+    "id": "IAM-012",
+    "cells": [
+      "IAM-012",
+      "Display the user\u2019s last successful login and active sessions.",
+      "Must",
+      "User/admin can identify unexpected access."
+    ],
+    "table": 15
+  },
+  {
+    "id": "IAM-013",
+    "cells": [
+      "IAM-013",
+      "Allow authorised administrators to revoke all sessions for a user.",
+      "Must",
+      "Revoked tokens fail immediately or within configured maximum."
+    ],
+    "table": 15
+  },
+  {
+    "id": "IAM-014",
+    "cells": [
+      "IAM-014",
+      "Prevent shared generic accounts.",
+      "Must",
+      "All production activity maps to a unique human or service identity."
+    ],
+    "table": 15
+  },
+  {
+    "id": "IAM-015",
+    "cells": [
+      "IAM-015",
+      "Use separate scoped service identities for each internal service.",
+      "Must",
+      "Credential review shows no shared superuser secret."
+    ],
+    "table": 15
+  },
+  {
+    "id": "IAM-016",
+    "cells": [
+      "IAM-016",
+      "Support IP allowlisting or VPN-only access as a configurable deployment control.",
+      "Must",
+      "Requests outside allowed network are denied when enabled."
+    ],
+    "table": 15
+  },
+  {
+    "id": "ORG-001",
+    "cells": [
+      "ORG-001",
+      "Create internal organisation records without creating external portal users.",
+      "Must",
+      "Organisation can be used on campaigns without login credentials."
+    ],
+    "table": 16
+  },
+  {
+    "id": "ORG-002",
+    "cells": [
+      "ORG-002",
+      "Store legal/trading name, country, registration reference, industry and status.",
+      "Must",
+      "Required-field validation is enforced."
+    ],
+    "table": 16
+  },
+  {
+    "id": "ORG-003",
+    "cells": [
+      "ORG-003",
+      "Store one or more internal and external contacts with role and communication details.",
+      "Must",
+      "Multiple contacts can be active/effective-dated."
+    ],
+    "table": 16
+  },
+  {
+    "id": "ORG-004",
+    "cells": [
+      "ORG-004",
+      "Record controller, processor or joint-controller role where known.",
+      "Must",
+      "Campaign consent checks can reference the role."
+    ],
+    "table": 16
+  },
+  {
+    "id": "ORG-005",
+    "cells": [
+      "ORG-005",
+      "Record organisation-level restrictions and prohibited purposes.",
+      "Must",
+      "Ineligible campaign purpose is blocked."
+    ],
+    "table": 16
+  },
+  {
+    "id": "ORG-006",
+    "cells": [
+      "ORG-006",
+      "Support active, suspended, under-review and closed status.",
+      "Must",
+      "Suspended organisation cannot launch a campaign."
+    ],
+    "table": 16
+  },
+  {
+    "id": "ORG-007",
+    "cells": [
+      "ORG-007",
+      "Record commercial references such as quote, invoice and payment status.",
+      "Must",
+      "Campaign release policy can require commercial approval."
+    ],
+    "table": 16
+  },
+  {
+    "id": "ORG-008",
+    "cells": [
+      "ORG-008",
+      "Retain an audit history of organisation changes.",
+      "Must",
+      "Historical values and actor are retrievable."
+    ],
+    "table": 16
+  },
+  {
+    "id": "ORG-009",
+    "cells": [
+      "ORG-009",
+      "Prevent accidental duplicate organisation creation.",
+      "Must",
+      "Potential duplicate warning appears based on configured identifiers."
+    ],
+    "table": 16
+  },
+  {
+    "id": "ORG-010",
+    "cells": [
+      "ORG-010",
+      "Support organisation-specific data-retention and report branding settings.",
+      "Must",
+      "Generated report uses approved configuration version."
+    ],
+    "table": 16
+  },
+  {
+    "id": "CRV-001",
+    "cells": [
+      "CRV-001",
+      "Create a consent review at organisation, source or campaign scope.",
+      "Must",
+      "Reviewer selects the scope and system enforces it."
+    ],
+    "table": 17
+  },
+  {
+    "id": "CRV-002",
+    "cells": [
+      "CRV-002",
+      "Record consent collection method, source system, URL/form identifier and date range.",
+      "Must",
+      "Review cannot be approved without required provenance."
+    ],
+    "table": 17
+  },
+  {
+    "id": "CRV-003",
+    "cells": [
+      "CRV-003",
+      "Record the consent wording or an immutable reference and wording version.",
+      "Must",
+      "Approved review identifies exact wording/version."
+    ],
+    "table": 17
+  },
+  {
+    "id": "CRV-004",
+    "cells": [
+      "CRV-004",
+      "Record permitted organisation/controller, purpose, channel and partner use.",
+      "Must",
+      "Campaign outside scope is ineligible."
+    ],
+    "table": 17
+  },
+  {
+    "id": "CRV-005",
+    "cells": [
+      "CRV-005",
+      "Record evidence files or external references with checksums.",
+      "Must",
+      "Evidence tampering can be detected."
+    ],
+    "table": 17
+  },
+  {
+    "id": "CRV-006",
+    "cells": [
+      "CRV-006",
+      "Malware-scan uploaded evidence before availability.",
+      "Must",
+      "Infected/quarantined files cannot be opened or approved."
+    ],
+    "table": 17
+  },
+  {
+    "id": "CRV-007",
+    "cells": [
+      "CRV-007",
+      "Record reviewer, decision, date, expiry and restrictions.",
+      "Must",
+      "Every approval is attributable and time bounded where required."
+    ],
+    "table": 17
+  },
+  {
+    "id": "CRV-008",
+    "cells": [
+      "CRV-008",
+      "Support approved, approved-with-restrictions, rejected, expired and revoked states.",
+      "Must",
+      "State transitions follow policy and are audited."
+    ],
+    "table": 17
+  },
+  {
+    "id": "CRV-009",
+    "cells": [
+      "CRV-009",
+      "Require a reason for rejection, revocation or restriction.",
+      "Must",
+      "Blank reason is blocked."
+    ],
+    "table": 17
+  },
+  {
+    "id": "CRV-010",
+    "cells": [
+      "CRV-010",
+      "Support sample-record review notes without storing unnecessary sample PII.",
+      "Must",
+      "Review can be completed using minimised evidence."
+    ],
+    "table": 17
+  },
+  {
+    "id": "CRV-011",
+    "cells": [
+      "CRV-011",
+      "Require re-review when consent wording, collection method, controller, purpose or source materially changes.",
+      "Must",
+      "Changed version invalidates automatic reuse."
+    ],
+    "table": 17
+  },
+  {
+    "id": "CRV-012",
+    "cells": [
+      "CRV-012",
+      "Link every campaign to a valid consent review or documented non-consent lawful basis where separately approved.",
+      "Must",
+      "Campaign cannot reach release without eligibility reference."
+    ],
+    "table": 17
+  },
+  {
+    "id": "CRV-013",
+    "cells": [
+      "CRV-013",
+      "Expose review expiry warnings and block expired approvals.",
+      "Must",
+      "Expiry alert and release block are verified."
+    ],
+    "table": 17
+  },
+  {
+    "id": "CRV-014",
+    "cells": [
+      "CRV-014",
+      "Allow authorised compliance override only with reason, expiry and second approval.",
+      "Must",
+      "Override is time-bounded and prominently audited."
+    ],
+    "table": 17
+  },
+  {
+    "id": "CON-001",
+    "cells": [
+      "CON-001",
+      "Maintain one canonical contact for each normalised MSISDN within the configured identity scope.",
+      "Must",
+      "Duplicate import resolves to existing contact."
+    ],
+    "table": 18
+  },
+  {
+    "id": "CON-002",
+    "cells": [
+      "CON-002",
+      "Normalise MSISDNs to E.164 using country context and validation rules.",
+      "Must",
+      "Known valid/invalid examples pass automated tests."
+    ],
+    "table": 18
+  },
+  {
+    "id": "CON-003",
+    "cells": [
+      "CON-003",
+      "Store MSISDN encrypted at application level.",
+      "Must",
+      "Database inspection does not reveal plaintext MSISDN."
+    ],
+    "table": 18
+  },
+  {
+    "id": "CON-004",
+    "cells": [
+      "CON-004",
+      "Store a deterministic keyed HMAC for exact lookup and deduplication.",
+      "Must",
+      "Same canonical MSISDN matches; HMAC cannot be reversed without key."
+    ],
+    "table": 18
+  },
+  {
+    "id": "CON-005",
+    "cells": [
+      "CON-005",
+      "Display only masked MSISDN to ordinary users.",
+      "Must",
+      "UI and standard exports show configured masking."
+    ],
+    "table": 18
+  },
+  {
+    "id": "CON-006",
+    "cells": [
+      "CON-006",
+      "Restrict plaintext decryption to the minimum sending/export services and authorised workflows.",
+      "Must",
+      "Permission and service-role tests pass."
+    ],
+    "table": 18
+  },
+  {
+    "id": "CON-007",
+    "cells": [
+      "CON-007",
+      "Store country, state and LGA using controlled reference data.",
+      "Must",
+      "Invalid state/LGA relationship is rejected or quarantined."
+    ],
+    "table": 18
+  },
+  {
+    "id": "CON-008",
+    "cells": [
+      "CON-008",
+      "Support unknown/not-provided geography without inventing values.",
+      "Must",
+      "Null/unknown remains distinguishable from invalid."
+    ],
+    "table": 18
+  },
+  {
+    "id": "CON-009",
+    "cells": [
+      "CON-009",
+      "Store self-declared numeric age and age-recorded timestamp.",
+      "Must",
+      "Record preserves the exact declared value and collection time."
+    ],
+    "table": 18
+  },
+  {
+    "id": "CON-010",
+    "cells": [
+      "CON-010",
+      "Calculate estimated current age using configured approximation rules.",
+      "Must",
+      "Boundary tests for birthdays/partial dates are documented."
+    ],
+    "table": 18
+  },
+  {
+    "id": "CON-011",
+    "cells": [
+      "CON-011",
+      "Record age source, verification flag and last-confirmed date.",
+      "Must",
+      "Segment builder can filter by confidence/staleness."
+    ],
+    "table": 18
+  },
+  {
+    "id": "CON-012",
+    "cells": [
+      "CON-012",
+      "Never overwrite the original reported age without retaining history.",
+      "Must",
+      "Attribute history shows old/new values and source."
+    ],
+    "table": 18
+  },
+  {
+    "id": "CON-013",
+    "cells": [
+      "CON-013",
+      "Support configurable age-data staleness bands.",
+      "Must",
+      "Segment count changes correctly when threshold changes."
+    ],
+    "table": 18
+  },
+  {
+    "id": "CON-014",
+    "cells": [
+      "CON-014",
+      "Store gender only when provided under an approved data purpose.",
+      "Must",
+      "Unknown/not-provided is supported; no inference occurs."
+    ],
+    "table": 18
+  },
+  {
+    "id": "CON-015",
+    "cells": [
+      "CON-015",
+      "Support approved optional attributes such as language and interest category.",
+      "Must",
+      "Attribute catalogue controls type, values and permitted use."
+    ],
+    "table": 18
+  },
+  {
+    "id": "CON-016",
+    "cells": [
+      "CON-016",
+      "Record attribute source, collected-at time and confidence.",
+      "Must",
+      "Every segmentation attribute has lineage."
+    ],
+    "table": 18
+  },
+  {
+    "id": "CON-017",
+    "cells": [
+      "CON-017",
+      "Support contact active, inactive, invalid, deceased/closed and possible-recycled-number states.",
+      "Must",
+      "Ineligible states are excluded by policy."
+    ],
+    "table": 18
+  },
+  {
+    "id": "CON-018",
+    "cells": [
+      "CON-018",
+      "Maintain source-system identifiers and import provenance.",
+      "Must",
+      "Contact can be traced back to source batch/record."
+    ],
+    "table": 18
+  },
+  {
+    "id": "CON-019",
+    "cells": [
+      "CON-019",
+      "Merge duplicate contacts through an approved, reversible process.",
+      "Must",
+      "Merge preserves consent and event lineage and creates audit evidence."
+    ],
+    "table": 18
+  },
+  {
+    "id": "CON-020",
+    "cells": [
+      "CON-020",
+      "Prevent ordinary users from searching by partial plaintext MSISDN.",
+      "Must",
+      "Only exact authorised lookup or masked search is allowed."
+    ],
+    "table": 18
+  },
+  {
+    "id": "CON-021",
+    "cells": [
+      "CON-021",
+      "Support data correction while preserving history.",
+      "Must",
+      "Correction event identifies source, reason and actor."
+    ],
+    "table": 18
+  },
+  {
+    "id": "CON-022",
+    "cells": [
+      "CON-022",
+      "Support at least 10 million canonical contacts without schema redesign.",
+      "Must",
+      "Scale test meets NFR targets."
+    ],
+    "table": 18
+  },
+  {
+    "id": "IMP-001",
+    "cells": [
+      "IMP-001",
+      "Support CSV and XLSX imports through an internal controlled workflow.",
+      "Must",
+      "Valid template imports successfully."
+    ],
+    "table": 19
+  },
+  {
+    "id": "IMP-002",
+    "cells": [
+      "IMP-002",
+      "Provide downloadable versioned import templates.",
+      "Must",
+      "Template version is recorded on import."
+    ],
+    "table": 19
+  },
+  {
+    "id": "IMP-003",
+    "cells": [
+      "IMP-003",
+      "Support configurable column mapping and saved mappings per source.",
+      "Must",
+      "Repeat source can reuse approved mapping."
+    ],
+    "table": 19
+  },
+  {
+    "id": "IMP-004",
+    "cells": [
+      "IMP-004",
+      "Validate file type, extension, MIME signature, size and malware status.",
+      "Must",
+      "Invalid or disguised file is rejected/quarantined."
+    ],
+    "table": 19
+  },
+  {
+    "id": "IMP-005",
+    "cells": [
+      "IMP-005",
+      "Protect against CSV formula injection in previews and exports.",
+      "Must",
+      "Cells beginning with dangerous formula prefixes are neutralised."
+    ],
+    "table": 19
+  },
+  {
+    "id": "IMP-006",
+    "cells": [
+      "IMP-006",
+      "Stream or chunk large files rather than load entire content into memory.",
+      "Must",
+      "Million-row test stays within memory limit."
+    ],
+    "table": 19
+  },
+  {
+    "id": "IMP-007",
+    "cells": [
+      "IMP-007",
+      "Create an immutable import-batch record with checksum, uploader and time.",
+      "Must",
+      "Identical/replayed file is detectable."
+    ],
+    "table": 19
+  },
+  {
+    "id": "IMP-008",
+    "cells": [
+      "IMP-008",
+      "Validate required fields and controlled values.",
+      "Must",
+      "Row-level reason codes are produced."
+    ],
+    "table": 19
+  },
+  {
+    "id": "IMP-009",
+    "cells": [
+      "IMP-009",
+      "Normalise MSISDN using configured default country only where explicit.",
+      "Must",
+      "Ambiguous numbers are quarantined, not guessed."
+    ],
+    "table": 19
+  },
+  {
+    "id": "IMP-010",
+    "cells": [
+      "IMP-010",
+      "Detect duplicate rows within the file.",
+      "Must",
+      "Duplicate count and retained row policy are reported."
+    ],
+    "table": 19
+  },
+  {
+    "id": "IMP-011",
+    "cells": [
+      "IMP-011",
+      "Detect contacts already present in the repository.",
+      "Must",
+      "Insert/update/no-change counts reconcile to file total."
+    ],
+    "table": 19
+  },
+  {
+    "id": "IMP-012",
+    "cells": [
+      "IMP-012",
+      "Support configurable update policy: fill-null, newest-source, trusted-source or manual conflict.",
+      "Must",
+      "Conflicting attributes follow selected policy."
+    ],
+    "table": 19
+  },
+  {
+    "id": "IMP-013",
+    "cells": [
+      "IMP-013",
+      "Never silently broaden existing consent based on a profile import.",
+      "Must",
+      "Consent changes require consent-specific data and evidence."
+    ],
+    "table": 19
+  },
+  {
+    "id": "IMP-014",
+    "cells": [
+      "IMP-014",
+      "Provide import preview and estimated effects before commit.",
+      "Must",
+      "Operator can cancel before data mutation."
+    ],
+    "table": 19
+  },
+  {
+    "id": "IMP-015",
+    "cells": [
+      "IMP-015",
+      "Use database bulk-load techniques and bounded transactions.",
+      "Must",
+      "Large import meets throughput target and can recover from failure."
+    ],
+    "table": 19
+  },
+  {
+    "id": "IMP-016",
+    "cells": [
+      "IMP-016",
+      "Provide row-level error export with masked identifiers.",
+      "Must",
+      "Operator can correct only failed rows."
+    ],
+    "table": 19
+  },
+  {
+    "id": "IMP-017",
+    "cells": [
+      "IMP-017",
+      "Reconcile uploaded, accepted, rejected, duplicate, inserted, updated and unchanged counts.",
+      "Must",
+      "Counts sum exactly to source rows."
+    ],
+    "table": 19
+  },
+  {
+    "id": "IMP-018",
+    "cells": [
+      "IMP-018",
+      "Support rollback of an unconsumed erroneous import where legally/operationally safe.",
+      "Must",
+      "Rollback preserves audit and does not delete subsequent independent changes."
+    ],
+    "table": 19
+  },
+  {
+    "id": "IMP-019",
+    "cells": [
+      "IMP-019",
+      "Block campaign use of a batch until required consent review is approved.",
+      "Must",
+      "Unapproved batch cannot create an audience snapshot."
+    ],
+    "table": 19
+  },
+  {
+    "id": "IMP-020",
+    "cells": [
+      "IMP-020",
+      "Support encrypted import file retention or prompt deletion according to policy.",
+      "Must",
+      "Retention job and audit evidence are verified."
+    ],
+    "table": 19
+  },
+  {
+    "id": "CNS-001",
+    "cells": [
+      "CNS-001",
+      "Represent consent as a separate grant, not a Boolean contact field.",
+      "Must",
+      "One contact can hold multiple scopes independently."
+    ],
+    "table": 20
+  },
+  {
+    "id": "CNS-002",
+    "cells": [
+      "CNS-002",
+      "Scope consent to organisation/controller, purpose and channel.",
+      "Must",
+      "Eligibility query requires all configured scope dimensions."
+    ],
+    "table": 20
+  },
+  {
+    "id": "CNS-003",
+    "cells": [
+      "CNS-003",
+      "Record grant time, source, wording version and evidence reference.",
+      "Must",
+      "Consent audit view is complete."
+    ],
+    "table": 20
+  },
+  {
+    "id": "CNS-004",
+    "cells": [
+      "CNS-004",
+      "Support active, pending-verification, expired, withdrawn, revoked and superseded states.",
+      "Must",
+      "Only eligible states are selectable."
+    ],
+    "table": 20
+  },
+  {
+    "id": "CNS-005",
+    "cells": [
+      "CNS-005",
+      "Support effective-from and expiry timestamps.",
+      "Must",
+      "Future and expired grants are handled correctly."
+    ],
+    "table": 20
+  },
+  {
+    "id": "CNS-006",
+    "cells": [
+      "CNS-006",
+      "Record consent withdrawal with source, time and scope.",
+      "Must",
+      "Withdrawal affects eligibility immediately."
+    ],
+    "table": 20
+  },
+  {
+    "id": "CNS-007",
+    "cells": [
+      "CNS-007",
+      "Treat withdrawal as higher priority than an older grant.",
+      "Must",
+      "Event-order tests pass."
+    ],
+    "table": 20
+  },
+  {
+    "id": "CNS-008",
+    "cells": [
+      "CNS-008",
+      "Support a new valid grant after withdrawal only with new evidence and timestamp.",
+      "Must",
+      "Old grant is not reactivated."
+    ],
+    "table": 20
+  },
+  {
+    "id": "CNS-009",
+    "cells": [
+      "CNS-009",
+      "Maintain append-only consent-event history.",
+      "Must",
+      "Current state can be reconstructed from events."
+    ],
+    "table": 20
+  },
+  {
+    "id": "CNS-010",
+    "cells": [
+      "CNS-010",
+      "Support global, organisation, purpose and channel suppression scopes.",
+      "Must",
+      "Precedence tests produce expected exclusion."
+    ],
+    "table": 20
+  },
+  {
+    "id": "CNS-011",
+    "cells": [
+      "CNS-011",
+      "Create suppression automatically from recognised STOP replies after confirmation policy.",
+      "Must",
+      "Inbound STOP creates effective suppression and audit event."
+    ],
+    "table": 20
+  },
+  {
+    "id": "CNS-012",
+    "cells": [
+      "CNS-012",
+      "Support configured STOP synonyms and language variants.",
+      "Must",
+      "Test messages match exact/normalised rules without overmatching ordinary text."
+    ],
+    "table": 20
+  },
+  {
+    "id": "CNS-013",
+    "cells": [
+      "CNS-013",
+      "Allow manual suppression with reason and authority.",
+      "Must",
+      "Manual action is audited and immediately effective."
+    ],
+    "table": 20
+  },
+  {
+    "id": "CNS-014",
+    "cells": [
+      "CNS-014",
+      "Retain minimised suppression identifiers to prevent re-import contact.",
+      "Must",
+      "Deleted profile remains suppressed by HMAC where policy requires."
+    ],
+    "table": 20
+  },
+  {
+    "id": "CNS-015",
+    "cells": [
+      "CNS-015",
+      "Support invalid-number and possible-recycled-number suppression.",
+      "Must",
+      "Repeated hard failures trigger configured review/suppression."
+    ],
+    "table": 20
+  },
+  {
+    "id": "CNS-016",
+    "cells": [
+      "CNS-016",
+      "Run eligibility at segment estimate, snapshot creation and immediately before dispatch.",
+      "Must",
+      "Withdrawal after snapshot but before send is excluded."
+    ],
+    "table": 20
+  },
+  {
+    "id": "CNS-017",
+    "cells": [
+      "CNS-017",
+      "Prevent consent review approval from overwriting individual withdrawal.",
+      "Must",
+      "Individual preference always wins."
+    ],
+    "table": 20
+  },
+  {
+    "id": "CNS-018",
+    "cells": [
+      "CNS-018",
+      "Expose the exact exclusion reason for authorised operations users.",
+      "Must",
+      "Sample excluded contact displays one or more reason codes."
+    ],
+    "table": 20
+  },
+  {
+    "id": "CNS-019",
+    "cells": [
+      "CNS-019",
+      "Support configurable consent-expiry and renewal policies.",
+      "Must",
+      "Policy version is recorded with snapshot."
+    ],
+    "table": 20
+  },
+  {
+    "id": "CNS-020",
+    "cells": [
+      "CNS-020",
+      "Provide consent and suppression audit/export for authorised privacy workflows.",
+      "Must",
+      "Export is complete, secured and logged."
+    ],
+    "table": 20
+  },
+  {
+    "id": "SEG-001",
+    "cells": [
+      "SEG-001",
+      "Provide a visual segment builder requiring no SQL access.",
+      "Must",
+      "Authorised operator builds a cohort through UI."
+    ],
+    "table": 21
+  },
+  {
+    "id": "SEG-002",
+    "cells": [
+      "SEG-002",
+      "Support equality, inclusion, exclusion, range, null and recency operators.",
+      "Must",
+      "Each operator has unit and integration tests."
+    ],
+    "table": 21
+  },
+  {
+    "id": "SEG-003",
+    "cells": [
+      "SEG-003",
+      "Support filters for country, state, LGA, age, gender, language, interests, source and consent attributes.",
+      "Must",
+      "Approved fields appear according to attribute catalogue."
+    ],
+    "table": 21
+  },
+  {
+    "id": "SEG-004",
+    "cells": [
+      "SEG-004",
+      "Support exact age range such as 18 through 35 using self-declared/estimated age policy.",
+      "Must",
+      "Boundary records at 17,18,35,36 behave correctly."
+    ],
+    "table": 21
+  },
+  {
+    "id": "SEG-005",
+    "cells": [
+      "SEG-005",
+      "Display the age calculation method, source recency and confidence.",
+      "Must",
+      "Operator sees whether age is reported or estimated."
+    ],
+    "table": 21
+  },
+  {
+    "id": "SEG-006",
+    "cells": [
+      "SEG-006",
+      "Allow exclusion of age data older than a configurable period.",
+      "Must",
+      "Stale records are counted separately."
+    ],
+    "table": 21
+  },
+  {
+    "id": "SEG-007",
+    "cells": [
+      "SEG-007",
+      "Require active channel/purpose/organisation consent in the eligibility policy.",
+      "Must",
+      "Demographic match alone never becomes final eligibility."
+    ],
+    "table": 21
+  },
+  {
+    "id": "SEG-008",
+    "cells": [
+      "SEG-008",
+      "Apply suppression, contact status and frequency caps to final eligibility.",
+      "Must",
+      "Count waterfall reconciles."
+    ],
+    "table": 21
+  },
+  {
+    "id": "SEG-009",
+    "cells": [
+      "SEG-009",
+      "Support AND/OR groups with a maximum configurable complexity.",
+      "Must",
+      "Complex rules validate and execute without injection."
+    ],
+    "table": 21
+  },
+  {
+    "id": "SEG-010",
+    "cells": [
+      "SEG-010",
+      "Provide a human-readable summary of the segment logic.",
+      "Must",
+      "Summary accurately represents nested rules."
+    ],
+    "table": 21
+  },
+  {
+    "id": "SEG-011",
+    "cells": [
+      "SEG-011",
+      "Estimate matching counts without exposing raw MSISDNs.",
+      "Must",
+      "Count result is returned within NFR target."
+    ],
+    "table": 21
+  },
+  {
+    "id": "SEG-012",
+    "cells": [
+      "SEG-012",
+      "Display a count waterfall: demographic, consent, expiry, suppression, cap and final eligible.",
+      "Must",
+      "Totals reconcile with snapshot."
+    ],
+    "table": 21
+  },
+  {
+    "id": "SEG-013",
+    "cells": [
+      "SEG-013",
+      "Save, version, clone, retire and compare segment definitions.",
+      "Must",
+      "Historical campaign references remain immutable."
+    ],
+    "table": 21
+  },
+  {
+    "id": "SEG-014",
+    "cells": [
+      "SEG-014",
+      "Restrict segment fields based on user permission and data-use policy.",
+      "Must",
+      "Unauthorised sensitive field is absent or blocked."
+    ],
+    "table": 21
+  },
+  {
+    "id": "SEG-015",
+    "cells": [
+      "SEG-015",
+      "Create an immutable audience snapshot with hash and policy versions.",
+      "Must",
+      "Membership cannot be altered after freeze."
+    ],
+    "table": 21
+  },
+  {
+    "id": "SEG-016",
+    "cells": [
+      "SEG-016",
+      "Store snapshot creation time, rule version and initiating user.",
+      "Must",
+      "Audit view is complete."
+    ],
+    "table": 21
+  },
+  {
+    "id": "SEG-017",
+    "cells": [
+      "SEG-017",
+      "Perform final live suppression/consent check before each send.",
+      "Must",
+      "Post-snapshot opt-out is excluded."
+    ],
+    "table": 21
+  },
+  {
+    "id": "SEG-018",
+    "cells": [
+      "SEG-018",
+      "Support cohort overlap analysis without exporting identities.",
+      "Must",
+      "System returns counts for intersection and difference."
+    ],
+    "table": 21
+  },
+  {
+    "id": "SEG-019",
+    "cells": [
+      "SEG-019",
+      "Prevent tiny cohort reporting below configurable privacy threshold.",
+      "Must",
+      "Dashboard groups/suppresses small slices."
+    ],
+    "table": 21
+  },
+  {
+    "id": "SEG-020",
+    "cells": [
+      "SEG-020",
+      "Support asynchronous snapshot creation for multi-million audiences with progress and resumability.",
+      "Must",
+      "Large job can resume without duplicate membership."
+    ],
+    "table": 21
+  },
+  {
+    "id": "CAM-001",
+    "cells": [
+      "CAM-001",
+      "Create campaigns linked to one internal organisation and consent-review basis.",
+      "Must",
+      "Release is blocked if linkage is missing/invalid."
+    ],
+    "table": 22
+  },
+  {
+    "id": "CAM-002",
+    "cells": [
+      "CAM-002",
+      "Store campaign name, purpose, category, owner, requested window and completion deadline.",
+      "Must",
+      "Required data is validated."
+    ],
+    "table": 22
+  },
+  {
+    "id": "CAM-003",
+    "cells": [
+      "CAM-003",
+      "Support draft, review, approved, scheduled, dispatching, paused, completed, exception, cancelled and expired states.",
+      "Must",
+      "Invalid transitions are rejected."
+    ],
+    "table": 22
+  },
+  {
+    "id": "CAM-004",
+    "cells": [
+      "CAM-004",
+      "Attach exactly one immutable audience snapshot to an approved release version.",
+      "Must",
+      "Approved campaign cannot switch snapshot silently."
+    ],
+    "table": 22
+  },
+  {
+    "id": "CAM-005",
+    "cells": [
+      "CAM-005",
+      "Compose text, image-caption, video, document and supported provider message types.",
+      "Must",
+      "Capability validation blocks unsupported combination."
+    ],
+    "table": 22
+  },
+  {
+    "id": "CAM-006",
+    "cells": [
+      "CAM-006",
+      "Store media in object storage with checksum, type, size and scan status.",
+      "Must",
+      "Tampered/quarantined asset cannot be used."
+    ],
+    "table": 22
+  },
+  {
+    "id": "CAM-007",
+    "cells": [
+      "CAM-007",
+      "Support approved personalisation variables with typed values and fallback.",
+      "Must",
+      "Missing variable follows configured fail/fallback rule."
+    ],
+    "table": 22
+  },
+  {
+    "id": "CAM-008",
+    "cells": [
+      "CAM-008",
+      "Preview message using representative test records with masked data.",
+      "Must",
+      "Preview renders all variables."
+    ],
+    "table": 22
+  },
+  {
+    "id": "CAM-009",
+    "cells": [
+      "CAM-009",
+      "Send controlled test messages only to approved test numbers.",
+      "Must",
+      "Production cohort is never used for test send."
+    ],
+    "table": 22
+  },
+  {
+    "id": "CAM-010",
+    "cells": [
+      "CAM-010",
+      "Version message text, media, variables and links.",
+      "Must",
+      "Any material edit creates new version."
+    ],
+    "table": 22
+  },
+  {
+    "id": "CAM-011",
+    "cells": [
+      "CAM-011",
+      "Hash the approved message version and include it in campaign release.",
+      "Must",
+      "Dispatch job references exact immutable version."
+    ],
+    "table": 22
+  },
+  {
+    "id": "CAM-012",
+    "cells": [
+      "CAM-012",
+      "Require reapproval after material message, media, link, audience, sender or schedule change.",
+      "Must",
+      "Prior approval is invalidated automatically."
+    ],
+    "table": 22
+  },
+  {
+    "id": "CAM-013",
+    "cells": [
+      "CAM-013",
+      "Support optional reply/STOP instruction policy by campaign type.",
+      "Must",
+      "Required instruction validation is enforced."
+    ],
+    "table": 22
+  },
+  {
+    "id": "CAM-014",
+    "cells": [
+      "CAM-014",
+      "Support tracked links using a controlled redirect domain and signed identifiers.",
+      "Must",
+      "Link does not expose contact/MSISDN and click is attributable to campaign recipient token."
+    ],
+    "table": 22
+  },
+  {
+    "id": "CAM-015",
+    "cells": [
+      "CAM-015",
+      "Validate destination URLs against configured safety rules.",
+      "Must",
+      "Disallowed scheme/domain is blocked or requires approval."
+    ],
+    "table": 22
+  },
+  {
+    "id": "CAM-016",
+    "cells": [
+      "CAM-016",
+      "Schedule campaigns in a declared timezone and persist UTC.",
+      "Must",
+      "DST and timezone tests produce correct dispatch time."
+    ],
+    "table": 22
+  },
+  {
+    "id": "CAM-017",
+    "cells": [
+      "CAM-017",
+      "Support quiet hours and jurisdiction/organisation sending windows.",
+      "Must",
+      "Jobs outside window remain held."
+    ],
+    "table": 22
+  },
+  {
+    "id": "CAM-018",
+    "cells": [
+      "CAM-018",
+      "Support start, deadline and latest-admission time.",
+      "Must",
+      "Campaign acceptance calculation is recorded."
+    ],
+    "table": 22
+  },
+  {
+    "id": "CAM-019",
+    "cells": [
+      "CAM-019",
+      "Allow pause, resume and cancel with reason and authority.",
+      "Must",
+      "State change affects undispatched jobs and is audited."
+    ],
+    "table": 22
+  },
+  {
+    "id": "CAM-020",
+    "cells": [
+      "CAM-020",
+      "Display impact before cancel or audience invalidation.",
+      "Must",
+      "Operator sees sent, in-flight and remaining counts."
+    ],
+    "table": 22
+  },
+  {
+    "id": "CAM-021",
+    "cells": [
+      "CAM-021",
+      "Prevent deletion of campaigns with audit or delivery history.",
+      "Must",
+      "Only archive/retire is allowed."
+    ],
+    "table": 22
+  },
+  {
+    "id": "CAM-022",
+    "cells": [
+      "CAM-022",
+      "Support campaign tags and internal notes with visibility controls.",
+      "Must",
+      "Notes do not leak into client report."
+    ],
+    "table": 22
+  },
+  {
+    "id": "CAM-023",
+    "cells": [
+      "CAM-023",
+      "Support cloning while generating new IDs and requiring fresh approvals.",
+      "Must",
+      "Clone cannot reuse old entitlement or frozen snapshot."
+    ],
+    "table": 22
+  },
+  {
+    "id": "CAM-024",
+    "cells": [
+      "CAM-024",
+      "Support campaign archiving according to retention policy.",
+      "Must",
+      "Archived campaign remains reportable at approved level."
+    ],
+    "table": 22
+  },
+  {
+    "id": "APR-001",
+    "cells": [
+      "APR-001",
+      "Implement configurable approval stages by campaign risk/size/category.",
+      "Must",
+      "Workflow engine selects correct stages."
+    ],
+    "table": 23
+  },
+  {
+    "id": "APR-002",
+    "cells": [
+      "APR-002",
+      "Require consent review approval before audience finalisation.",
+      "Must",
+      "Blocked transition is verified."
+    ],
+    "table": 23
+  },
+  {
+    "id": "APR-003",
+    "cells": [
+      "APR-003",
+      "Require message/content approval before scheduling.",
+      "Must",
+      "Unapproved version cannot dispatch."
+    ],
+    "table": 23
+  },
+  {
+    "id": "APR-004",
+    "cells": [
+      "APR-004",
+      "Require final campaign release approval by an authorised user.",
+      "Must",
+      "Only permitted role can release."
+    ],
+    "table": 23
+  },
+  {
+    "id": "APR-005",
+    "cells": [
+      "APR-005",
+      "Enforce maker-checker based on configuration and campaign threshold.",
+      "Must",
+      "Creator cannot self-approve where prohibited."
+    ],
+    "table": 23
+  },
+  {
+    "id": "APR-006",
+    "cells": [
+      "APR-006",
+      "Record approval decision, actor, time, comments and object version.",
+      "Must",
+      "Approval evidence is immutable."
+    ],
+    "table": 23
+  },
+  {
+    "id": "APR-007",
+    "cells": [
+      "APR-007",
+      "Invalidate approval when approved data changes.",
+      "Must",
+      "Change triggers clear status regression."
+    ],
+    "table": 23
+  },
+  {
+    "id": "APR-008",
+    "cells": [
+      "APR-008",
+      "Record quote, invoice, payment and commercial-approval references without requiring online payment.",
+      "Must",
+      "Finance status is visible and auditable."
+    ],
+    "table": 23
+  },
+  {
+    "id": "APR-009",
+    "cells": [
+      "APR-009",
+      "Optionally block release until payment/commercial approval.",
+      "Must",
+      "Policy switch is effective-dated."
+    ],
+    "table": 23
+  },
+  {
+    "id": "APR-010",
+    "cells": [
+      "APR-010",
+      "Create a campaign entitlement defining maximum unique recipients and messages per recipient.",
+      "Must",
+      "Attempt to exceed entitlement is rejected."
+    ],
+    "table": 23
+  },
+  {
+    "id": "APR-011",
+    "cells": [
+      "APR-011",
+      "Tie entitlement to organisation, campaign, snapshot and message version.",
+      "Must",
+      "Entitlement cannot be reused elsewhere."
+    ],
+    "table": 23
+  },
+  {
+    "id": "APR-012",
+    "cells": [
+      "APR-012",
+      "Consume/reserve entitlement atomically with recipient ledger creation.",
+      "Must",
+      "Concurrent release cannot over-allocate."
+    ],
+    "table": 23
+  },
+  {
+    "id": "APR-013",
+    "cells": [
+      "APR-013",
+      "Require a new approved entitlement for an additional message or resend outside policy.",
+      "Must",
+      "Second campaign/message is blocked without approval."
+    ],
+    "table": 23
+  },
+  {
+    "id": "APR-014",
+    "cells": [
+      "APR-014",
+      "Support emergency stop by authorised role without deleting evidence.",
+      "Must",
+      "Dispatch halts and audit/alerts are generated."
+    ],
+    "table": 23
+  },
+  {
+    "id": "APR-015",
+    "cells": [
+      "APR-015",
+      "Support approved exception workflow with reason, expiry and second approval.",
+      "Must",
+      "Exception is visible in report/audit according to policy."
+    ],
+    "table": 23
+  },
+  {
+    "id": "SND-001",
+    "cells": [
+      "SND-001",
+      "Maintain an inventory of genuine sender MSISDNs and WhatsApp account metadata.",
+      "Must",
+      "Every active session maps to one controlled sender record."
+    ],
+    "table": 24
+  },
+  {
+    "id": "SND-002",
+    "cells": [
+      "SND-002",
+      "Store sender MSISDN encrypted and display masked by default.",
+      "Must",
+      "UI/log inspection shows no ordinary plaintext."
+    ],
+    "table": 24
+  },
+  {
+    "id": "SND-003",
+    "cells": [
+      "SND-003",
+      "Record ownership, registration country, profile/display name, recovery information reference and lifecycle status.",
+      "Must",
+      "Operational record is complete without exposing secrets."
+    ],
+    "table": 24
+  },
+  {
+    "id": "SND-004",
+    "cells": [
+      "SND-004",
+      "Support logical sender pools that map to one or more actual sender accounts.",
+      "Must",
+      "Operator selects pool; recipient ledger records actual sender."
+    ],
+    "table": 24
+  },
+  {
+    "id": "SND-005",
+    "cells": [
+      "SND-005",
+      "Clearly disclose that logical sender is not an alphanumeric WhatsApp sender ID.",
+      "Must",
+      "UI/help text and reports use accurate wording."
+    ],
+    "table": 24
+  },
+  {
+    "id": "SND-006",
+    "cells": [
+      "SND-006",
+      "Support ready, connecting, disconnected, paused, draining, restricted, retired and quarantined sender states.",
+      "Must",
+      "Scheduler uses only eligible states."
+    ],
+    "table": 24
+  },
+  {
+    "id": "SND-007",
+    "cells": [
+      "SND-007",
+      "Allow each session to have exactly one active worker lease.",
+      "Must",
+      "Concurrent lease acquisition fails deterministically."
+    ],
+    "table": 24
+  },
+  {
+    "id": "SND-008",
+    "cells": [
+      "SND-008",
+      "Renew leases through heartbeat and expire stale leases safely.",
+      "Must",
+      "Dead worker becomes unavailable after threshold."
+    ],
+    "table": 24
+  },
+  {
+    "id": "SND-009",
+    "cells": [
+      "SND-009",
+      "Require manual or controlled recovery before another worker activates an uncertain live session.",
+      "Must",
+      "Split-brain test does not run same session twice."
+    ],
+    "table": 24
+  },
+  {
+    "id": "SND-010",
+    "cells": [
+      "SND-010",
+      "Record worker public/stable IP and infrastructure identity.",
+      "Must",
+      "Operations can trace sessions to nodes."
+    ],
+    "table": 24
+  },
+  {
+    "id": "SND-011",
+    "cells": [
+      "SND-011",
+      "Allow several sessions per VPS only within configured tested resource limits.",
+      "Must",
+      "Admission control blocks excess placement."
+    ],
+    "table": 24
+  },
+  {
+    "id": "SND-012",
+    "cells": [
+      "SND-012",
+      "Support per-session proxy settings only for approved stable routing.",
+      "Must",
+      "Configuration is encrypted, audited and tested."
+    ],
+    "table": 24
+  },
+  {
+    "id": "SND-013",
+    "cells": [
+      "SND-013",
+      "Maintain per-sender configured and measured safe throughput.",
+      "Must",
+      "Capacity view separates configured cap from observed rate."
+    ],
+    "table": 24
+  },
+  {
+    "id": "SND-014",
+    "cells": [
+      "SND-014",
+      "Maintain per-sender hourly/daily safety limits and cooldown.",
+      "Must",
+      "Scheduler stops allocation at limit."
+    ],
+    "table": 24
+  },
+  {
+    "id": "SND-015",
+    "cells": [
+      "SND-015",
+      "Maintain per-sender failure, disconnect and delivery-health thresholds.",
+      "Must",
+      "Threshold breach pauses or drains sender."
+    ],
+    "table": 24
+  },
+  {
+    "id": "SND-016",
+    "cells": [
+      "SND-016",
+      "Prevent automatic allocation to a newly paired sender until readiness checks pass.",
+      "Must",
+      "Readiness test status is required."
+    ],
+    "table": 24
+  },
+  {
+    "id": "SND-017",
+    "cells": [
+      "SND-017",
+      "Support sender reservation for a campaign or organisation.",
+      "Must",
+      "Conflicting reservation is rejected."
+    ],
+    "table": 24
+  },
+  {
+    "id": "SND-018",
+    "cells": [
+      "SND-018",
+      "Support one-active-campaign-per-sender policy as configurable default.",
+      "Must",
+      "Interleaving is blocked unless explicitly enabled/tested."
+    ],
+    "table": 24
+  },
+  {
+    "id": "SND-019",
+    "cells": [
+      "SND-019",
+      "Provide pairing/QR access only to technical administrators with step-up authentication.",
+      "Must",
+      "Unauthorised role cannot view pairing data."
+    ],
+    "table": 24
+  },
+  {
+    "id": "SND-020",
+    "cells": [
+      "SND-020",
+      "Never log session tokens, QR payloads or credentials.",
+      "Must",
+      "Secret scanning/log tests pass."
+    ],
+    "table": 24
+  },
+  {
+    "id": "SND-021",
+    "cells": [
+      "SND-021",
+      "Support controlled retirement and secure session-state deletion.",
+      "Must",
+      "Retired sender cannot receive jobs and deletion is evidenced."
+    ],
+    "table": 24
+  },
+  {
+    "id": "SND-022",
+    "cells": [
+      "SND-022",
+      "Maintain warm standby workers/senders without counting them as guaranteed capacity until health-checked.",
+      "Must",
+      "Capacity calculation includes only ready capacity."
+    ],
+    "table": 24
+  },
+  {
+    "id": "DLV-001",
+    "cells": [
+      "DLV-001",
+      "Create one authoritative campaign-recipient record per unique campaign, contact and message version.",
+      "Must",
+      "Database unique constraint blocks duplicates."
+    ],
+    "table": 25
+  },
+  {
+    "id": "DLV-002",
+    "cells": [
+      "DLV-002",
+      "Use a deterministic idempotency key for every recipient obligation.",
+      "Must",
+      "Replayed release/job maps to the same record."
+    ],
+    "table": 25
+  },
+  {
+    "id": "DLV-003",
+    "cells": [
+      "DLV-003",
+      "Create entitlement reservation, recipient record and outbox event atomically.",
+      "Must",
+      "Failure cannot leave untracked queue work or missing queue work."
+    ],
+    "table": 25
+  },
+  {
+    "id": "DLV-004",
+    "cells": [
+      "DLV-004",
+      "Publish execution jobs from a transactional outbox.",
+      "Must",
+      "Outbox publisher can resume after crash."
+    ],
+    "table": 25
+  },
+  {
+    "id": "DLV-005",
+    "cells": [
+      "DLV-005",
+      "Use Redis/BullMQ or equivalent only as execution queue, not source of truth.",
+      "Must",
+      "Queue can be rebuilt from PostgreSQL state."
+    ],
+    "table": 25
+  },
+  {
+    "id": "DLV-006",
+    "cells": [
+      "DLV-006",
+      "Partition large campaigns into bounded dispatch shards.",
+      "Must",
+      "Five-million-recipient campaign does not create one unmanageable transaction/job."
+    ],
+    "table": 25
+  },
+  {
+    "id": "DLV-007",
+    "cells": [
+      "DLV-007",
+      "Claim jobs atomically with lease/visibility timeout.",
+      "Must",
+      "Two workers cannot process the same job concurrently."
+    ],
+    "table": 25
+  },
+  {
+    "id": "DLV-008",
+    "cells": [
+      "DLV-008",
+      "Allocate jobs only to ready sender sessions with available capacity.",
+      "Must",
+      "Ineligible sender receives no job."
+    ],
+    "table": 25
+  },
+  {
+    "id": "DLV-009",
+    "cells": [
+      "DLV-009",
+      "Respect campaign schedule, quiet hours, deadline and pause state at dispatch time.",
+      "Must",
+      "Held jobs remain unsent."
+    ],
+    "table": 25
+  },
+  {
+    "id": "DLV-010",
+    "cells": [
+      "DLV-010",
+      "Perform a final consent, suppression and contact-status check before submission.",
+      "Must",
+      "Late withdrawal is excluded."
+    ],
+    "table": 25
+  },
+  {
+    "id": "DLV-011",
+    "cells": [
+      "DLV-011",
+      "Apply per-sender rate and in-flight limits.",
+      "Must",
+      "Load test demonstrates bounded throughput."
+    ],
+    "table": 25
+  },
+  {
+    "id": "DLV-012",
+    "cells": [
+      "DLV-012",
+      "Record every delivery attempt separately from final recipient state.",
+      "Must",
+      "Retry history is preserved."
+    ],
+    "table": 25
+  },
+  {
+    "id": "DLV-013",
+    "cells": [
+      "DLV-013",
+      "Use configurable retry policy by failure category.",
+      "Must",
+      "Permanent errors are not retried; transient errors follow backoff."
+    ],
+    "table": 25
+  },
+  {
+    "id": "DLV-014",
+    "cells": [
+      "DLV-014",
+      "Apply exponential/backoff with jitter for infrastructure errors.",
+      "Must",
+      "Retry schedule follows configured bounds."
+    ],
+    "table": 25
+  },
+  {
+    "id": "DLV-015",
+    "cells": [
+      "DLV-015",
+      "Avoid automatic resend after an uncertain provider outcome.",
+      "Must",
+      "Unknown outcome enters reconciliation/manual policy."
+    ],
+    "table": 25
+  },
+  {
+    "id": "DLV-016",
+    "cells": [
+      "DLV-016",
+      "Support safe operator retry only when duplicate risk is understood and approved.",
+      "Must",
+      "Retry action displays risk and records approval."
+    ],
+    "table": 25
+  },
+  {
+    "id": "DLV-017",
+    "cells": [
+      "DLV-017",
+      "Support campaign pause that stops new claims while allowing controlled treatment of in-flight jobs.",
+      "Must",
+      "Pause semantics are tested."
+    ],
+    "table": 25
+  },
+  {
+    "id": "DLV-018",
+    "cells": [
+      "DLV-018",
+      "Support campaign cancellation that marks undispatched obligations cancelled and preserves attempts.",
+      "Must",
+      "Counts reconcile after cancellation."
+    ],
+    "table": 25
+  },
+  {
+    "id": "DLV-019",
+    "cells": [
+      "DLV-019",
+      "Recover expired claims without losing or duplicating obligations.",
+      "Must",
+      "Worker-kill test passes."
+    ],
+    "table": 25
+  },
+  {
+    "id": "DLV-020",
+    "cells": [
+      "DLV-020",
+      "Reconstruct missing queue jobs from authoritative eligible states.",
+      "Must",
+      "Queue-loss recovery test returns expected count."
+    ],
+    "table": 25
+  },
+  {
+    "id": "DLV-021",
+    "cells": [
+      "DLV-021",
+      "Expose queue depth and oldest-job age by campaign/shard/sender.",
+      "Must",
+      "Operations dashboard and alerts work."
+    ],
+    "table": 25
+  },
+  {
+    "id": "DLV-022",
+    "cells": [
+      "DLV-022",
+      "Prioritise jobs using configurable campaign priority without starving normal campaigns.",
+      "Must",
+      "Scheduler fairness test passes."
+    ],
+    "table": 25
+  },
+  {
+    "id": "DLV-023",
+    "cells": [
+      "DLV-023",
+      "Reserve capacity for high-priority campaigns only through explicit policy.",
+      "Must",
+      "Reservation is visible and audited."
+    ],
+    "table": 25
+  },
+  {
+    "id": "DLV-024",
+    "cells": [
+      "DLV-024",
+      "Forecast completion using remaining jobs and measured available capacity.",
+      "Must",
+      "Forecast updates as throughput changes."
+    ],
+    "table": 25
+  },
+  {
+    "id": "DLV-025",
+    "cells": [
+      "DLV-025",
+      "Reject or flag campaigns whose required rate exceeds measured safe capacity.",
+      "Must",
+      "Admission decision and assumptions are recorded."
+    ],
+    "table": 25
+  },
+  {
+    "id": "EVT-001",
+    "cells": [
+      "EVT-001",
+      "Authenticate provider/gateway events using signature or trusted channel.",
+      "Must",
+      "Invalid signature is rejected and alerted."
+    ],
+    "table": 26
+  },
+  {
+    "id": "EVT-002",
+    "cells": [
+      "EVT-002",
+      "Require event identifier, provider message identifier, type and occurrence time where available.",
+      "Must",
+      "Malformed event is quarantined."
+    ],
+    "table": 26
+  },
+  {
+    "id": "EVT-003",
+    "cells": [
+      "EVT-003",
+      "Deduplicate repeated provider events.",
+      "Must",
+      "Duplicate webhook does not increment metrics twice."
+    ],
+    "table": 26
+  },
+  {
+    "id": "EVT-004",
+    "cells": [
+      "EVT-004",
+      "Handle out-of-order events using monotonic state precedence and event history.",
+      "Must",
+      "Delivered-before-sent event results in valid final state."
+    ],
+    "table": 26
+  },
+  {
+    "id": "EVT-005",
+    "cells": [
+      "EVT-005",
+      "Preserve raw redacted event metadata for diagnosis according to retention.",
+      "Must",
+      "Authorised user can inspect without secrets/PII leakage."
+    ],
+    "table": 26
+  },
+  {
+    "id": "EVT-006",
+    "cells": [
+      "EVT-006",
+      "Map provider-specific states and errors to canonical statuses/reason codes.",
+      "Must",
+      "Contract tests cover mapping."
+    ],
+    "table": 26
+  },
+  {
+    "id": "EVT-007",
+    "cells": [
+      "EVT-007",
+      "Correlate events using provider ID and fallback identifiers where safe.",
+      "Must",
+      "Unmatched events enter reconciliation queue."
+    ],
+    "table": 26
+  },
+  {
+    "id": "EVT-008",
+    "cells": [
+      "EVT-008",
+      "Never downgrade a terminal higher-confidence state because of a late lower state.",
+      "Must",
+      "State machine tests pass."
+    ],
+    "table": 26
+  },
+  {
+    "id": "EVT-009",
+    "cells": [
+      "EVT-009",
+      "Process inbound STOP and configured opt-out commands promptly.",
+      "Must",
+      "Suppression is active within target time."
+    ],
+    "table": 26
+  },
+  {
+    "id": "EVT-010",
+    "cells": [
+      "EVT-010",
+      "Store inbound replies with minimised content and access restrictions.",
+      "Must",
+      "Only authorised operations users can view."
+    ],
+    "table": 26
+  },
+  {
+    "id": "EVT-011",
+    "cells": [
+      "EVT-011",
+      "Support manual classification/escalation of replies where required.",
+      "Must",
+      "Action is audited."
+    ],
+    "table": 26
+  },
+  {
+    "id": "EVT-012",
+    "cells": [
+      "EVT-012",
+      "Run scheduled reconciliation for submitted/pending/unknown records.",
+      "Must",
+      "Stale records are resolved or surfaced."
+    ],
+    "table": 26
+  },
+  {
+    "id": "EVT-013",
+    "cells": [
+      "EVT-013",
+      "Declare final unknown only after configured reconciliation window.",
+      "Must",
+      "Premature finalisation is prevented."
+    ],
+    "table": 26
+  },
+  {
+    "id": "EVT-014",
+    "cells": [
+      "EVT-014",
+      "Record discrepancy between gateway acceptance and later delivery outcome.",
+      "Must",
+      "Campaign metrics expose the funnel."
+    ],
+    "table": 26
+  },
+  {
+    "id": "EVT-015",
+    "cells": [
+      "EVT-015",
+      "Support bulk provider-status import/reconciliation if an adapter later provides it.",
+      "Must",
+      "Interface supports asynchronous status source."
+    ],
+    "table": 26
+  },
+  {
+    "id": "MET-001",
+    "cells": [
+      "MET-001",
+      "Provide campaign dashboard with audience, dispatch, delivery, engagement and performance sections.",
+      "Must",
+      "Dashboard loads for a large campaign within NFR target."
+    ],
+    "table": 27
+  },
+  {
+    "id": "MET-002",
+    "cells": [
+      "MET-002",
+      "Show uploaded/imported, valid, duplicate, invalid, suppressed, consent-ineligible, capped and final-eligible counts.",
+      "Must",
+      "Waterfall reconciles to source/snapshot totals."
+    ],
+    "table": 27
+  },
+  {
+    "id": "MET-003",
+    "cells": [
+      "MET-003",
+      "Show authorised, queued, claimed, submitted, gateway-accepted, sent, delivered, read, failed, unknown and cancelled counts.",
+      "Must",
+      "State totals reconcile to recipient ledger."
+    ],
+    "table": 27
+  },
+  {
+    "id": "MET-004",
+    "cells": [
+      "MET-004",
+      "Do not label submitted or gateway-accepted messages as delivered.",
+      "Must",
+      "UI/report terminology tests pass."
+    ],
+    "table": 27
+  },
+  {
+    "id": "MET-005",
+    "cells": [
+      "MET-005",
+      "Show denominator and definition for every rate.",
+      "Must",
+      "Hover/export includes formula."
+    ],
+    "table": 27
+  },
+  {
+    "id": "MET-006",
+    "cells": [
+      "MET-006",
+      "Show current, average and peak submission throughput.",
+      "Must",
+      "Metrics match event/time-bucket data."
+    ],
+    "table": 27
+  },
+  {
+    "id": "MET-007",
+    "cells": [
+      "MET-007",
+      "Show queue depth, oldest job age and forecast completion.",
+      "Must",
+      "Forecast updates at configured interval."
+    ],
+    "table": 27
+  },
+  {
+    "id": "MET-008",
+    "cells": [
+      "MET-008",
+      "Show actual start, completion and deadline variance.",
+      "Must",
+      "Completed campaign report includes timestamps."
+    ],
+    "table": 27
+  },
+  {
+    "id": "MET-009",
+    "cells": [
+      "MET-009",
+      "Show retry count, retry rate and major failure reasons.",
+      "Must",
+      "Reason totals reconcile to attempts."
+    ],
+    "table": 27
+  },
+  {
+    "id": "MET-010",
+    "cells": [
+      "MET-010",
+      "Show sender allocation, success, failure, delivery ratio, latency and reconnect count.",
+      "Must",
+      "Sender roll-up equals campaign totals where applicable."
+    ],
+    "table": 27
+  },
+  {
+    "id": "MET-011",
+    "cells": [
+      "MET-011",
+      "Show geography and demographic breakdowns using snapshot attributes.",
+      "Must",
+      "Lagos/age segment report matches membership."
+    ],
+    "table": 27
+  },
+  {
+    "id": "MET-012",
+    "cells": [
+      "MET-012",
+      "Apply configurable minimum-cohort privacy threshold.",
+      "Must",
+      "Small cells are suppressed/combined."
+    ],
+    "table": 27
+  },
+  {
+    "id": "MET-013",
+    "cells": [
+      "MET-013",
+      "Show replies, opt-outs and link clicks where reliably available.",
+      "Must",
+      "Metric definition states collection limitations."
+    ],
+    "table": 27
+  },
+  {
+    "id": "MET-014",
+    "cells": [
+      "MET-014",
+      "Maintain incremental aggregate counters rather than rescan all recipient rows for each dashboard load.",
+      "Must",
+      "Performance test verifies bounded query plan."
+    ],
+    "table": 27
+  },
+  {
+    "id": "MET-015",
+    "cells": [
+      "MET-015",
+      "Make metric event consumers idempotent.",
+      "Must",
+      "Replay does not double-count."
+    ],
+    "table": 27
+  },
+  {
+    "id": "MET-016",
+    "cells": [
+      "MET-016",
+      "Provide near-real-time updates with configurable refresh interval.",
+      "Must",
+      "Update latency meets NFR."
+    ],
+    "table": 27
+  },
+  {
+    "id": "MET-017",
+    "cells": [
+      "MET-017",
+      "Generate an organisation-facing campaign report without portal access.",
+      "Must",
+      "Authorised user can export approved report."
+    ],
+    "table": 27
+  },
+  {
+    "id": "MET-018",
+    "cells": [
+      "MET-018",
+      "Support PDF-ready, XLSX and CSV report data outputs.",
+      "Must",
+      "Generated files open and totals match."
+    ],
+    "table": 27
+  },
+  {
+    "id": "MET-019",
+    "cells": [
+      "MET-019",
+      "Exclude internal notes, secrets, raw error payloads and unnecessary MSISDNs from client report.",
+      "Must",
+      "Report-content security test passes."
+    ],
+    "table": 27
+  },
+  {
+    "id": "MET-020",
+    "cells": [
+      "MET-020",
+      "Support approved branding and explanatory caveats.",
+      "Must",
+      "Report template version is recorded."
+    ],
+    "table": 27
+  },
+  {
+    "id": "MET-021",
+    "cells": [
+      "MET-021",
+      "Allow campaign report regeneration from retained summary data.",
+      "Must",
+      "Archived campaign can reproduce approved metrics."
+    ],
+    "table": 27
+  },
+  {
+    "id": "MET-022",
+    "cells": [
+      "MET-022",
+      "Record report generator, time, version and checksum.",
+      "Must",
+      "Report audit record is complete."
+    ],
+    "table": 27
+  },
+  {
+    "id": "MET-023",
+    "cells": [
+      "MET-023",
+      "Support masked recipient-level exception export for authorised operations.",
+      "Must",
+      "Export is permissioned, encrypted and logged."
+    ],
+    "table": 27
+  },
+  {
+    "id": "MET-024",
+    "cells": [
+      "MET-024",
+      "Expose metric-quality flags for incomplete provider events or reconciliation gaps.",
+      "Must",
+      "Report cannot imply false completeness."
+    ],
+    "table": 27
+  },
+  {
+    "id": "ADM-001",
+    "cells": [
+      "ADM-001",
+      "Provide an internal configuration catalogue with typed values and validation.",
+      "Must",
+      "Invalid configuration cannot be activated."
+    ],
+    "table": 28
+  },
+  {
+    "id": "ADM-002",
+    "cells": [
+      "ADM-002",
+      "Version and effective-date material configuration.",
+      "Must",
+      "Campaign records policy/config version used."
+    ],
+    "table": 28
+  },
+  {
+    "id": "ADM-003",
+    "cells": [
+      "ADM-003",
+      "Require approval for security, consent, retention, throughput and retry policy changes.",
+      "Must",
+      "Maker-checker is enforced."
+    ],
+    "table": 28
+  },
+  {
+    "id": "ADM-004",
+    "cells": [
+      "ADM-004",
+      "Support rollback to a prior configuration version.",
+      "Must",
+      "Rollback is audited and deterministic."
+    ],
+    "table": 28
+  },
+  {
+    "id": "ADM-005",
+    "cells": [
+      "ADM-005",
+      "Configure consent purposes, channels, expiry and review rules.",
+      "Must",
+      "New purpose can be added without code change."
+    ],
+    "table": 28
+  },
+  {
+    "id": "ADM-006",
+    "cells": [
+      "ADM-006",
+      "Configure age staleness and estimation policy.",
+      "Must",
+      "Segment engine uses active version."
+    ],
+    "table": 28
+  },
+  {
+    "id": "ADM-007",
+    "cells": [
+      "ADM-007",
+      "Configure state/LGA reference data and validation.",
+      "Must",
+      "Reference update preserves historical codes."
+    ],
+    "table": 28
+  },
+  {
+    "id": "ADM-008",
+    "cells": [
+      "ADM-008",
+      "Configure suppression precedence and STOP keywords.",
+      "Must",
+      "Policy test suite can be rerun."
+    ],
+    "table": 28
+  },
+  {
+    "id": "ADM-009",
+    "cells": [
+      "ADM-009",
+      "Configure frequency caps by organisation/purpose/channel.",
+      "Must",
+      "Eligibility reflects cap."
+    ],
+    "table": 28
+  },
+  {
+    "id": "ADM-010",
+    "cells": [
+      "ADM-010",
+      "Configure campaign approval thresholds and roles.",
+      "Must",
+      "Workflow changes without deployment."
+    ],
+    "table": 28
+  },
+  {
+    "id": "ADM-011",
+    "cells": [
+      "ADM-011",
+      "Configure sender/session limits, rate caps and health thresholds.",
+      "Must",
+      "Worker scheduler receives versioned settings."
+    ],
+    "table": 28
+  },
+  {
+    "id": "ADM-012",
+    "cells": [
+      "ADM-012",
+      "Configure retry, reconciliation and unknown-outcome windows.",
+      "Must",
+      "Dispatch follows active policy."
+    ],
+    "table": 28
+  },
+  {
+    "id": "ADM-013",
+    "cells": [
+      "ADM-013",
+      "Configure report templates, privacy thresholds and retention.",
+      "Must",
+      "Generated report reflects version."
+    ],
+    "table": 28
+  },
+  {
+    "id": "ADM-014",
+    "cells": [
+      "ADM-014",
+      "Record business and security audit events append-only.",
+      "Must",
+      "Ordinary users cannot update/delete audit events."
+    ],
+    "table": 28
+  },
+  {
+    "id": "ADM-015",
+    "cells": [
+      "ADM-015",
+      "Include actor, action, object, before/after summary, reason, IP/device, time and correlation ID in audit where applicable.",
+      "Must",
+      "Audit completeness tests pass."
+    ],
+    "table": 28
+  },
+  {
+    "id": "ADM-016",
+    "cells": [
+      "ADM-016",
+      "Provide searchable audit views with export controls.",
+      "Must",
+      "Auditor can trace one campaign end to end."
+    ],
+    "table": 28
+  },
+  {
+    "id": "ADM-017",
+    "cells": [
+      "ADM-017",
+      "Protect audit integrity using restricted roles and tamper-evident chaining or external archival.",
+      "Must",
+      "Integrity validation detects alteration."
+    ],
+    "table": 28
+  },
+  {
+    "id": "ADM-018",
+    "cells": [
+      "ADM-018",
+      "Alert on privileged configuration changes and audit-control failures.",
+      "Must",
+      "Test alert is delivered."
+    ],
+    "table": 28
+  },
+  {
+    "id": "PRV-001",
+    "cells": [
+      "PRV-001",
+      "Support authorised exact contact lookup using HMAC and controlled decryption.",
+      "Must",
+      "DSAR operator can locate a known number."
+    ],
+    "table": 29
+  },
+  {
+    "id": "PRV-002",
+    "cells": [
+      "PRV-002",
+      "Provide a data-subject access package containing profile, sources, consent, suppression and campaign history according to policy.",
+      "Must",
+      "Package is complete and secure."
+    ],
+    "table": 29
+  },
+  {
+    "id": "PRV-003",
+    "cells": [
+      "PRV-003",
+      "Support correction requests with source/reason and history.",
+      "Must",
+      "Current value changes without erasing audit."
+    ],
+    "table": 29
+  },
+  {
+    "id": "PRV-004",
+    "cells": [
+      "PRV-004",
+      "Support objection/opt-out with immediate effective suppression.",
+      "Must",
+      "Future eligibility is blocked."
+    ],
+    "table": 29
+  },
+  {
+    "id": "PRV-005",
+    "cells": [
+      "PRV-005",
+      "Support deletion/anonymisation workflow subject to lawful retention and suppression requirements.",
+      "Must",
+      "Decision records retained; unnecessary PII removed."
+    ],
+    "table": 29
+  },
+  {
+    "id": "PRV-006",
+    "cells": [
+      "PRV-006",
+      "Support contact export in structured format for approved portability requests.",
+      "Must",
+      "Export is controlled and logged."
+    ],
+    "table": 29
+  },
+  {
+    "id": "PRV-007",
+    "cells": [
+      "PRV-007",
+      "Track DSAR status, deadlines, owner and evidence.",
+      "Must",
+      "Overdue alert is produced."
+    ],
+    "table": 29
+  },
+  {
+    "id": "PRV-008",
+    "cells": [
+      "PRV-008",
+      "Restrict disclosure of third-party or security-sensitive information.",
+      "Must",
+      "Review step exists before release."
+    ],
+    "table": 29
+  },
+  {
+    "id": "PRV-009",
+    "cells": [
+      "PRV-009",
+      "Support retention holds and legal holds with approval.",
+      "Must",
+      "Scheduled deletion excludes held records and logs reason."
+    ],
+    "table": 29
+  },
+  {
+    "id": "PRV-010",
+    "cells": [
+      "PRV-010",
+      "Provide privacy-impact and data-inventory reports.",
+      "Must",
+      "System can identify categories, purposes, sources and retention."
+    ],
+    "table": 29
+  },
+  {
+    "id": "BR-001",
+    "cells": [
+      "BR-001",
+      "A demographic match alone never authorises a campaign send."
+    ],
+    "table": 37
+  },
+  {
+    "id": "BR-002",
+    "cells": [
+      "BR-002",
+      "Eligibility requires a valid organisation/controller, purpose and channel basis plus no overriding suppression."
+    ],
+    "table": 37
+  },
+  {
+    "id": "BR-003",
+    "cells": [
+      "BR-003",
+      "An individual withdrawal overrides an earlier or organisation-level approval."
+    ],
+    "table": 37
+  },
+  {
+    "id": "BR-004",
+    "cells": [
+      "BR-004",
+      "The same campaign/message version shall not be sent more than once to the same contact unless a separately approved resend is created."
+    ],
+    "table": 37
+  },
+  {
+    "id": "BR-005",
+    "cells": [
+      "BR-005",
+      "An audience snapshot is immutable; changes require a new snapshot and approval."
+    ],
+    "table": 37
+  },
+  {
+    "id": "BR-006",
+    "cells": [
+      "BR-006",
+      "A message version is immutable after approval; any material change creates a new version."
+    ],
+    "table": 37
+  },
+  {
+    "id": "BR-007",
+    "cells": [
+      "BR-007",
+      "Campaign entitlement cannot be transferred or reused by another campaign."
+    ],
+    "table": 37
+  },
+  {
+    "id": "BR-008",
+    "cells": [
+      "BR-008",
+      "Gateway acceptance does not equal sent, delivered or read."
+    ],
+    "table": 37
+  },
+  {
+    "id": "BR-009",
+    "cells": [
+      "BR-009",
+      "Only actual registered WhatsApp MSISDNs may be used as OpenWA senders."
+    ],
+    "table": 37
+  },
+  {
+    "id": "BR-010",
+    "cells": [
+      "BR-010",
+      "A logical sender pool is an internal routing abstraction, not a recipient-facing alphanumeric sender ID."
+    ],
+    "table": 37
+  },
+  {
+    "id": "BR-011",
+    "cells": [
+      "BR-011",
+      "A live WhatsApp session shall have exactly one active worker owner."
+    ],
+    "table": 37
+  },
+  {
+    "id": "BR-012",
+    "cells": [
+      "BR-012",
+      "Stable worker IPs may be used for isolation; rapid IP rotation or evasion logic is prohibited."
+    ],
+    "table": 37
+  },
+  {
+    "id": "BR-013",
+    "cells": [
+      "BR-013",
+      "A sender\u2019s safe capacity is based on measured evidence and configured headroom, not theoretical batch concurrency."
+    ],
+    "table": 37
+  },
+  {
+    "id": "BR-014",
+    "cells": [
+      "BR-014",
+      "The platform shall not accept a hard deadline when measured safe capacity is insufficient without an explicit exception."
+    ],
+    "table": 37
+  },
+  {
+    "id": "BR-015",
+    "cells": [
+      "BR-015",
+      "Unknown outcomes are reconciled before any resend decision."
+    ],
+    "table": 37
+  },
+  {
+    "id": "BR-016",
+    "cells": [
+      "BR-016",
+      "Contact profile updates cannot silently broaden consent."
+    ],
+    "table": 37
+  },
+  {
+    "id": "BR-017",
+    "cells": [
+      "BR-017",
+      "Reported age remains as collected; derived estimated age is labelled approximate."
+    ],
+    "table": 37
+  },
+  {
+    "id": "BR-018",
+    "cells": [
+      "BR-018",
+      "No gender, age, location or interest value shall be inferred without an approved source and policy."
+    ],
+    "table": 37
+  },
+  {
+    "id": "BR-019",
+    "cells": [
+      "BR-019",
+      "Raw MSISDN values shall not appear in standard logs, URLs or monitoring dimensions."
+    ],
+    "table": 37
+  },
+  {
+    "id": "BR-020",
+    "cells": [
+      "BR-020",
+      "External organisations do not receive portal access in release one."
+    ],
+    "table": 37
+  },
+  {
+    "id": "BR-021",
+    "cells": [
+      "BR-021",
+      "All critical overrides require a reason, expiry and audit; high-risk overrides require a second approver."
+    ],
+    "table": 37
+  },
+  {
+    "id": "BR-022",
+    "cells": [
+      "BR-022",
+      "Every report shall state its metric definitions and provider-status limitations."
+    ],
+    "table": 37
+  },
+  {
+    "id": "BR-023",
+    "cells": [
+      "BR-023",
+      "Suppression is checked again immediately before dispatch."
+    ],
+    "table": 37
+  },
+  {
+    "id": "BR-024",
+    "cells": [
+      "BR-024",
+      "Redis loss must not erase authorised campaign obligations."
+    ],
+    "table": 37
+  },
+  {
+    "id": "BR-025",
+    "cells": [
+      "BR-025",
+      "A worker crash during submission produces an uncertain state until reconciled; it does not automatically send again."
+    ],
+    "table": 37
+  },
+  {
+    "id": "BR-026",
+    "cells": [
+      "BR-026",
+      "Configuration used for consent, segmentation, dispatch and reporting is versioned and retained with the campaign."
+    ],
+    "table": 37
+  },
+  {
+    "id": "BR-027",
+    "cells": [
+      "BR-027",
+      "Small demographic report cells are suppressed or grouped according to privacy threshold."
+    ],
+    "table": 37
+  },
+  {
+    "id": "BR-028",
+    "cells": [
+      "BR-028",
+      "Campaign evidence and source files are retained or deleted only according to approved retention rules."
+    ],
+    "table": 37
+  },
+  {
+    "id": "BR-029",
+    "cells": [
+      "BR-029",
+      "A suspended organisation or sender cannot be selected for a new release."
+    ],
+    "table": 37
+  },
+  {
+    "id": "BR-030",
+    "cells": [
+      "BR-030",
+      "All campaign and sender status changes are attributable to a user, service or system policy."
+    ],
+    "table": 37
+  },
+  {
+    "id": "API-001",
+    "cells": [
+      "API-001",
+      "Gateway delivery command shall not contain raw consent or unnecessary demographic data.",
+      "Must",
+      "Payload inspection confirms data minimisation."
+    ],
+    "table": 40
+  },
+  {
+    "id": "API-002",
+    "cells": [
+      "API-002",
+      "Recipient data shall be decrypted only within the minimum authorised boundary required to send.",
+      "Must",
+      "Tracing and access review verify the boundary."
+    ],
+    "table": 40
+  },
+  {
+    "id": "API-003",
+    "cells": [
+      "API-003",
+      "Gateway shall reject work for an unowned, paused or incompatible session.",
+      "Must",
+      "Contract test returns canonical rejection."
+    ],
+    "table": 40
+  },
+  {
+    "id": "API-004",
+    "cells": [
+      "API-004",
+      "Gateway shall return the same accepted result for a repeated idempotency key.",
+      "Must",
+      "Replay test performs no second provider call."
+    ],
+    "table": 40
+  },
+  {
+    "id": "API-005",
+    "cells": [
+      "API-005",
+      "Gateway events shall include stable delivery and provider correlation identifiers.",
+      "Must",
+      "Event ingestor matches attempt deterministically."
+    ],
+    "table": 40
+  },
+  {
+    "id": "API-006",
+    "cells": [
+      "API-006",
+      "Gateway capability response shall include message types, engine version and event support.",
+      "Must",
+      "Campaign validation can block unsupported feature."
+    ],
+    "table": 40
+  },
+  {
+    "id": "API-007",
+    "cells": [
+      "API-007",
+      "Service-to-service credentials shall be scoped, rotated and stored outside source code.",
+      "Must",
+      "Secret audit passes."
+    ],
+    "table": 40
+  },
+  {
+    "id": "API-008",
+    "cells": [
+      "API-008",
+      "API schemas shall be backward compatible within a supported major version.",
+      "Must",
+      "Consumer contract tests pass during deployment."
+    ],
+    "table": 40
+  },
+  {
+    "id": "UX-001",
+    "cells": [
+      "UX-001",
+      "Use an accessible responsive desktop-first interface for internal operations.",
+      "Must",
+      "Core screens pass agreed accessibility audit."
+    ],
+    "table": 42
+  },
+  {
+    "id": "UX-002",
+    "cells": [
+      "UX-002",
+      "Show environment and classification banners.",
+      "Must",
+      "Production/staging and confidentiality are unmistakable."
+    ],
+    "table": 42
+  },
+  {
+    "id": "UX-003",
+    "cells": [
+      "UX-003",
+      "Use masked PII by default with explicit authorised reveal.",
+      "Must",
+      "Default page source contains no plaintext value."
+    ],
+    "table": 42
+  },
+  {
+    "id": "UX-004",
+    "cells": [
+      "UX-004",
+      "Show status, owner, next required action and blocking reasons on every campaign.",
+      "Must",
+      "Operator can determine state without opening logs."
+    ],
+    "table": 42
+  },
+  {
+    "id": "UX-005",
+    "cells": [
+      "UX-005",
+      "Provide progressive count waterfall in segment builder.",
+      "Must",
+      "Count/exclusion reasons update and reconcile."
+    ],
+    "table": 42
+  },
+  {
+    "id": "UX-006",
+    "cells": [
+      "UX-006",
+      "Warn clearly when age is approximate or stale.",
+      "Must",
+      "Lagos 18\u201335 cohort shows age method and staleness."
+    ],
+    "table": 42
+  },
+  {
+    "id": "UX-007",
+    "cells": [
+      "UX-007",
+      "Require explicit confirmation for final release, pause, cancel, export and override.",
+      "Must",
+      "Accidental single-click action is prevented."
+    ],
+    "table": 42
+  },
+  {
+    "id": "UX-008",
+    "cells": [
+      "UX-008",
+      "Show immutable version identifiers for message, audience, consent review and config.",
+      "Must",
+      "Approval screen identifies exact artefacts."
+    ],
+    "table": 42
+  },
+  {
+    "id": "UX-009",
+    "cells": [
+      "UX-009",
+      "Show actual sender MSISDN masked and explain logical pool behaviour.",
+      "Must",
+      "No misleading sender-ID representation."
+    ],
+    "table": 42
+  },
+  {
+    "id": "UX-010",
+    "cells": [
+      "UX-010",
+      "Provide live operational campaign view with queue, throughput, forecast and incidents.",
+      "Must",
+      "Metrics update within target."
+    ],
+    "table": 42
+  },
+  {
+    "id": "UX-011",
+    "cells": [
+      "UX-011",
+      "Use reason codes plus human-readable remediation for failures.",
+      "Must",
+      "Operator can triage without raw stack trace."
+    ],
+    "table": 42
+  },
+  {
+    "id": "UX-012",
+    "cells": [
+      "UX-012",
+      "Support saved filters and views without changing authorisation.",
+      "Must",
+      "Personal view persists safely."
+    ],
+    "table": 42
+  },
+  {
+    "id": "UX-013",
+    "cells": [
+      "UX-013",
+      "Provide secure export workflow with purpose, approval and expiry.",
+      "Must",
+      "Unapproved bulk export is blocked."
+    ],
+    "table": 42
+  },
+  {
+    "id": "UX-014",
+    "cells": [
+      "UX-014",
+      "Provide keyboard navigation, labelled controls, focus visibility and semantic tables.",
+      "Must",
+      "Accessibility testing passes."
+    ],
+    "table": 42
+  },
+  {
+    "id": "UX-015",
+    "cells": [
+      "UX-015",
+      "Prevent dangerous browser caching of sensitive pages.",
+      "Must",
+      "Security headers and back-button behaviour are tested."
+    ],
+    "table": 42
+  },
+  {
+    "id": "HST-001",
+    "cells": [
+      "HST-001",
+      "Expose only reverse-proxy HTTPS endpoints required for the portal/API/webhooks.",
+      "Must",
+      "External port scan matches approved list."
+    ],
+    "table": 58
+  },
+  {
+    "id": "HST-002",
+    "cells": [
+      "HST-002",
+      "Restrict SSH to approved source IP/VPN and use keys.",
+      "Must",
+      "Unauthorised source cannot connect."
+    ],
+    "table": 58
+  },
+  {
+    "id": "HST-003",
+    "cells": [
+      "HST-003",
+      "Block public PostgreSQL and Redis access.",
+      "Must",
+      "External scan and firewall rules verify."
+    ],
+    "table": 58
+  },
+  {
+    "id": "HST-004",
+    "cells": [
+      "HST-004",
+      "Allow gateway/control communication only between approved node identities.",
+      "Must",
+      "Firewall/service-auth test passes."
+    ],
+    "table": 58
+  },
+  {
+    "id": "HST-005",
+    "cells": [
+      "HST-005",
+      "Use DNS and certificates that can move to another provider.",
+      "Must",
+      "Migration test/plan has no hardcoded IP dependency."
+    ],
+    "table": 58
+  },
+  {
+    "id": "HST-006",
+    "cells": [
+      "HST-006",
+      "Synchronise time securely across nodes.",
+      "Must",
+      "Clock drift stays within event/signature tolerance."
+    ],
+    "table": 58
+  },
+  {
+    "id": "HST-007",
+    "cells": [
+      "HST-007",
+      "Record node inventory, OS, IP, role and deployed version.",
+      "Must",
+      "Operations CMDB/view is complete."
+    ],
+    "table": 58
+  },
+  {
+    "id": "HST-008",
+    "cells": [
+      "HST-008",
+      "Apply OS and container security updates through controlled maintenance.",
+      "Must",
+      "Patch evidence and rollback procedure exist."
+    ],
+    "table": 58
+  },
+  {
+    "id": "HST-009",
+    "cells": [
+      "HST-009",
+      "Separate production, staging and monitoring credentials.",
+      "Must",
+      "Secret/access review passes."
+    ],
+    "table": 58
+  },
+  {
+    "id": "HST-010",
+    "cells": [
+      "HST-010",
+      "Implement disk, memory, CPU, inode, process/PID and network alerts.",
+      "Must",
+      "Failure simulation triggers alert."
+    ],
+    "table": 58
+  },
+  {
+    "id": "BKP-001",
+    "cells": [
+      "BKP-001",
+      "Perform scheduled PostgreSQL full backups and continuous/incremental WAL archiving.",
+      "Must",
+      "Backup catalogue shows successful recoverable chain."
+    ],
+    "table": 62
+  },
+  {
+    "id": "BKP-002",
+    "cells": [
+      "BKP-002",
+      "Encrypt backups before or during transfer to an independent target.",
+      "Must",
+      "Stored backup is unreadable without approved key."
+    ],
+    "table": 62
+  },
+  {
+    "id": "BKP-003",
+    "cells": [
+      "BKP-003",
+      "Keep backup credentials separate from primary database credentials.",
+      "Must",
+      "Access review passes."
+    ],
+    "table": 62
+  },
+  {
+    "id": "BKP-004",
+    "cells": [
+      "BKP-004",
+      "Back up object metadata and evidence/media according to retention.",
+      "Must",
+      "Recovery restores object and checksum."
+    ],
+    "table": 62
+  },
+  {
+    "id": "BKP-005",
+    "cells": [
+      "BKP-005",
+      "Back up configuration, infrastructure code and deployment manifests through private repository.",
+      "Must",
+      "Environment can be recreated."
+    ],
+    "table": 62
+  },
+  {
+    "id": "BKP-006",
+    "cells": [
+      "BKP-006",
+      "Do not rely solely on Hostinger weekly whole-VPS backup.",
+      "Must",
+      "Database-level recovery evidence exists."
+    ],
+    "table": 62
+  },
+  {
+    "id": "BKP-007",
+    "cells": [
+      "BKP-007",
+      "Test restoration at least monthly during initial production maturity.",
+      "Must",
+      "Signed restore-test report exists."
+    ],
+    "table": 62
+  },
+  {
+    "id": "BKP-008",
+    "cells": [
+      "BKP-008",
+      "Validate restored data integrity, row counts, keys and application compatibility.",
+      "Must",
+      "Automated validation passes."
+    ],
+    "table": 62
+  },
+  {
+    "id": "BKP-009",
+    "cells": [
+      "BKP-009",
+      "Document and test replica promotion or recovery-target activation.",
+      "Must",
+      "Exercise meets RTO or records remediation."
+    ],
+    "table": 62
+  },
+  {
+    "id": "BKP-010",
+    "cells": [
+      "BKP-010",
+      "Protect backups against ordinary application deletion and ransomware.",
+      "Must",
+      "Immutability/versioning policy is evidenced."
+    ],
+    "table": 62
+  },
+  {
+    "id": "AC-001",
+    "cells": [
+      "AC-001",
+      "An authorised internal user can create an organisation and record a consent review with evidence, restrictions and expiry."
+    ],
+    "table": 68
+  },
+  {
+    "id": "AC-002",
+    "cells": [
+      "AC-002",
+      "The system securely imports and reconciles a large contact file, preserving source and validation reasons."
+    ],
+    "table": 68
+  },
+  {
+    "id": "AC-003",
+    "cells": [
+      "AC-003",
+      "The platform stores MSISDN encrypted, deduplicates using HMAC and masks it in UI/logs."
+    ],
+    "table": 68
+  },
+  {
+    "id": "AC-004",
+    "cells": [
+      "AC-004",
+      "The segment builder creates a Lagos age 18\u201335 cohort using the configured self-declared-age policy."
+    ],
+    "table": 68
+  },
+  {
+    "id": "AC-005",
+    "cells": [
+      "AC-005",
+      "The final eligible count applies organisation/purpose/channel consent, expiry, suppression and frequency caps."
+    ],
+    "table": 68
+  },
+  {
+    "id": "AC-006",
+    "cells": [
+      "AC-006",
+      "The system creates an immutable audience snapshot and preserves policy/configuration versions."
+    ],
+    "table": 68
+  },
+  {
+    "id": "AC-007",
+    "cells": [
+      "AC-007",
+      "A campaign message and media are versioned, scanned, tested and approved through maker-checker."
+    ],
+    "table": 68
+  },
+  {
+    "id": "AC-008",
+    "cells": [
+      "AC-008",
+      "Campaign entitlement prevents excess or duplicate recipients."
+    ],
+    "table": 68
+  },
+  {
+    "id": "AC-009",
+    "cells": [
+      "AC-009",
+      "Recipient records/outbox are created atomically and queue can be rebuilt."
+    ],
+    "table": 68
+  },
+  {
+    "id": "AC-010",
+    "cells": [
+      "AC-010",
+      "A gateway worker sends only for sessions it exclusively owns and honours idempotency."
+    ],
+    "table": 68
+  },
+  {
+    "id": "AC-011",
+    "cells": [
+      "AC-011",
+      "Worker and queue failure tests do not silently lose obligations or automatically duplicate uncertain sends."
+    ],
+    "table": 68
+  },
+  {
+    "id": "AC-012",
+    "cells": [
+      "AC-012",
+      "Campaign metrics accurately distinguish gateway accepted, sent, delivered, read, failed and unknown."
+    ],
+    "table": 68
+  },
+  {
+    "id": "AC-013",
+    "cells": [
+      "AC-013",
+      "An opt-out after snapshot prevents subsequent dispatch and appears in reporting."
+    ],
+    "table": 68
+  },
+  {
+    "id": "AC-014",
+    "cells": [
+      "AC-014",
+      "A five-million-recipient synthetic campaign ledger can be created, resumed, queried and reported within accepted performance."
+    ],
+    "table": 68
+  },
+  {
+    "id": "AC-015",
+    "cells": [
+      "AC-015",
+      "A ten-million-contact synthetic repository supports required cohort queries within accepted performance."
+    ],
+    "table": 68
+  },
+  {
+    "id": "AC-016",
+    "cells": [
+      "AC-016",
+      "The Hostinger pilot environment is reproducible, monitored, backed up and successfully restored."
+    ],
+    "table": 68
+  },
+  {
+    "id": "AC-017",
+    "cells": [
+      "AC-017",
+      "Security testing shows role isolation, MFA, safe uploads, no PII logs and protected exports."
+    ],
+    "table": 68
+  },
+  {
+    "id": "AC-018",
+    "cells": [
+      "AC-018",
+      "Audit evidence reconstructs the full path from consent review through final report."
+    ],
+    "table": 68
+  },
+  {
+    "id": "AC-019",
+    "cells": [
+      "AC-019",
+      "The private repository retains MIT attribution, blocks direct main changes and does not auto-merge upstream."
+    ],
+    "table": 68
+  },
+  {
+    "id": "AC-020",
+    "cells": [
+      "AC-020",
+      "Operational owners approve runbooks, emergency stop, incident response and capacity representation."
+    ],
+    "table": 68
+  }
+]

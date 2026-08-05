@@ -1,0 +1,152 @@
+package delivery
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+)
+
+type PostgreSQLRepository struct{ DB *sql.DB }
+
+func (r *PostgreSQLRepository) Create(ctx context.Context, v Recipient) error {
+	if r.DB == nil {
+		return errors.New("database is required")
+	}
+	const q = `INSERT INTO campaign_recipients(id,campaign_id,contact_id,message_version_id,idempotency_key,status,attempt_count,authorised_at,updated_at,version,reconciliation_required,contradictory_event_count) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$8,1,false,0)`
+	_, err := r.DB.ExecContext(ctx, q, v.ID, v.CampaignID, v.ContactID, v.MessageVersionID, v.IdempotencyKey, v.Status, v.AttemptCount, v.UpdatedAt.UTC())
+	return err
+}
+func (r *PostgreSQLRepository) Get(ctx context.Context, id string) (Recipient, error) {
+	if r.DB == nil {
+		return Recipient{}, errors.New("database is required")
+	}
+	v, err := scanRecipient(r.DB.QueryRowContext(ctx, recipientSelect+` WHERE id=$1`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Recipient{}, ErrRecipientNotFound
+	}
+	return v, err
+}
+func (r *PostgreSQLRepository) GetByProviderMessageID(ctx context.Context, providerMessageID string) (Recipient, error) {
+	if r.DB == nil {
+		return Recipient{}, errors.New("database is required")
+	}
+	providerMessageID = strings.TrimSpace(providerMessageID)
+	if providerMessageID == "" {
+		return Recipient{}, ErrRecipientNotFound
+	}
+	v, err := scanRecipient(r.DB.QueryRowContext(ctx, recipientSelect+` WHERE provider_message_id=$1`, providerMessageID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Recipient{}, ErrRecipientNotFound
+	}
+	return v, err
+}
+func (r *PostgreSQLRepository) ApplyEvent(ctx context.Context, id string, event Event) (Recipient, bool, error) {
+	if r.DB == nil {
+		return Recipient{}, false, errors.New("database is required")
+	}
+	if event.DeduplicationKey == "" || event.OccurredAt.IsZero() {
+		return Recipient{}, false, errors.New("event key and occurrence time are required")
+	}
+	tx, err := r.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return Recipient{}, false, err
+	}
+	defer tx.Rollback()
+	payload, _ := json.Marshal(map[string]any{"errorCode": event.ErrorCode, "errorDetail": event.ErrorDetail})
+	fingerprint := Fingerprint(event)
+	var eventID string
+	err = tx.QueryRowContext(ctx, `INSERT INTO delivery_events(campaign_recipient_id,provider_event_id,provider_message_id,event_type,occurred_at,payload,event_deduplication_key,event_fingerprint) VALUES($1,NULLIF($2,''),NULLIF($3,''),$4,$5,$6,$7,$8) ON CONFLICT(event_deduplication_key) DO NOTHING RETURNING id`, id, event.ProviderEventID, event.ProviderMessageID, event.Type, event.OccurredAt.UTC(), payload, event.DeduplicationKey, fingerprint).Scan(&eventID)
+	if errors.Is(err, sql.ErrNoRows) {
+		var existingRecipientID, existingFingerprint string
+		lookupErr := tx.QueryRowContext(ctx, `SELECT campaign_recipient_id::text,event_fingerprint FROM delivery_events WHERE event_deduplication_key=$1`, event.DeduplicationKey).Scan(&existingRecipientID, &existingFingerprint)
+		if lookupErr != nil {
+			return Recipient{}, false, lookupErr
+		}
+		if existingRecipientID != id || existingFingerprint != fingerprint {
+			return Recipient{}, false, ErrEventDedupMismatch
+		}
+		current, getErr := scanRecipient(tx.QueryRowContext(ctx, recipientSelect+` WHERE id=$1`, id))
+		if getErr != nil {
+			return Recipient{}, false, getErr
+		}
+		if commitErr := tx.Commit(); commitErr != nil {
+			return Recipient{}, false, commitErr
+		}
+		return current, false, nil
+	}
+	if err != nil {
+		return Recipient{}, false, fmt.Errorf("insert delivery event: %w", err)
+	}
+	current, err := scanRecipient(tx.QueryRowContext(ctx, recipientSelect+` WHERE id=$1 FOR UPDATE`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Recipient{}, false, ErrRecipientNotFound
+	}
+	if err != nil {
+		return Recipient{}, false, err
+	}
+	next, changed, err := Apply(current, event)
+	if err != nil {
+		return Recipient{}, false, err
+	}
+	if changed {
+		_, err = tx.ExecContext(ctx, `UPDATE campaign_recipients SET status=$2,provider_message_id=NULLIF($3,''),attempt_count=$4,last_error_code=NULLIF($5,''),last_error_detail=NULLIF($6,''),submitted_at=$7,completed_at=$8,updated_at=$9,last_event_at=$10,reconciliation_required=$11,contradictory_event_count=$12,highest_acknowledgement=NULLIF($13,''),version=version+1 WHERE id=$1`, id, next.Status, next.ProviderMessageID, next.AttemptCount, next.LastErrorCode, next.LastErrorDetail, next.SubmittedAt, next.CompletedAt, next.UpdatedAt, next.LastEventAt, next.ReconciliationRequired, next.ContradictoryEventCount, next.HighestAcknowledgement)
+		if err != nil {
+			return Recipient{}, false, fmt.Errorf("update recipient ledger: %w", err)
+		}
+		delta := Delta(current.Status, next.Status)
+		_, err = tx.ExecContext(ctx, `
+INSERT INTO campaign_metrics(campaign_id,updated_at) VALUES($1,$11)
+ON CONFLICT (campaign_id) DO UPDATE SET
+ authorised_total=GREATEST(0,campaign_metrics.authorised_total+$2),
+ queued_total=GREATEST(0,campaign_metrics.queued_total+$3),
+ submitted_total=GREATEST(0,campaign_metrics.submitted_total+$4),
+ sent_total=GREATEST(0,campaign_metrics.sent_total+$5),
+ delivered_total=GREATEST(0,campaign_metrics.delivered_total+$6),
+ read_total=GREATEST(0,campaign_metrics.read_total+$7),
+ failed_total=GREATEST(0,campaign_metrics.failed_total+$8),
+ unknown_total=GREATEST(0,campaign_metrics.unknown_total+$9),
+ suppressed_total=GREATEST(0,campaign_metrics.suppressed_total+$10),
+ updated_at=$11`, current.CampaignID, delta.AuthorisedTotal, delta.QueuedTotal, delta.SubmittedTotal, delta.SentTotal, delta.DeliveredTotal, delta.ReadTotal, delta.FailedTotal, delta.UnknownTotal, delta.SuppressedTotal, next.UpdatedAt)
+		if err != nil {
+			return Recipient{}, false, fmt.Errorf("update campaign metrics: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return Recipient{}, false, err
+	}
+	return next, changed, nil
+}
+
+const recipientSelect = `SELECT id,campaign_id,contact_id,message_version_id,idempotency_key,status,coalesce(highest_acknowledgement,''),coalesce(provider_message_id,''),attempt_count,coalesce(last_error_code,''),coalesce(last_error_detail,''),submitted_at,completed_at,updated_at,last_event_at,reconciliation_required,contradictory_event_count FROM campaign_recipients`
+
+type recipientScanner interface{ Scan(...any) error }
+
+func scanRecipient(row recipientScanner) (Recipient, error) {
+	var v Recipient
+	var submitted, completed, lastEvent sql.NullTime
+	var status string
+	err := row.Scan(&v.ID, &v.CampaignID, &v.ContactID, &v.MessageVersionID, &v.IdempotencyKey, &status, &v.HighestAcknowledgement, &v.ProviderMessageID, &v.AttemptCount, &v.LastErrorCode, &v.LastErrorDetail, &submitted, &completed, &v.UpdatedAt, &lastEvent, &v.ReconciliationRequired, &v.ContradictoryEventCount)
+	if err != nil {
+		return Recipient{}, err
+	}
+	v.Status = Status(status)
+	if submitted.Valid {
+		t := submitted.Time
+		v.SubmittedAt = &t
+	}
+	if completed.Valid {
+		t := completed.Time
+		v.CompletedAt = &t
+	}
+	if lastEvent.Valid {
+		t := lastEvent.Time
+		v.LastEventAt = &t
+	}
+	return v, nil
+}
+
+var _ = time.Time{}

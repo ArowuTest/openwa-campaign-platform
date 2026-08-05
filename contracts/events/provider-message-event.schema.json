@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "provider-message-event.schema.json",
+  "title": "ProviderMessageEventV1",
+  "type": "object",
+  "required": ["schemaVersion", "eventId", "eventType", "sessionId", "clientReference", "occurredAt"],
+  "properties": {
+    "schemaVersion": { "const": "1.0" },
+    "eventId": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "eventType": {
+      "enum": [
+        "gateway.accepted",
+        "message.sent",
+        "message.delivered",
+        "message.read",
+        "message.failed_retryable",
+        "message.failed_permanent",
+        "message.unknown"
+      ]
+    },
+    "sessionId": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "clientReference": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "providerMessageId": { "type": "string", "minLength": 1, "maxLength": 500 },
+    "occurredAt": { "type": "string", "format": "date-time" },
+    "errorCode": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "errorDetail": { "type": "string", "maxLength": 2048 }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "eventType": {
+            "enum": ["gateway.accepted", "message.sent", "message.delivered", "message.read"]
+          }
+        }
+      },
+      "then": { "required": ["providerMessageId"] }
+    },
+    {
+      "if": {
+        "properties": {
+          "eventType": {
+            "enum": ["message.failed_retryable", "message.failed_permanent", "message.unknown"]
+          }
+        }
+      },
+      "then": { "required": ["errorCode"] }
+    }
+  ],
+  "additionalProperties": false
+}

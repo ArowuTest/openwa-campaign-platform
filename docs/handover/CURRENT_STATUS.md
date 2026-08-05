@@ -82,3 +82,11 @@ Durable asynchronous audience materialisation now supports bounded pages, fenced
 - Missing durable dispatch jobs are reconstructed from published PostgreSQL outbox evidence using original deduplication keys.
 - Health/capacity-aware sender allocation, adaptive throttling and execution forecasting are present.
 - Migration `0049_campaign_dispatch_shards.sql` is included but still requires live PostgreSQL execution evidence.
+
+## 0.8.22 reporting and reconciliation update
+
+- Campaign reporting includes commercial approval, payment and multi-pool delivery evidence.
+- A dedicated financial-reconciliation snapshot compares approved recipient volume with actual recipient obligations and canonical outcomes without inventing a billing policy.
+- Organisation performance reporting aggregates campaign, delivery and approved-commercial evidence by currency.
+- Unknown outcomes and missing commercial/payment evidence are surfaced as explicit warnings.
+- Live PostgreSQL execution and production-scale reporting query plans remain external gates.

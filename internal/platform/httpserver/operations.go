@@ -93,6 +93,24 @@ func (s *Server) getCampaignReport(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, 200, v)
 }
 
+func (s *Server) getCampaignFinancialReconciliation(w http.ResponseWriter, r *http.Request) {
+	v, err := s.deps.Operations.CampaignFinancialReconciliation(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeOperationsError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, v)
+}
+
+func (s *Server) getOrganisationPerformanceReport(w http.ResponseWriter, r *http.Request) {
+	v, err := s.deps.Operations.OrganisationPerformanceReport(r.Context(), r.PathValue("id"))
+	if err != nil {
+		writeOperationsError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, v)
+}
+
 type exportRequestInput struct {
 	Kind     string `json:"kind"`
 	ObjectID string `json:"objectId"`

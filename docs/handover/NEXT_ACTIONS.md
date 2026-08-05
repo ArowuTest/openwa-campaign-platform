@@ -89,3 +89,11 @@ Proceed with the messaging and dispatch core: bounded dispatch shards, queue bac
 3. Complete organisation-facing campaign and financial report composition using pool/session evidence.
 4. Build and typecheck both retained OpenWA engine deployments with pinned Node dependencies.
 5. Execute migrations through 0056 against live PostgreSQL and test controlled sends with genuine approved test numbers.
+
+## After 0.8.22
+
+1. Add threshold-driven operational alerts using canonical queue, sender, gateway and campaign-forecast evidence.
+2. Complete provider-status requery and timed escalation for unresolved OpenWA outcomes.
+3. Add pool-reservation consumption history and deadline-breach evidence.
+4. Execute reporting and reconciliation queries against production-like PostgreSQL volumes and review query plans.
+5. Complete both dependency-resolved OpenWA engine builds and live session validation.

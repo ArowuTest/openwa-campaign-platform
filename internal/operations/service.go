@@ -20,6 +20,8 @@ type Repository interface {
 	CreateIncident(context.Context, Incident) (Incident, error)
 	UpdateIncident(context.Context, Incident, int64) (Incident, error)
 	CampaignReport(context.Context, string, time.Time) (CampaignReport, error)
+	CampaignFinancialReconciliation(context.Context, string, time.Time) (CampaignFinancialReconciliation, error)
+	OrganisationPerformanceReport(context.Context, string, time.Time) (OrganisationPerformanceReport, error)
 	ListExceptions(context.Context, string, int) ([]DeliveryException, error)
 	CreateExport(context.Context, ExportRequest) (ExportRequest, error)
 	GetExport(context.Context, string) (ExportRequest, error)
@@ -106,6 +108,14 @@ func (s *Service) ListExceptions(ctx context.Context, campaignID string, limit i
 
 func (s *Service) CampaignReport(ctx context.Context, id string) (CampaignReport, error) {
 	return s.Repo.CampaignReport(ctx, id, s.now())
+}
+
+func (s *Service) CampaignFinancialReconciliation(ctx context.Context, id string) (CampaignFinancialReconciliation, error) {
+	return s.Repo.CampaignFinancialReconciliation(ctx, id, s.now())
+}
+
+func (s *Service) OrganisationPerformanceReport(ctx context.Context, id string) (OrganisationPerformanceReport, error) {
+	return s.Repo.OrganisationPerformanceReport(ctx, id, s.now())
 }
 func (s *Service) RequestExport(ctx context.Context, kind, objectID, format, reason, actor, correlation string) (ExportRequest, error) {
 	kind = strings.ToUpper(strings.TrimSpace(kind))

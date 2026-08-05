@@ -7,15 +7,17 @@ import (
 )
 
 type MemoryRepository struct {
-	mu        sync.RWMutex
-	incidents map[string]Incident
-	exports   map[string]ExportRequest
-	dashboard Dashboard
-	reports   map[string]CampaignReport
+	mu                  sync.RWMutex
+	incidents           map[string]Incident
+	exports             map[string]ExportRequest
+	dashboard           Dashboard
+	reports             map[string]CampaignReport
+	financial           map[string]CampaignFinancialReconciliation
+	organisationReports map[string]OrganisationPerformanceReport
 }
 
 func NewMemoryRepository() *MemoryRepository {
-	return &MemoryRepository{incidents: map[string]Incident{}, exports: map[string]ExportRequest{}, reports: map[string]CampaignReport{}}
+	return &MemoryRepository{incidents: map[string]Incident{}, exports: map[string]ExportRequest{}, reports: map[string]CampaignReport{}, financial: map[string]CampaignFinancialReconciliation{}, organisationReports: map[string]OrganisationPerformanceReport{}}
 }
 func (r *MemoryRepository) Dashboard(_ context.Context, now time.Time) (Dashboard, error) {
 	r.mu.RLock()
@@ -88,6 +90,29 @@ func (r *MemoryRepository) CampaignReport(_ context.Context, id string, now time
 	v.GeneratedAt = now
 	return v, nil
 }
+
+func (r *MemoryRepository) CampaignFinancialReconciliation(_ context.Context, id string, now time.Time) (CampaignFinancialReconciliation, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	v, ok := r.financial[id]
+	if !ok {
+		return CampaignFinancialReconciliation{}, ErrNotFound
+	}
+	v.GeneratedAt = now
+	return v, nil
+}
+
+func (r *MemoryRepository) OrganisationPerformanceReport(_ context.Context, id string, now time.Time) (OrganisationPerformanceReport, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	v, ok := r.organisationReports[id]
+	if !ok {
+		return OrganisationPerformanceReport{}, ErrNotFound
+	}
+	v.GeneratedAt = now
+	return v, nil
+}
+
 func (r *MemoryRepository) CreateExport(_ context.Context, v ExportRequest) (ExportRequest, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

@@ -105,6 +105,61 @@ type CampaignReport struct {
 	CompletedAt    *time.Time               `json:"completedAt,omitempty"`
 	GeneratedAt    time.Time                `json:"generatedAt"`
 }
+
+type CurrencyCommercialSummary struct {
+	Currency            string `json:"currency"`
+	Campaigns           int64  `json:"campaigns"`
+	ApprovedRecipients  int64  `json:"approvedRecipients"`
+	ApprovedAmountMinor int64  `json:"approvedAmountMinor"`
+}
+
+type OrganisationPerformanceReport struct {
+	OrganisationID   string                      `json:"organisationId"`
+	OrganisationName string                      `json:"organisationName"`
+	Campaigns        map[string]int64            `json:"campaigns"`
+	Recipients       map[string]int64            `json:"recipients"`
+	Delivery         map[string]int64            `json:"delivery"`
+	Commercial       []CurrencyCommercialSummary `json:"commercial"`
+	Warnings         []string                    `json:"warnings"`
+	GeneratedAt      time.Time                   `json:"generatedAt"`
+}
+
+type FinancialReconciliationStatus string
+
+const (
+	FinancialReconciliationBalanced          FinancialReconciliationStatus = "BALANCED"
+	FinancialReconciliationUnderAllocated    FinancialReconciliationStatus = "UNDER_ALLOCATED"
+	FinancialReconciliationOverAllocated     FinancialReconciliationStatus = "OVER_ALLOCATED"
+	FinancialReconciliationPaymentMissing    FinancialReconciliationStatus = "PAYMENT_MISSING"
+	FinancialReconciliationCommercialMissing FinancialReconciliationStatus = "COMMERCIAL_EVIDENCE_MISSING"
+)
+
+type CampaignFinancialReconciliation struct {
+	CampaignID           string                        `json:"campaignId"`
+	OrganisationID       string                        `json:"organisationId"`
+	CampaignName         string                        `json:"campaignName"`
+	CampaignStatus       string                        `json:"campaignStatus"`
+	CommercialStatus     string                        `json:"commercialStatus,omitempty"`
+	Currency             string                        `json:"currency,omitempty"`
+	QuotationReference   string                        `json:"quotationReference,omitempty"`
+	InvoiceReference     string                        `json:"invoiceReference,omitempty"`
+	PaymentReference     string                        `json:"paymentReference,omitempty"`
+	PaymentReceivedAt    *time.Time                    `json:"paymentReceivedAt,omitempty"`
+	ApprovedRecipients   int64                         `json:"approvedRecipients"`
+	RecipientObligations int64                         `json:"recipientObligations"`
+	ProviderAccepted     int64                         `json:"providerAccepted"`
+	Sent                 int64                         `json:"sent"`
+	Delivered            int64                         `json:"delivered"`
+	Read                 int64                         `json:"read"`
+	Failed               int64                         `json:"failed"`
+	Unknown              int64                         `json:"unknown"`
+	ApprovedAmountMinor  int64                         `json:"approvedAmountMinor"`
+	RecipientVariance    int64                         `json:"recipientVariance"`
+	ReconciliationStatus FinancialReconciliationStatus `json:"reconciliationStatus"`
+	Warnings             []string                      `json:"warnings"`
+	GeneratedAt          time.Time                     `json:"generatedAt"`
+}
+
 type ExportStatus string
 
 const (

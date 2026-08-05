@@ -89,3 +89,51 @@ func TestConfirmNotSubmittedRejectsProviderCorrelation(t *testing.T) {
 		t.Fatalf("expected duplicate-risk conflict, got %v", err)
 	}
 }
+
+func TestCampaignFinancialReconciliationReturnsCanonicalSnapshot(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 5, 19, 30, 0, 0, time.UTC)
+	repo := NewMemoryRepository()
+	repo.financial["campaign-1"] = CampaignFinancialReconciliation{
+		CampaignID:           "campaign-1",
+		OrganisationID:       "organisation-1",
+		CampaignName:         "Festival reminder",
+		CampaignStatus:       "COMPLETED",
+		CommercialStatus:     "APPROVED",
+		ApprovedRecipients:   100,
+		RecipientObligations: 100,
+		Delivered:            92,
+		Failed:               8,
+		ReconciliationStatus: FinancialReconciliationBalanced,
+	}
+	svc := &Service{Repo: repo, Clock: func() time.Time { return now }}
+	got, err := svc.CampaignFinancialReconciliation(ctx, "campaign-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ReconciliationStatus != FinancialReconciliationBalanced || got.GeneratedAt != now {
+		t.Fatalf("unexpected reconciliation: %+v", got)
+	}
+}
+
+func TestOrganisationPerformanceReportReturnsCanonicalSnapshot(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 8, 5, 20, 0, 0, 0, time.UTC)
+	repo := NewMemoryRepository()
+	repo.organisationReports["organisation-1"] = OrganisationPerformanceReport{
+		OrganisationID:   "organisation-1",
+		OrganisationName: "ABC Events",
+		Campaigns:        map[string]int64{"COMPLETED": 2},
+		Recipients:       map[string]int64{"authorised": 1000},
+		Delivery:         map[string]int64{"delivered": 900},
+		Commercial:       []CurrencyCommercialSummary{{Currency: "NGN", Campaigns: 2, ApprovedRecipients: 1000, ApprovedAmountMinor: 25000000}},
+	}
+	svc := &Service{Repo: repo, Clock: func() time.Time { return now }}
+	got, err := svc.OrganisationPerformanceReport(ctx, "organisation-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.OrganisationName != "ABC Events" || got.GeneratedAt != now || len(got.Commercial) != 1 {
+		t.Fatalf("unexpected organisation report: %+v", got)
+	}
+}

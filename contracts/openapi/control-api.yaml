@@ -1115,6 +1115,24 @@ paths:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
         '200': { description: Campaign report snapshot }
+  /campaigns/{id}/financial-reconciliation:
+    get:
+      operationId: getCampaignFinancialReconciliation
+      summary: Reconcile commercial approval, payment evidence, recipient obligations and canonical delivery outcomes
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Campaign financial reconciliation snapshot }
+        '404': { description: Campaign not found }
+  /organisations/{id}/performance-report:
+    get:
+      operationId: getOrganisationPerformanceReport
+      summary: Get organisation-level campaign, delivery and approved-commercial performance
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Organisation performance report }
+        '404': { description: Organisation not found }
   /exports:
     post:
       operationId: requestControlledExport

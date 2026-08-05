@@ -201,6 +201,125 @@ ORDER BY sp.name,p.sender_pool_id`, id)
 	return v, nil
 }
 
+func (r *PostgreSQLRepository) OrganisationPerformanceReport(ctx context.Context, id string, now time.Time) (OrganisationPerformanceReport, error) {
+	var v OrganisationPerformanceReport
+	err := r.DB.QueryRowContext(ctx, `SELECT id::text,legal_name FROM organisations WHERE id=$1::uuid`, id).Scan(&v.OrganisationID, &v.OrganisationName)
+	if errors.Is(err, sql.ErrNoRows) {
+		return v, ErrNotFound
+	}
+	if err != nil {
+		return v, err
+	}
+	v.Campaigns = map[string]int64{}
+	v.Recipients = map[string]int64{}
+	v.Delivery = map[string]int64{}
+	v.Commercial = []CurrencyCommercialSummary{}
+	v.Warnings = []string{}
+	rows, err := r.DB.QueryContext(ctx, `SELECT status,count(*) FROM campaigns WHERE organisation_id=$1::uuid GROUP BY status`, id)
+	if err != nil {
+		return v, err
+	}
+	for rows.Next() {
+		var status string
+		var count int64
+		if err := rows.Scan(&status, &count); err != nil {
+			rows.Close()
+			return v, err
+		}
+		v.Campaigns[status] = count
+	}
+	if err := rows.Close(); err != nil {
+		return v, err
+	}
+	var authorised, queued, submitted, sent, delivered, read, failed, unknown, suppressed, optOut int64
+	err = r.DB.QueryRowContext(ctx, `SELECT coalesce(sum(m.authorised_total),0),coalesce(sum(m.queued_total),0),coalesce(sum(m.submitted_total),0),coalesce(sum(m.sent_total),0),coalesce(sum(m.delivered_total),0),coalesce(sum(m.read_total),0),coalesce(sum(m.failed_total),0),coalesce(sum(m.unknown_total),0),coalesce(sum(m.suppressed_total),0),coalesce(sum(m.opt_out_total),0) FROM campaigns c LEFT JOIN campaign_metrics m ON m.campaign_id=c.id WHERE c.organisation_id=$1::uuid`, id).Scan(&authorised, &queued, &submitted, &sent, &delivered, &read, &failed, &unknown, &suppressed, &optOut)
+	if err != nil {
+		return v, err
+	}
+	v.Recipients = map[string]int64{"authorised": authorised, "suppressed": suppressed, "optOuts": optOut}
+	v.Delivery = map[string]int64{"queued": queued, "submitted": submitted, "sent": sent, "delivered": delivered, "read": read, "failed": failed, "unknown": unknown}
+	commercialRows, err := r.DB.QueryContext(ctx, `SELECT currency,count(*),coalesce(sum(approved_recipients),0),coalesce(sum(total_amount_minor),0) FROM campaign_commercial_approvals WHERE organisation_id=$1::uuid AND status='APPROVED' GROUP BY currency ORDER BY currency`, id)
+	if err != nil {
+		return v, err
+	}
+	for commercialRows.Next() {
+		var c CurrencyCommercialSummary
+		if err := commercialRows.Scan(&c.Currency, &c.Campaigns, &c.ApprovedRecipients, &c.ApprovedAmountMinor); err != nil {
+			commercialRows.Close()
+			return v, err
+		}
+		v.Commercial = append(v.Commercial, c)
+	}
+	if err := commercialRows.Close(); err != nil {
+		return v, err
+	}
+	if unknown > 0 {
+		v.Warnings = append(v.Warnings, "UNKNOWN_OUTCOMES_REQUIRE_RECONCILIATION")
+	}
+	if len(v.Commercial) == 0 && len(v.Campaigns) > 0 {
+		v.Warnings = append(v.Warnings, "NO_APPROVED_COMMERCIAL_RECORDS")
+	}
+	v.GeneratedAt = now
+	return v, nil
+}
+
+func (r *PostgreSQLRepository) CampaignFinancialReconciliation(ctx context.Context, id string, now time.Time) (CampaignFinancialReconciliation, error) {
+	var v CampaignFinancialReconciliation
+	err := r.DB.QueryRowContext(ctx, `SELECT id::text,organisation_id::text,name,status FROM campaigns WHERE id=$1::uuid`, id).Scan(&v.CampaignID, &v.OrganisationID, &v.CampaignName, &v.CampaignStatus)
+	if errors.Is(err, sql.ErrNoRows) {
+		return v, ErrNotFound
+	}
+	if err != nil {
+		return v, err
+	}
+	v.Warnings = []string{}
+	var paymentAt sql.NullTime
+	commercialErr := r.DB.QueryRowContext(ctx, `SELECT status,quotation_reference,invoice_reference,currency,approved_recipients,total_amount_minor,coalesce(payment_reference,''),payment_received_at FROM campaign_commercial_approvals WHERE campaign_id=$1::uuid`, id).Scan(&v.CommercialStatus, &v.QuotationReference, &v.InvoiceReference, &v.Currency, &v.ApprovedRecipients, &v.ApprovedAmountMinor, &v.PaymentReference, &paymentAt)
+	if commercialErr != nil && !errors.Is(commercialErr, sql.ErrNoRows) {
+		return v, commercialErr
+	}
+	if paymentAt.Valid {
+		t := paymentAt.Time.UTC()
+		v.PaymentReceivedAt = &t
+	}
+	if err := r.DB.QueryRowContext(ctx, `SELECT count(*) FROM campaign_recipients WHERE campaign_id=$1::uuid`, id).Scan(&v.RecipientObligations); err != nil {
+		return v, err
+	}
+	var accepted, sent, delivered, read, failed, unknown int64
+	metricsErr := r.DB.QueryRowContext(ctx, `SELECT submitted_total,sent_total,delivered_total,read_total,failed_total,unknown_total FROM campaign_metrics WHERE campaign_id=$1::uuid`, id).Scan(&accepted, &sent, &delivered, &read, &failed, &unknown)
+	if metricsErr != nil && !errors.Is(metricsErr, sql.ErrNoRows) {
+		return v, metricsErr
+	}
+	v.ProviderAccepted = accepted
+	v.Sent = sent
+	v.Delivered = delivered
+	v.Read = read
+	v.Failed = failed
+	v.Unknown = unknown
+	v.RecipientVariance = v.RecipientObligations - v.ApprovedRecipients
+	switch {
+	case v.CommercialStatus == "":
+		v.ReconciliationStatus = FinancialReconciliationCommercialMissing
+		v.Warnings = append(v.Warnings, "COMMERCIAL_EVIDENCE_UNAVAILABLE")
+	case v.PaymentReference == "" || v.PaymentReceivedAt == nil:
+		v.ReconciliationStatus = FinancialReconciliationPaymentMissing
+		v.Warnings = append(v.Warnings, "PAYMENT_EVIDENCE_UNAVAILABLE")
+	case v.RecipientVariance > 0:
+		v.ReconciliationStatus = FinancialReconciliationOverAllocated
+		v.Warnings = append(v.Warnings, "RECIPIENT_OBLIGATIONS_EXCEED_APPROVED_VOLUME")
+	case v.RecipientVariance < 0:
+		v.ReconciliationStatus = FinancialReconciliationUnderAllocated
+		v.Warnings = append(v.Warnings, "APPROVED_VOLUME_NOT_FULLY_ALLOCATED")
+	default:
+		v.ReconciliationStatus = FinancialReconciliationBalanced
+	}
+	if v.Unknown > 0 {
+		v.Warnings = append(v.Warnings, "UNKNOWN_OUTCOMES_REQUIRE_RECONCILIATION")
+	}
+	v.GeneratedAt = now
+	return v, nil
+}
+
 func scanExport(s interface{ Scan(...any) error }) (ExportRequest, error) {
 	var v ExportRequest
 	var exp sql.NullTime

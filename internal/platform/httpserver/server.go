@@ -267,6 +267,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/operations/incidents", s.require("operations.write", s.createOperationsIncident))
 	mux.Handle("PUT /api/v1/operations/incidents/{id}", s.require("operations.write", s.updateOperationsIncident))
 	mux.Handle("GET /api/v1/campaigns/{id}/report", s.require("report.read", s.getCampaignReport))
+	mux.Handle("GET /api/v1/campaigns/{id}/financial-reconciliation", s.require("finance.read", s.getCampaignFinancialReconciliation))
+	mux.Handle("GET /api/v1/organisations/{id}/performance-report", s.require("report.read", s.getOrganisationPerformanceReport))
 	mux.Handle("POST /api/v1/exports", s.require("export.request", s.requestExport))
 	mux.Handle("POST /api/v1/exports/{id}/decision", s.require("export.approve", s.decideExport))
 	mux.Handle("POST /api/v1/campaigns/{id}/execution/{action}", s.require("campaign.operate", s.executeCampaignAction))

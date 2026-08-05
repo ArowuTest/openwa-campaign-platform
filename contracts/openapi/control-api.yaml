@@ -697,6 +697,64 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { description: The organisation is not active }
         '422': { $ref: '#/components/responses/ValidationError' }
+  /campaigns/{id}/workspace:
+    get:
+      operationId: getCampaignWorkspace
+      summary: Get campaign tags, append-only internal notes and archive state
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Campaign workspace }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /campaigns/{id}/tags:
+    put:
+      operationId: setCampaignTags
+      summary: Replace normalised internal campaign tags with optimistic concurrency
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Tags updated }
+        '409': { description: Version conflict }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /campaigns/{id}/notes:
+    post:
+      operationId: addCampaignNote
+      summary: Add an append-only categorised internal campaign note
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '201': { description: Note added }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /campaigns/{id}/archive:
+    post:
+      operationId: archiveCampaign
+      summary: Archive a terminal campaign with MFA and reason evidence
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Campaign archived }
+        '403': { description: Recent MFA step-up is required }
+        '409': { description: Version conflict }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /campaigns/{id}/restore:
+    post:
+      operationId: restoreCampaign
+      summary: Restore an archived campaign to operational search results without changing its terminal status
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Campaign restored }
+        '403': { description: Recent MFA step-up is required }
+        '409': { description: Version conflict }
+  /campaigns/{id}/cancellation-impact:
+    get:
+      operationId: getCampaignCancellationImpact
+      summary: Assess outstanding, irrevocable and unknown outcomes before cancellation
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Cancellation impact assessment }
+        '404': { $ref: '#/components/responses/NotFound' }
   /campaigns/{id}/transition:
     post:
       operationId: transitionCampaign

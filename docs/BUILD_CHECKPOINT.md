@@ -1,7 +1,7 @@
 # Build checkpoint
 
-Current version: **0.8.20**
+Current version: **0.8.21**
 
-The current workspace checkpoint adds maker-checker approved test recipients, durable paced test-message execution through explicit OpenWA `whatsapp-web.js` or Baileys sessions, safe evidence-backed shard movement between approved sender pools, and pool-level routing-plan outcome reporting.
+The current workspace checkpoint adds safe campaign cloning plus governed campaign tags, append-only internal notes, terminal campaign archive/restore controls and cancellation-impact analysis that distinguishes outstanding work, irrevocable submissions and unknown outcomes.
 
 It remains pre-production: live PostgreSQL execution, Hostinger deployment, and genuine `whatsapp-web.js` and Baileys session validation are not yet certified.

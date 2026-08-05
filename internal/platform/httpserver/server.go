@@ -21,6 +21,7 @@ import (
 	"campaign-platform/internal/audience/importer"
 	"campaign-platform/internal/audience/materialisation"
 	"campaign-platform/internal/campaign"
+	"campaign-platform/internal/campaignworkspace"
 	"campaign-platform/internal/commercial"
 	"campaign-platform/internal/consent"
 	"campaign-platform/internal/delivery"
@@ -63,6 +64,7 @@ type Dependencies struct {
 	InboundRetentionPolicies *inbound.RetentionPolicyAdministration
 	InboundRotation          *inbound.RotationService
 	Campaigns                *campaign.Service
+	CampaignWorkspace        *campaignworkspace.Service
 	Commercial               *commercial.Service
 	Geography                *geography.Catalogue
 	MaxImportPreviewRows     int
@@ -213,6 +215,12 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/campaigns", s.require("campaign.write", s.createCampaign))
 	mux.Handle("POST /api/v1/campaigns/{id}/transition", s.require("campaign.write", s.transitionCampaign))
 	mux.Handle("POST /api/v1/campaigns/{id}/clone", s.require("campaign.write", s.cloneCampaign))
+	mux.Handle("GET /api/v1/campaigns/{id}/workspace", s.require("campaign.read", s.getCampaignWorkspace))
+	mux.Handle("PUT /api/v1/campaigns/{id}/tags", s.require("campaign.write", s.setCampaignTags))
+	mux.Handle("POST /api/v1/campaigns/{id}/notes", s.require("campaign.write", s.addCampaignNote))
+	mux.Handle("POST /api/v1/campaigns/{id}/archive", s.require("campaign.approve", s.archiveCampaign))
+	mux.Handle("POST /api/v1/campaigns/{id}/restore", s.require("campaign.approve", s.restoreCampaign))
+	mux.Handle("GET /api/v1/campaigns/{id}/cancellation-impact", s.require("campaign.read", s.getCampaignCancellationImpact))
 	mux.Handle("POST /api/v1/campaigns/{id}/material-amendment", s.require("campaign.write", s.amendCampaignMaterial))
 	mux.Handle("GET /api/v1/campaigns/{id}/material-changes", s.require("campaign.read", s.listCampaignMaterialChanges))
 	mux.Handle("GET /api/v1/campaigns/{id}/message-versions", s.require("campaign.read", s.listMessageVersions))
@@ -1227,6 +1235,122 @@ func (s *Server) cloneCampaign(w http.ResponseWriter, r *http.Request) {
 	default:
 		httpx.WriteJSON(w, http.StatusCreated, value)
 	}
+}
+
+func (s *Server) getCampaignWorkspace(w http.ResponseWriter, r *http.Request) {
+	if s.deps.CampaignWorkspace == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "CAMPAIGN_WORKSPACE_UNAVAILABLE", "Campaign workspace is unavailable.", nil)
+		return
+	}
+	value, err := s.deps.CampaignWorkspace.Get(r.Context(), r.PathValue("id"))
+	if errors.Is(err, campaign.ErrNotFound) {
+		httpx.WriteError(w, r, http.StatusNotFound, "CAMPAIGN_NOT_FOUND", "The campaign was not found.", nil)
+		return
+	}
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, value)
+}
+
+func (s *Server) setCampaignTags(w http.ResponseWriter, r *http.Request) {
+	if s.deps.CampaignWorkspace == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "CAMPAIGN_WORKSPACE_UNAVAILABLE", "Campaign workspace is unavailable.", nil)
+		return
+	}
+	var input campaignworkspace.SetTagsInput
+	if err := httpx.DecodeJSON(w, r, 128<<10, &input); err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The tag request is invalid.", map[string]any{"detail": err.Error()})
+		return
+	}
+	principal, _ := identity.PrincipalFromContext(r.Context())
+	input.ActorID = principal.User.ID
+	value, err := s.deps.CampaignWorkspace.SetTags(r.Context(), r.PathValue("id"), input)
+	switch {
+	case errors.Is(err, campaignworkspace.ErrConflict):
+		httpx.WriteError(w, r, http.StatusConflict, "VERSION_CONFLICT", "The campaign workspace changed; reload and retry.", nil)
+	case err != nil:
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "CAMPAIGN_TAGS_REJECTED", "The campaign tags could not be updated.", map[string]any{"detail": err.Error()})
+	default:
+		httpx.WriteJSON(w, http.StatusOK, value)
+	}
+}
+
+func (s *Server) addCampaignNote(w http.ResponseWriter, r *http.Request) {
+	if s.deps.CampaignWorkspace == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "CAMPAIGN_WORKSPACE_UNAVAILABLE", "Campaign workspace is unavailable.", nil)
+		return
+	}
+	var input campaignworkspace.AddNoteInput
+	if err := httpx.DecodeJSON(w, r, 128<<10, &input); err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The note request is invalid.", map[string]any{"detail": err.Error()})
+		return
+	}
+	principal, _ := identity.PrincipalFromContext(r.Context())
+	input.ActorID = principal.User.ID
+	value, err := s.deps.CampaignWorkspace.AddNote(r.Context(), r.PathValue("id"), input)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "CAMPAIGN_NOTE_REJECTED", "The campaign note could not be added.", map[string]any{"detail": err.Error()})
+		return
+	}
+	httpx.WriteJSON(w, http.StatusCreated, value)
+}
+
+func (s *Server) archiveCampaign(w http.ResponseWriter, r *http.Request) {
+	s.setCampaignArchive(w, r, true)
+}
+func (s *Server) restoreCampaign(w http.ResponseWriter, r *http.Request) {
+	s.setCampaignArchive(w, r, false)
+}
+func (s *Server) setCampaignArchive(w http.ResponseWriter, r *http.Request, archived bool) {
+	if s.deps.CampaignWorkspace == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "CAMPAIGN_WORKSPACE_UNAVAILABLE", "Campaign workspace is unavailable.", nil)
+		return
+	}
+	var input campaignworkspace.ArchiveInput
+	if err := httpx.DecodeJSON(w, r, 64<<10, &input); err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The archive request is invalid.", map[string]any{"detail": err.Error()})
+		return
+	}
+	principal, _ := identity.PrincipalFromContext(r.Context())
+	input.ActorID = principal.User.ID
+	if !identity.StepUpSatisfied(principal.Session, time.Now().UTC(), 10*time.Minute) {
+		httpx.WriteError(w, r, http.StatusForbidden, "STEP_UP_REQUIRED", "Recent multi-factor verification is required.", nil)
+		return
+	}
+	var value campaignworkspace.Workspace
+	var err error
+	if archived {
+		value, err = s.deps.CampaignWorkspace.Archive(r.Context(), r.PathValue("id"), input)
+	} else {
+		value, err = s.deps.CampaignWorkspace.Restore(r.Context(), r.PathValue("id"), input)
+	}
+	switch {
+	case errors.Is(err, campaignworkspace.ErrConflict):
+		httpx.WriteError(w, r, http.StatusConflict, "VERSION_CONFLICT", "The campaign workspace changed; reload and retry.", nil)
+	case err != nil:
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "CAMPAIGN_ARCHIVE_REJECTED", "The archive state could not be changed.", map[string]any{"detail": err.Error()})
+	default:
+		httpx.WriteJSON(w, http.StatusOK, value)
+	}
+}
+
+func (s *Server) getCampaignCancellationImpact(w http.ResponseWriter, r *http.Request) {
+	if s.deps.CampaignWorkspace == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "CAMPAIGN_WORKSPACE_UNAVAILABLE", "Campaign workspace is unavailable.", nil)
+		return
+	}
+	value, err := s.deps.CampaignWorkspace.CancellationImpact(r.Context(), r.PathValue("id"))
+	if errors.Is(err, campaign.ErrNotFound) {
+		httpx.WriteError(w, r, http.StatusNotFound, "CAMPAIGN_NOT_FOUND", "The campaign was not found.", nil)
+		return
+	}
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, value)
 }
 
 func (s *Server) transitionCampaign(w http.ResponseWriter, r *http.Request) {

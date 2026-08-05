@@ -77,6 +77,7 @@ type Dependencies struct {
 	Operations               *operations.Service
 	AudienceImports          *importer.ImportService
 	AudienceConflicts        *importer.ConflictService
+	AudienceReconciliation   *importer.ReconciliationService
 	AudienceSourceTrust      *importer.SourceTrustService
 	AudienceImportIntake     *importer.IntakeService
 	MaxImportFileBytes       int64
@@ -149,6 +150,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("PUT /api/v1/segments/{id}", s.require("audience.write", s.updateSegment))
 	mux.Handle("POST /api/v1/segments/{id}/archive", s.require("audience.approve", s.archiveSegment))
 	mux.Handle("GET /api/v1/segments/{id}/versions", s.require("audience.read", s.listSegmentVersions))
+	mux.Handle("POST /api/v1/segments/{id}/clone", s.require("audience.write", s.cloneSegment))
+	mux.Handle("GET /api/v1/segments/{id}/compare", s.require("audience.read", s.compareSegmentVersions))
 	mux.Handle("GET /api/v1/geography/countries", s.require("audience.read", s.listCountries))
 	mux.Handle("GET /api/v1/geography/areas", s.require("audience.read", s.listAreas))
 	mux.Handle("GET /api/v1/organisations", s.require("organisation.read", s.listOrganisations))
@@ -186,7 +189,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/audience-imports/{id}", s.require("audience.read", s.getAudienceImport))
 	mux.Handle("POST /api/v1/audience-imports/{id}/approve", s.require("audience.approve", s.approveAudienceImport))
 	mux.Handle("GET /api/v1/audience-imports/{id}/conflicts", s.require("audience.read", s.listAudienceImportConflicts))
+	mux.Handle("GET /api/v1/audience-imports/{id}/reconciliation", s.require("audience.read", s.getAudienceImportReconciliation))
+	mux.Handle("POST /api/v1/audience-imports/{id}/reconciliation", s.require("audience.approve", s.closeAudienceImportReconciliation))
 	mux.Handle("POST /api/v1/audience-import-conflicts/{id}/resolve", s.require("audience.approve", s.resolveAudienceImportConflict))
+	mux.Handle("POST /api/v1/audience-import-conflicts/batch-resolve", s.require("audience.approve", s.resolveAudienceImportConflictsBatch))
 	mux.Handle("GET /api/v1/organisations/{id}/audience-source-trust", s.require("audience.read", s.listAudienceSourceTrust))
 	mux.Handle("PUT /api/v1/organisations/{id}/audience-source-trust/{source}", s.require("audience.write", s.upsertAudienceSourceTrust))
 	mux.Handle("GET /api/v1/commercial-records", s.require("finance.read", s.listCommercialRecords))
@@ -219,6 +225,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/campaigns/{id}/execution/{action}", s.require("campaign.operate", s.executeCampaignAction))
 	mux.Handle("GET /api/v1/campaigns/{id}/inbound-metrics", s.require("campaign.read", s.getCampaignInboundMetrics))
 	mux.Handle("GET /api/v1/audience-snapshots/{id}", s.require("audience.read", s.getAudienceSnapshot))
+	mux.Handle("GET /api/v1/audience-snapshots/overlap", s.require("audience.read", s.getAudienceSnapshotOverlap))
 	mux.Handle("GET /api/v1/sender-pools", s.require("sender.read", s.listSenderPools))
 	mux.Handle("POST /api/v1/sender-pools", s.require("sender.admin", s.createSenderPool))
 	mux.Handle("PUT /api/v1/sender-pools/{id}", s.require("sender.admin", s.updateSenderPool))
@@ -693,6 +700,54 @@ func (s *Server) listSegmentVersions(w http.ResponseWriter, r *http.Request) {
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
 }
+
+func (s *Server) cloneSegment(w http.ResponseWriter, r *http.Request) {
+	if s.deps.SegmentDefinitions == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "SEGMENTS_UNAVAILABLE", "Saved segments are unavailable.", nil)
+		return
+	}
+	var input segment.CloneDefinitionInput
+	if err := httpx.DecodeJSON(w, r, 128<<10, &input); err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The segment clone request is invalid.", map[string]any{"detail": err.Error()})
+		return
+	}
+	principal, _ := identity.PrincipalFromContext(r.Context())
+	input.ActorID = principal.User.ID
+	item, err := s.deps.SegmentDefinitions.Clone(r.Context(), r.PathValue("id"), input, principal.User.HasPermission)
+	if errors.Is(err, segment.ErrDefinitionNotFound) {
+		httpx.WriteError(w, r, http.StatusNotFound, "SEGMENT_NOT_FOUND", "The source segment was not found.", nil)
+		return
+	}
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "SEGMENT_CLONE_REJECTED", "The segment could not be cloned.", map[string]any{"detail": err.Error()})
+		return
+	}
+	httpx.WriteJSON(w, http.StatusCreated, item)
+}
+
+func (s *Server) compareSegmentVersions(w http.ResponseWriter, r *http.Request) {
+	if s.deps.SegmentDefinitions == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "SEGMENTS_UNAVAILABLE", "Saved segments are unavailable.", nil)
+		return
+	}
+	fromVersion, fromErr := strconv.ParseInt(r.URL.Query().Get("fromVersion"), 10, 64)
+	toVersion, toErr := strconv.ParseInt(r.URL.Query().Get("toVersion"), 10, 64)
+	if fromErr != nil || toErr != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "SEGMENT_VERSIONS_INVALID", "fromVersion and toVersion must be positive integers.", nil)
+		return
+	}
+	result, err := s.deps.SegmentDefinitions.CompareVersions(r.Context(), r.PathValue("id"), fromVersion, toVersion)
+	if errors.Is(err, segment.ErrDefinitionNotFound) {
+		httpx.WriteError(w, r, http.StatusNotFound, "SEGMENT_NOT_FOUND", "The segment was not found.", nil)
+		return
+	}
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "SEGMENT_COMPARISON_REJECTED", "The segment versions could not be compared.", map[string]any{"detail": err.Error()})
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, result)
+}
+
 func writeSegmentResult(w http.ResponseWriter, r *http.Request, item segment.Definition, err error) {
 	switch {
 	case errors.Is(err, segment.ErrDefinitionNotFound):
@@ -1313,6 +1368,74 @@ func (s *Server) intakeAudienceImport(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, status, map[string]any{"created": created, "import": batch})
 }
 
+func (s *Server) getAudienceImportReconciliation(w http.ResponseWriter, r *http.Request) {
+	if s.deps.AudienceReconciliation == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "IMPORT_RECONCILIATION_UNAVAILABLE", "Audience import reconciliation is unavailable.", nil)
+		return
+	}
+	if r.URL.Query().Get("closed") == "true" {
+		record, err := s.deps.AudienceReconciliation.Get(r.Context(), r.PathValue("id"))
+		if errors.Is(err, importer.ErrImportNotFound) {
+			httpx.WriteError(w, r, http.StatusNotFound, "IMPORT_RECONCILIATION_NOT_FOUND", "No closed reconciliation exists for this import.", nil)
+			return
+		}
+		if err != nil {
+			s.internalError(w, r, err)
+			return
+		}
+		httpx.WriteJSON(w, http.StatusOK, record)
+		return
+	}
+	result, err := s.deps.AudienceReconciliation.Preview(r.Context(), r.PathValue("id"))
+	if errors.Is(err, importer.ErrImportNotFound) {
+		httpx.WriteError(w, r, http.StatusNotFound, "AUDIENCE_IMPORT_NOT_FOUND", "The audience import was not found.", nil)
+		return
+	}
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, result)
+}
+
+type closeImportReconciliationRequest struct {
+	Reason string `json:"reason"`
+}
+
+func (s *Server) closeAudienceImportReconciliation(w http.ResponseWriter, r *http.Request) {
+	if s.deps.AudienceReconciliation == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "IMPORT_RECONCILIATION_UNAVAILABLE", "Audience import reconciliation is unavailable.", nil)
+		return
+	}
+	principal, _ := identity.PrincipalFromContext(r.Context())
+	if !identity.StepUpSatisfied(principal.Session, time.Now().UTC(), 10*time.Minute) {
+		httpx.WriteError(w, r, http.StatusForbidden, "STEP_UP_REQUIRED", "Recent multi-factor verification is required to close import reconciliation.", nil)
+		return
+	}
+	var input closeImportReconciliationRequest
+	if err := httpx.DecodeJSON(w, r, 64<<10, &input); err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The reconciliation closure request is invalid.", map[string]any{"detail": err.Error()})
+		return
+	}
+	record, created, err := s.deps.AudienceReconciliation.Close(r.Context(), r.PathValue("id"), principal.User.ID, input.Reason)
+	switch {
+	case errors.Is(err, importer.ErrImportNotFound):
+		httpx.WriteError(w, r, http.StatusNotFound, "AUDIENCE_IMPORT_NOT_FOUND", "The audience import was not found.", nil)
+	case errors.Is(err, importer.ErrReconciliationNotReady):
+		httpx.WriteError(w, r, http.StatusConflict, "IMPORT_RECONCILIATION_NOT_READY", "The import cannot be closed until totals balance and pending conflicts are resolved.", nil)
+	case errors.Is(err, importer.ErrReconciliationConflict):
+		httpx.WriteError(w, r, http.StatusConflict, "IMPORT_RECONCILIATION_CONFLICT", "A different reconciliation record already exists.", nil)
+	case err != nil:
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "IMPORT_RECONCILIATION_REJECTED", "The import reconciliation could not be closed.", map[string]any{"detail": err.Error()})
+	default:
+		status := http.StatusOK
+		if created {
+			status = http.StatusCreated
+		}
+		httpx.WriteJSON(w, status, record)
+	}
+}
+
 func (s *Server) listAudienceImportConflicts(w http.ResponseWriter, r *http.Request) {
 	if s.deps.AudienceConflicts == nil {
 		httpx.WriteError(w, r, http.StatusServiceUnavailable, "AUDIENCE_CONFLICTS_UNAVAILABLE", "Audience conflict review is not configured.", nil)
@@ -1325,6 +1448,40 @@ func (s *Server) listAudienceImportConflicts(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
+}
+
+type resolveAudienceConflictsBatchRequest struct {
+	Decisions []importer.ConflictDecision `json:"decisions"`
+}
+
+func (s *Server) resolveAudienceImportConflictsBatch(w http.ResponseWriter, r *http.Request) {
+	if s.deps.AudienceConflicts == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "AUDIENCE_CONFLICTS_UNAVAILABLE", "Audience conflict review is not configured.", nil)
+		return
+	}
+	principal, _ := identity.PrincipalFromContext(r.Context())
+	if !identity.StepUpSatisfied(principal.Session, time.Now().UTC(), 10*time.Minute) {
+		httpx.WriteError(w, r, http.StatusForbidden, "STEP_UP_REQUIRED", "Recent multi-factor verification is required to resolve profile conflicts.", nil)
+		return
+	}
+	var input resolveAudienceConflictsBatchRequest
+	if err := httpx.DecodeJSON(w, r, 1<<20, &input); err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The batch conflict resolution request is invalid.", map[string]any{"detail": err.Error()})
+		return
+	}
+	result, err := s.deps.AudienceConflicts.ResolveBatch(r.Context(), input.Decisions, principal.User.ID)
+	switch {
+	case errors.Is(err, importer.ErrConflictNotFound):
+		httpx.WriteError(w, r, http.StatusNotFound, "AUDIENCE_CONFLICT_NOT_FOUND", "A conflict in the batch was not found.", nil)
+	case errors.Is(err, importer.ErrConflictVersion):
+		httpx.WriteError(w, r, http.StatusConflict, "AUDIENCE_CONFLICT_VERSION", "A conflict changed; reload before retrying the batch.", nil)
+	case errors.Is(err, importer.ErrConflictState):
+		httpx.WriteError(w, r, http.StatusConflict, "AUDIENCE_CONFLICT_STATE", "A conflict in the batch is no longer pending.", nil)
+	case err != nil:
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "AUDIENCE_CONFLICT_BATCH_REJECTED", "The batch conflict resolution was rejected.", map[string]any{"detail": err.Error()})
+	default:
+		httpx.WriteJSON(w, http.StatusOK, result)
+	}
 }
 
 type resolveAudienceConflictRequest struct {
@@ -1788,6 +1945,23 @@ func (s *Server) materialiseAudienceSnapshot(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	httpx.WriteJSON(w, http.StatusCreated, created)
+}
+
+func (s *Server) getAudienceSnapshotOverlap(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Snapshots == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "SNAPSHOT_SERVICE_UNAVAILABLE", "Audience snapshots are unavailable.", nil)
+		return
+	}
+	result, err := s.deps.Snapshots.Overlap(r.Context(), r.URL.Query().Get("leftId"), r.URL.Query().Get("rightId"))
+	if errors.Is(err, segment.ErrSnapshotNotFound) {
+		httpx.WriteError(w, r, http.StatusNotFound, "SNAPSHOT_NOT_FOUND", "One or both audience snapshots were not found.", nil)
+		return
+	}
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "SNAPSHOT_OVERLAP_INVALID", "The audience snapshot overlap could not be calculated.", map[string]any{"detail": err.Error()})
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) getAudienceSnapshot(w http.ResponseWriter, r *http.Request) {

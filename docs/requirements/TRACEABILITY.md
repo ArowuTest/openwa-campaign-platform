@@ -6,10 +6,10 @@ Total requirements: **398**
 
 | Status | Count |
 |---|---:|
-| IMPLEMENTED_TESTED | 51 |
+| IMPLEMENTED_TESTED | 54 |
 | PARTIAL | 33 |
 | BLOCKED_EXTERNAL | 0 |
-| NOT_STARTED | 314 |
+| NOT_STARTED | 311 |
 
 | ID | Priority | Status | Requirement | Evidence / notes |
 |---|---|---|---|---|
@@ -116,12 +116,12 @@ Total requirements: **398**
 | IMP-009 | Must | IMPLEMENTED_TESTED | Normalise MSISDN using configured default country only where explicit. | `internal/audience/importer/normalizer.go` |
 | IMP-010 | Must | PARTIAL | Detect duplicate rows within the file. | `internal/audience/importer/csv.go` — Preview deduplication is in-memory and capped; durable database deduplication is pending. |
 | IMP-011 | Must | NOT_STARTED | Detect contacts already present in the repository. |  |
-| IMP-012 | Must | NOT_STARTED | Support configurable update policy: fill-null, newest-source, trusted-source or manual conflict. |  |
+| IMP-012 | Must | IMPLEMENTED_TESTED | Support configurable update policy: fill-null, newest-source, trusted-source or manual conflict. | `internal/audience/importer/import.go`, `internal/audience/importer/merge.go`, `internal/audience/importer/merge_postgres.go`, `internal/audience/importer/source_trust.go`, `internal/audience/importer/conflict.go`, `internal/audience/importer/conflict_postgres.go`, `internal/audience/importer/merge_test.go`, `internal/audience/importer/conflict_test.go`, `database/migrations/0037_audience_profile_conflict_governance.sql` — Fill-null, newest-source, trusted-source and manual-conflict policies are implemented. Manual conflicts support governed single and atomic batch decisions with optimistic versions. |
 | IMP-013 | Must | NOT_STARTED | Never silently broaden existing consent based on a profile import. |  |
 | IMP-014 | Must | PARTIAL | Provide import preview and estimated effects before commit. | `internal/platform/httpserver/server.go`, `internal/audience/importer/csv.go` |
 | IMP-015 | Must | NOT_STARTED | Use database bulk-load techniques and bounded transactions. |  |
 | IMP-016 | Must | NOT_STARTED | Provide row-level error export with masked identifiers. |  |
-| IMP-017 | Must | NOT_STARTED | Reconcile uploaded, accepted, rejected, duplicate, inserted, updated and unchanged counts. |  |
+| IMP-017 | Must | PARTIAL | Reconcile uploaded, accepted, rejected, duplicate, inserted, updated and unchanged counts. | `internal/audience/importer/conflict.go`, `internal/audience/importer/reconciliation.go`, `internal/audience/importer/reconciliation_postgres.go`, `internal/audience/importer/reconciliation_test.go`, `database/migrations/0044_audience_import_reconciliation.sql`, `internal/platform/httpserver/server.go` — Uploaded, valid, invalid, duplicate, suppressed, inserted and updated totals are reconciled and can be closed with immutable evidence after conflicts resolve. A distinct unchanged-contact count is still outstanding. |
 | IMP-018 | Must | NOT_STARTED | Support rollback of an unconsumed erroneous import where legally/operationally safe. |  |
 | IMP-019 | Must | NOT_STARTED | Block campaign use of a batch until required consent review is approved. |  |
 | IMP-020 | Must | NOT_STARTED | Support encrypted import file retention or prompt deletion according to policy. |  |
@@ -157,12 +157,12 @@ Total requirements: **398**
 | SEG-010 | Must | NOT_STARTED | Provide a human-readable summary of the segment logic. |  |
 | SEG-011 | Must | NOT_STARTED | Estimate matching counts without exposing raw MSISDNs. |  |
 | SEG-012 | Must | NOT_STARTED | Display a count waterfall: demographic, consent, expiry, suppression, cap and final eligible. |  |
-| SEG-013 | Must | PARTIAL | Save, version, clone, retire and compare segment definitions. | `internal/segment/definition.go`, `internal/segment/definition_postgres.go`, `internal/segment/definition_test.go`, `database/migrations/0043_segment_definition_and_cohort_execution.sql` — Save, version and archive are implemented; clone and version comparison remain outstanding. |
+| SEG-013 | Must | IMPLEMENTED_TESTED | Save, version, clone, retire and compare segment definitions. | `internal/segment/definition.go`, `internal/segment/definition_postgres.go`, `internal/segment/definition_test.go`, `internal/platform/httpserver/server.go`, `contracts/openapi/control-api.yaml`, `database/migrations/0043_segment_definition_and_cohort_execution.sql` — Saved segments support create, version, clone, archive and version comparison. Clones receive independent identifiers and histories while historical versions remain immutable. |
 | SEG-014 | Must | IMPLEMENTED_TESTED | Restrict segment fields based on user permission and data-use policy. | `internal/audience/filter/query.go`, `internal/audience/cohort/compiler.go`, `internal/platform/httpserver/server.go`, `internal/audience/filter/administration_test.go`, `internal/audience/cohort/compiler_test.go` — Sensitive governed filter definitions require the configured permission during HTTP validation, compilation and snapshot creation; direct code submission cannot bypass hidden UI fields. |
 | SEG-015 | Must | IMPLEMENTED_TESTED | Create an immutable audience snapshot with hash and policy versions. | `internal/segment/snapshot.go`, `internal/segment/postgres.go`, `internal/segment/snapshot_test.go`, `internal/audience/cohort/execution.go`, `internal/audience/cohort/execution_test.go` — Immutable snapshot membership, deterministic hash and policy/configuration versions are enforced. |
 | SEG-016 | Must | NOT_STARTED | Store snapshot creation time, rule version and initiating user. |  |
 | SEG-017 | Must | NOT_STARTED | Perform final live suppression/consent check before each send. |  |
-| SEG-018 | Must | NOT_STARTED | Support cohort overlap analysis without exporting identities. |  |
+| SEG-018 | Must | IMPLEMENTED_TESTED | Support cohort overlap analysis without exporting identities. | `internal/segment/snapshot.go`, `internal/segment/postgres.go`, `internal/segment/snapshot_test.go`, `internal/platform/httpserver/server.go`, `contracts/openapi/control-api.yaml` — Identity-free audience snapshot overlap returns intersection, left-only, right-only and union counts without exporting contact identifiers. |
 | SEG-019 | Must | NOT_STARTED | Prevent tiny cohort reporting below configurable privacy threshold. |  |
 | SEG-020 | Must | PARTIAL | Support asynchronous snapshot creation for multi-million audiences with progress and resumability. | `internal/audience/cohort/execution.go`, `internal/platform/httpserver/server.go` — Server-side multi-million member query and bounded materialisation are implemented; durable asynchronous progress and resume remain outstanding. |
 | CAM-001 | Must | NOT_STARTED | Create campaigns linked to one internal organisation and consent-review basis. |  |

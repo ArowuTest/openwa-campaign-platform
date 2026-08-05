@@ -172,3 +172,183 @@ func (r *MemoryConflictRepository) Resolve(_ context.Context, conflictID string,
 	r.items[conflictID] = value
 	return value, nil
 }
+
+type ConflictSummary struct {
+	Pending  int64 `json:"pending"`
+	Resolved int64 `json:"resolved"`
+	Rejected int64 `json:"rejected"`
+	Total    int64 `json:"total"`
+}
+
+type Reconciliation struct {
+	ImportID             string          `json:"importId"`
+	Status               ImportStatus    `json:"status"`
+	UploadedRows         int64           `json:"uploadedRows"`
+	ValidRows            int64           `json:"validRows"`
+	InvalidRows          int64           `json:"invalidRows"`
+	DuplicateRows        int64           `json:"duplicateRows"`
+	SuppressedRows       int64           `json:"suppressedRows"`
+	InsertedContacts     int64           `json:"insertedContacts"`
+	UpdatedContacts      int64           `json:"updatedContacts"`
+	Conflicts            ConflictSummary `json:"conflicts"`
+	ValidationAccounted  int64           `json:"validationAccounted"`
+	ValidationBalanced   bool            `json:"validationBalanced"`
+	MergeAccounted       int64           `json:"mergeAccounted"`
+	MergeWithinValidRows bool            `json:"mergeWithinValidRows"`
+	ReadyForClosure      bool            `json:"readyForClosure"`
+	Warnings             []string        `json:"warnings"`
+	CalculatedAt         time.Time       `json:"calculatedAt"`
+}
+
+type ConflictSummaryRepository interface {
+	Summary(context.Context, string) (ConflictSummary, error)
+}
+
+func (s *ConflictService) Summary(ctx context.Context, importID string) (ConflictSummary, error) {
+	if s == nil || s.Repository == nil {
+		return ConflictSummary{}, errors.New("conflict repository is required")
+	}
+	provider, ok := s.Repository.(ConflictSummaryRepository)
+	if !ok {
+		return ConflictSummary{}, errors.New("conflict summary is unavailable")
+	}
+	if strings.TrimSpace(importID) == "" {
+		return ConflictSummary{}, errors.New("import ID is required")
+	}
+	return provider.Summary(ctx, strings.TrimSpace(importID))
+}
+
+func (r *MemoryConflictRepository) Summary(_ context.Context, importID string) (ConflictSummary, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var result ConflictSummary
+	for _, value := range r.items {
+		if value.AudienceImportID != importID {
+			continue
+		}
+		switch value.Status {
+		case ConflictPending:
+			result.Pending++
+		case ConflictResolved:
+			result.Resolved++
+		case ConflictRejected:
+			result.Rejected++
+		}
+		result.Total++
+	}
+	return result, nil
+}
+
+func BuildReconciliation(batch ImportBatch, conflicts ConflictSummary, now time.Time) Reconciliation {
+	validationAccounted := batch.ValidRows + batch.InvalidRows + batch.DuplicateRows + batch.SuppressedRows
+	mergeAccounted := batch.InsertedContacts + batch.UpdatedContacts
+	result := Reconciliation{
+		ImportID: batch.ID, Status: batch.Status, UploadedRows: batch.UploadedRows,
+		ValidRows: batch.ValidRows, InvalidRows: batch.InvalidRows, DuplicateRows: batch.DuplicateRows,
+		SuppressedRows: batch.SuppressedRows, InsertedContacts: batch.InsertedContacts,
+		UpdatedContacts: batch.UpdatedContacts, Conflicts: conflicts,
+		ValidationAccounted: validationAccounted,
+		ValidationBalanced:  batch.UploadedRows == validationAccounted,
+		MergeAccounted:      mergeAccounted, MergeWithinValidRows: mergeAccounted <= batch.ValidRows,
+		Warnings: []string{}, CalculatedAt: now.UTC(),
+	}
+	if !result.ValidationBalanced {
+		result.Warnings = append(result.Warnings, "VALIDATION_ROW_TOTAL_MISMATCH")
+	}
+	if !result.MergeWithinValidRows {
+		result.Warnings = append(result.Warnings, "MERGE_TOTAL_EXCEEDS_VALID_ROWS")
+	}
+	if conflicts.Pending > 0 {
+		result.Warnings = append(result.Warnings, "PENDING_PROFILE_CONFLICTS")
+	}
+	if batch.Status == ImportCompleted && conflicts.Pending > 0 {
+		result.Warnings = append(result.Warnings, "COMPLETED_IMPORT_HAS_PENDING_CONFLICTS")
+	}
+	result.ReadyForClosure = result.ValidationBalanced && result.MergeWithinValidRows && conflicts.Pending == 0 && (batch.Status == ImportCompleted || batch.Status == ImportCompletedWithExceptions)
+	return result
+}
+
+type ConflictDecision struct {
+	ConflictID      string             `json:"conflictId"`
+	Resolution      ConflictResolution `json:"resolution"`
+	Reason          string             `json:"reason"`
+	ExpectedVersion int64              `json:"expectedVersion"`
+}
+
+type BatchResolutionResult struct {
+	Resolved []ProfileConflict `json:"resolved"`
+	Count    int               `json:"count"`
+}
+
+type BatchConflictRepository interface {
+	ResolveBatch(context.Context, []ConflictDecision, string, time.Time) ([]ProfileConflict, error)
+}
+
+func (s *ConflictService) ResolveBatch(ctx context.Context, decisions []ConflictDecision, actor string) (BatchResolutionResult, error) {
+	if s == nil || s.Repository == nil {
+		return BatchResolutionResult{}, errors.New("conflict repository is required")
+	}
+	provider, ok := s.Repository.(BatchConflictRepository)
+	if !ok {
+		return BatchResolutionResult{}, errors.New("batch conflict resolution is unavailable")
+	}
+	actor = strings.TrimSpace(actor)
+	if actor == "" {
+		return BatchResolutionResult{}, errors.New("actor is required")
+	}
+	if len(decisions) == 0 || len(decisions) > 100 {
+		return BatchResolutionResult{}, errors.New("batch must contain between 1 and 100 decisions")
+	}
+	seen := map[string]struct{}{}
+	clean := make([]ConflictDecision, len(decisions))
+	for i, decision := range decisions {
+		decision.ConflictID = strings.TrimSpace(decision.ConflictID)
+		decision.Reason = strings.TrimSpace(decision.Reason)
+		if decision.ConflictID == "" || decision.ExpectedVersion <= 0 || len(decision.Reason) < 8 {
+			return BatchResolutionResult{}, errors.New("each decision requires conflict ID, expected version and reason of at least 8 characters")
+		}
+		if decision.Resolution != ResolutionKeepExisting && decision.Resolution != ResolutionUseIncoming {
+			return BatchResolutionResult{}, errors.New("invalid conflict resolution")
+		}
+		if _, exists := seen[decision.ConflictID]; exists {
+			return BatchResolutionResult{}, errors.New("batch contains duplicate conflict IDs")
+		}
+		seen[decision.ConflictID] = struct{}{}
+		clean[i] = decision
+	}
+	now := time.Now().UTC()
+	if s.Clock != nil {
+		now = s.Clock().UTC()
+	}
+	resolved, err := provider.ResolveBatch(ctx, clean, actor, now)
+	if err != nil {
+		return BatchResolutionResult{}, err
+	}
+	return BatchResolutionResult{Resolved: resolved, Count: len(resolved)}, nil
+}
+
+func (r *MemoryConflictRepository) ResolveBatch(_ context.Context, decisions []ConflictDecision, actor string, now time.Time) ([]ProfileConflict, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, decision := range decisions {
+		value, ok := r.items[decision.ConflictID]
+		if !ok {
+			return nil, ErrConflictNotFound
+		}
+		if value.Version != decision.ExpectedVersion {
+			return nil, ErrConflictVersion
+		}
+		if value.Status != ConflictPending {
+			return nil, ErrConflictState
+		}
+	}
+	out := make([]ProfileConflict, 0, len(decisions))
+	for _, decision := range decisions {
+		value := r.items[decision.ConflictID]
+		value.Resolution, value.Reason, value.ResolvedBy = decision.Resolution, decision.Reason, actor
+		value.Status, value.ResolvedAt, value.Version = ConflictResolved, &now, value.Version+1
+		r.items[decision.ConflictID] = value
+		out = append(out, value)
+	}
+	return out, nil
+}

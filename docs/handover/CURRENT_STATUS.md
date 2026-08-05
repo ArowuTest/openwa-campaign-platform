@@ -1,6 +1,6 @@
 # Current status
 
-Version `0.8.6` is the latest backend-remediation checkpoint on branch `work/backend-adversarial-remediation-iii`.
+Version `0.8.12` is the latest operational-core checkpoint on branch `work/operational-core-audience-ii`.
 
 Completed capability milestones in the actual repository history:
 
@@ -38,3 +38,13 @@ Governed rolling frequency caps are now stored in effective-dated organisation p
 - Client-supplied member lists remain supported for compatibility but are no longer the only materialisation route.
 - Durable asynchronous multi-million snapshot jobs and live PostgreSQL performance validation remain open.
 - The designer's 25-screen HTML export is retained as a reference package for later production Next.js implementation and may be redesigned to match the final backend workflows.
+
+
+## 0.8.12 audience operational-core update
+
+- Saved segments now support governed cloning and semantic comparison between immutable versions.
+- Audience snapshots support identity-free overlap analysis for intersection and difference counts.
+- Manual import conflicts can be resolved atomically in bounded batches.
+- Import validation, merge and conflict totals can be previewed and closed with immutable reconciliation evidence.
+- The traceability baseline is 54 implemented/tested, 33 partial and 311 not started.
+- Durable asynchronous snapshot jobs and live PostgreSQL scale evidence remain outstanding.

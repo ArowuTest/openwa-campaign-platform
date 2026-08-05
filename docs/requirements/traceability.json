@@ -1059,9 +1059,19 @@
     "requirement": "Support configurable update policy: fill-null, newest-source, trusted-source or manual conflict.",
     "priority": "Must",
     "acceptance": "Conflicting attributes follow selected policy.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/audience/importer/import.go",
+      "internal/audience/importer/merge.go",
+      "internal/audience/importer/merge_postgres.go",
+      "internal/audience/importer/source_trust.go",
+      "internal/audience/importer/conflict.go",
+      "internal/audience/importer/conflict_postgres.go",
+      "internal/audience/importer/merge_test.go",
+      "internal/audience/importer/conflict_test.go",
+      "database/migrations/0037_audience_profile_conflict_governance.sql"
+    ],
+    "notes": "Fill-null, newest-source, trusted-source and manual-conflict policies are implemented. Manual conflicts support governed single and atomic batch decisions with optimistic versions."
   },
   {
     "id": "IMP-013",
@@ -1107,9 +1117,16 @@
     "requirement": "Reconcile uploaded, accepted, rejected, duplicate, inserted, updated and unchanged counts.",
     "priority": "Must",
     "acceptance": "Counts sum exactly to source rows.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "PARTIAL",
+    "evidence": [
+      "internal/audience/importer/conflict.go",
+      "internal/audience/importer/reconciliation.go",
+      "internal/audience/importer/reconciliation_postgres.go",
+      "internal/audience/importer/reconciliation_test.go",
+      "database/migrations/0044_audience_import_reconciliation.sql",
+      "internal/platform/httpserver/server.go"
+    ],
+    "notes": "Uploaded, valid, invalid, duplicate, suppressed, inserted and updated totals are reconciled and can be closed with immutable evidence after conflicts resolve. A distinct unchanged-contact count is still outstanding."
   },
   {
     "id": "IMP-018",
@@ -1457,14 +1474,16 @@
     "requirement": "Save, version, clone, retire and compare segment definitions.",
     "priority": "Must",
     "acceptance": "Historical campaign references remain immutable.",
-    "status": "PARTIAL",
+    "status": "IMPLEMENTED_TESTED",
     "evidence": [
       "internal/segment/definition.go",
       "internal/segment/definition_postgres.go",
       "internal/segment/definition_test.go",
+      "internal/platform/httpserver/server.go",
+      "contracts/openapi/control-api.yaml",
       "database/migrations/0043_segment_definition_and_cohort_execution.sql"
     ],
-    "notes": "Save, version and archive are implemented; clone and version comparison remain outstanding."
+    "notes": "Saved segments support create, version, clone, archive and version comparison. Clones receive independent identifiers and histories while historical versions remain immutable."
   },
   {
     "id": "SEG-014",
@@ -1519,9 +1538,15 @@
     "requirement": "Support cohort overlap analysis without exporting identities.",
     "priority": "Must",
     "acceptance": "System returns counts for intersection and difference.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/segment/snapshot.go",
+      "internal/segment/postgres.go",
+      "internal/segment/snapshot_test.go",
+      "internal/platform/httpserver/server.go",
+      "contracts/openapi/control-api.yaml"
+    ],
+    "notes": "Identity-free audience snapshot overlap returns intersection, left-only, right-only and union counts without exporting contact identifiers."
   },
   {
     "id": "SEG-019",

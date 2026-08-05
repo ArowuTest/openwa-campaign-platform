@@ -36,3 +36,12 @@
 3. Complete audience-import merge completion rules, bulk conflict decisions and final import reconciliation.
 4. Add database-backed exclusion waterfalls and anonymised audience samples.
 5. Run EXPLAIN ANALYZE and scale tests once live PostgreSQL is available.
+
+
+## After 0.8.12
+
+1. Implement durable asynchronous snapshot-materialisation jobs with fenced leases, page checkpoints and restart-safe continuation.
+2. Add database-backed eligibility waterfalls and privacy-safe anonymised cohort samples.
+3. Add an explicit unchanged-contact count and legally safe import rollback workflow.
+4. Execute migrations through 0044 against live PostgreSQL and run high-volume EXPLAIN ANALYZE evidence.
+5. Continue toward the agreed 90% operational-core target before frontend integration.

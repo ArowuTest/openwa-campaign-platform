@@ -181,3 +181,26 @@ func (s *PostgreSQLStore) Members(ctx context.Context, snapshotID, afterContactI
 	}
 	return items, rows.Err()
 }
+
+func (s *PostgreSQLStore) Overlap(ctx context.Context, leftID, rightID string) (SnapshotOverlap, error) {
+	if s == nil || s.DB == nil {
+		return SnapshotOverlap{}, errors.New("database is required")
+	}
+	var result SnapshotOverlap
+	result.LeftSnapshotID, result.RightSnapshotID = leftID, rightID
+	var exists int
+	if err := s.DB.QueryRowContext(ctx, `SELECT count(*) FROM audience_snapshots WHERE id IN ($1::uuid,$2::uuid)`, leftID, rightID).Scan(&exists); err != nil {
+		return SnapshotOverlap{}, err
+	}
+	if exists != 2 {
+		return SnapshotOverlap{}, ErrSnapshotNotFound
+	}
+	err := s.DB.QueryRowContext(ctx, `WITH l AS (SELECT contact_id FROM audience_snapshot_members WHERE snapshot_id=$1::uuid), r AS (SELECT contact_id FROM audience_snapshot_members WHERE snapshot_id=$2::uuid), counts AS (SELECT (SELECT count(*) FROM l) left_count,(SELECT count(*) FROM r) right_count,(SELECT count(*) FROM l JOIN r USING(contact_id)) intersection) SELECT left_count,right_count,intersection,left_count-intersection,right_count-intersection,left_count+right_count-intersection FROM counts`, leftID, rightID).Scan(&result.LeftCount, &result.RightCount, &result.Intersection, &result.OnlyLeft, &result.OnlyRight, &result.Union)
+	if err != nil {
+		return SnapshotOverlap{}, fmt.Errorf("calculate snapshot overlap: %w", err)
+	}
+	if result.Union > 0 {
+		result.OverlapPercent = float64(result.Intersection) * 100 / float64(result.Union)
+	}
+	return result, nil
+}

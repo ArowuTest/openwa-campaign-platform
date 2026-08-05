@@ -6,6 +6,30 @@
     ],
     "status": "PARTIAL"
   },
+  "AC-005": {
+    "evidence": [
+      "internal/organisation/policy.go",
+      "internal/organisation/policy_test.go",
+      "internal/audience/cohort/compiler.go",
+      "internal/audience/cohort/compiler_test.go",
+      "internal/orchestration/postgres.go",
+      "internal/dispatch/postgres_material.go",
+      "internal/persistence/postgres/organisation_policy.go",
+      "database/migrations/0042_organisation_frequency_cap_policy.sql"
+    ],
+    "notes": "Final release and final dispatch eligibility re-evaluate consent, suppression and governed frequency caps and return FREQUENCY_CAPPED when exceeded.",
+    "status": "IMPLEMENTED_TESTED"
+  },
+  "AC-006": {
+    "evidence": [
+      "internal/segment/snapshot.go",
+      "internal/segment/postgres.go",
+      "internal/audience/cohort/execution.go",
+      "database/migrations/0043_segment_definition_and_cohort_execution.sql"
+    ],
+    "notes": "Snapshot preserves definition, consent policy and configuration versions.",
+    "status": "IMPLEMENTED_TESTED"
+  },
   "AC-013": {
     "evidence": [
       "internal/consent/optout.go",
@@ -73,6 +97,20 @@
     "notes": "STOP commands are versioned, effective-dated, maker-checker governed and retained with immutable PostgreSQL history; suppression precedence remains enforced at final dispatch. Version 0.8.8 adds deterministic latest-effective-grant precedence and revalidates live consent-review evidence at release and dispatch.",
     "status": "IMPLEMENTED_TESTED"
   },
+  "ADM-009": {
+    "evidence": [
+      "internal/organisation/policy.go",
+      "internal/organisation/policy_test.go",
+      "internal/audience/cohort/compiler.go",
+      "internal/audience/cohort/compiler_test.go",
+      "internal/orchestration/postgres.go",
+      "internal/dispatch/postgres_material.go",
+      "internal/persistence/postgres/organisation_policy.go",
+      "database/migrations/0042_organisation_frequency_cap_policy.sql"
+    ],
+    "notes": "Effective-dated, maker-checker organisation policies configure purpose/channel frequency caps with bounded message and time windows.",
+    "status": "IMPLEMENTED_TESTED"
+  },
   "ADM-014": {
     "evidence": [
       "internal/audit/event.go",
@@ -109,6 +147,16 @@
       "services/openwa-gateway/src/provider/mock.provider.ts"
     ],
     "status": "PARTIAL"
+  },
+  "APR-007": {
+    "evidence": [
+      "internal/campaign/model.go",
+      "internal/campaign/model_test.go",
+      "internal/campaign/service.go",
+      "database/migrations/0041_campaign_material_change_invalidation.sql"
+    ],
+    "notes": "Any material approved-data replacement clears final approval; message, audience or entitlement changes also clear commercial approval as appropriate and require a new approval path.",
+    "status": "IMPLEMENTED_TESTED"
   },
   "APR-008": {
     "evidence": [
@@ -186,6 +234,30 @@
       "internal/campaign/organisation_policy_test.go"
     ],
     "notes": "Inactive organisations fail closed across campaign creation/progression, consent review, import approval and release; safety actions such as pause/cancel remain available.",
+    "status": "IMPLEMENTED_TESTED"
+  },
+  "CAM-004": {
+    "evidence": [
+      "internal/segment/snapshot.go",
+      "internal/campaign/model.go",
+      "internal/campaign/service.go",
+      "internal/campaign/model_test.go",
+      "internal/campaign/model_test.go"
+    ],
+    "notes": "Campaign release binds an immutable snapshot and material changes invalidate approvals.",
+    "status": "IMPLEMENTED_TESTED"
+  },
+  "CAM-012": {
+    "evidence": [
+      "internal/campaign/model.go",
+      "internal/campaign/model_test.go",
+      "internal/campaign/service.go",
+      "internal/persistence/postgres/campaign.go",
+      "internal/platform/httpserver/server.go",
+      "database/migrations/0041_campaign_material_change_invalidation.sql",
+      "contracts/openapi/control-api.yaml"
+    ],
+    "notes": "Material audience, message, entitlement, transport and schedule changes are explicit, MFA-protected, optimistically versioned, recorded append-only and automatically regress the campaign to the required approval stage.",
     "status": "IMPLEMENTED_TESTED"
   },
   "CNS-011": {
@@ -472,11 +544,38 @@
     "notes": "Preview deduplication is in-memory and capped; durable database deduplication is pending.",
     "status": "PARTIAL"
   },
+  "IMP-012": {
+    "evidence": [
+      "internal/audience/importer/import.go",
+      "internal/audience/importer/merge.go",
+      "internal/audience/importer/merge_postgres.go",
+      "internal/audience/importer/source_trust.go",
+      "internal/audience/importer/conflict.go",
+      "internal/audience/importer/conflict_postgres.go",
+      "internal/audience/importer/merge_test.go",
+      "internal/audience/importer/conflict_test.go",
+      "database/migrations/0037_audience_profile_conflict_governance.sql"
+    ],
+    "notes": "Fill-null, newest-source, trusted-source and manual-conflict policies are implemented. Manual conflicts support governed single and atomic batch decisions with optimistic versions.",
+    "status": "IMPLEMENTED_TESTED"
+  },
   "IMP-014": {
     "evidence": [
       "internal/platform/httpserver/server.go",
       "internal/audience/importer/csv.go"
     ],
+    "status": "PARTIAL"
+  },
+  "IMP-017": {
+    "evidence": [
+      "internal/audience/importer/conflict.go",
+      "internal/audience/importer/reconciliation.go",
+      "internal/audience/importer/reconciliation_postgres.go",
+      "internal/audience/importer/reconciliation_test.go",
+      "database/migrations/0044_audience_import_reconciliation.sql",
+      "internal/platform/httpserver/server.go"
+    ],
+    "notes": "Uploaded, valid, invalid, duplicate, suppressed, inserted and updated totals are reconciled and can be closed with immutable evidence after conflicts resolve. A distinct unchanged-contact count is still outstanding.",
     "status": "PARTIAL"
   },
   "NFR-D-005": {
@@ -650,61 +749,6 @@
     ],
     "status": "IMPLEMENTED_TESTED"
   },
-  "SEG-014": {
-    "evidence": [
-      "internal/audience/filter/query.go",
-      "internal/audience/cohort/compiler.go",
-      "internal/platform/httpserver/server.go",
-      "internal/audience/filter/administration_test.go",
-      "internal/audience/cohort/compiler_test.go"
-    ],
-    "notes": "Sensitive governed filter definitions require the configured permission during HTTP validation, compilation and snapshot creation; direct code submission cannot bypass hidden UI fields.",
-    "status": "IMPLEMENTED_TESTED"
-  },
-  "UX-015": {
-    "evidence": [
-      "internal/platform/httpserver/server.go",
-      "internal/platform/httpserver/server_test.go"
-    ],
-    "status": "IMPLEMENTED_TESTED"
-  },
-  "CAM-012": {
-    "status": "IMPLEMENTED_TESTED",
-    "evidence": [
-      "internal/campaign/model.go",
-      "internal/campaign/model_test.go",
-      "internal/campaign/service.go",
-      "internal/persistence/postgres/campaign.go",
-      "internal/platform/httpserver/server.go",
-      "database/migrations/0041_campaign_material_change_invalidation.sql",
-      "contracts/openapi/control-api.yaml"
-    ],
-    "notes": "Material audience, message, entitlement, transport and schedule changes are explicit, MFA-protected, optimistically versioned, recorded append-only and automatically regress the campaign to the required approval stage."
-  },
-  "APR-007": {
-    "status": "IMPLEMENTED_TESTED",
-    "evidence": [
-      "internal/campaign/model.go",
-      "internal/campaign/model_test.go",
-      "internal/campaign/service.go",
-      "database/migrations/0041_campaign_material_change_invalidation.sql"
-    ],
-    "notes": "Any material approved-data replacement clears final approval; message, audience or entitlement changes also clear commercial approval as appropriate and require a new approval path."
-  },
-  "ADM-009": {
-    "evidence": [
-      "internal/organisation/policy.go",
-      "internal/organisation/policy_test.go",
-      "internal/audience/cohort/compiler.go",
-      "internal/audience/cohort/compiler_test.go",
-      "internal/orchestration/postgres.go",
-      "internal/dispatch/postgres_material.go",
-      "internal/persistence/postgres/organisation_policy.go",
-      "database/migrations/0042_organisation_frequency_cap_policy.sql"
-    ],
-    "notes": "Effective-dated, maker-checker organisation policies configure purpose/channel frequency caps with bounded message and time windows.",
-    "status": "IMPLEMENTED_TESTED"
-  },
   "SEG-008": {
     "evidence": [
       "internal/organisation/policy.go",
@@ -719,32 +763,30 @@
     "notes": "Cohort compilation applies active suppression, contact status and governed frequency caps before snapshot materialisation.",
     "status": "IMPLEMENTED_TESTED"
   },
-  "AC-005": {
-    "evidence": [
-      "internal/organisation/policy.go",
-      "internal/organisation/policy_test.go",
-      "internal/audience/cohort/compiler.go",
-      "internal/audience/cohort/compiler_test.go",
-      "internal/orchestration/postgres.go",
-      "internal/dispatch/postgres_material.go",
-      "internal/persistence/postgres/organisation_policy.go",
-      "database/migrations/0042_organisation_frequency_cap_policy.sql"
-    ],
-    "notes": "Final release and final dispatch eligibility re-evaluate consent, suppression and governed frequency caps and return FREQUENCY_CAPPED when exceeded.",
-    "status": "IMPLEMENTED_TESTED"
-  },
   "SEG-013": {
-    "status": "PARTIAL",
     "evidence": [
       "internal/segment/definition.go",
       "internal/segment/definition_postgres.go",
       "internal/segment/definition_test.go",
+      "internal/platform/httpserver/server.go",
+      "contracts/openapi/control-api.yaml",
       "database/migrations/0043_segment_definition_and_cohort_execution.sql"
     ],
-    "notes": "Save, version and archive are implemented; clone and version comparison remain outstanding."
+    "notes": "Saved segments support create, version, clone, archive and version comparison. Clones receive independent identifiers and histories while historical versions remain immutable.",
+    "status": "IMPLEMENTED_TESTED"
+  },
+  "SEG-014": {
+    "evidence": [
+      "internal/audience/filter/query.go",
+      "internal/audience/cohort/compiler.go",
+      "internal/platform/httpserver/server.go",
+      "internal/audience/filter/administration_test.go",
+      "internal/audience/cohort/compiler_test.go"
+    ],
+    "notes": "Sensitive governed filter definitions require the configured permission during HTTP validation, compilation and snapshot creation; direct code submission cannot bypass hidden UI fields.",
+    "status": "IMPLEMENTED_TESTED"
   },
   "SEG-015": {
-    "status": "IMPLEMENTED_TESTED",
     "evidence": [
       "internal/segment/snapshot.go",
       "internal/segment/postgres.go",
@@ -752,35 +794,33 @@
       "internal/audience/cohort/execution.go",
       "internal/audience/cohort/execution_test.go"
     ],
-    "notes": "Immutable snapshot membership, deterministic hash and policy/configuration versions are enforced."
+    "notes": "Immutable snapshot membership, deterministic hash and policy/configuration versions are enforced.",
+    "status": "IMPLEMENTED_TESTED"
+  },
+  "SEG-018": {
+    "evidence": [
+      "internal/segment/snapshot.go",
+      "internal/segment/postgres.go",
+      "internal/segment/snapshot_test.go",
+      "internal/platform/httpserver/server.go",
+      "contracts/openapi/control-api.yaml"
+    ],
+    "notes": "Identity-free audience snapshot overlap returns intersection, left-only, right-only and union counts without exporting contact identifiers.",
+    "status": "IMPLEMENTED_TESTED"
   },
   "SEG-020": {
-    "status": "PARTIAL",
     "evidence": [
       "internal/audience/cohort/execution.go",
       "internal/platform/httpserver/server.go"
     ],
-    "notes": "Server-side multi-million member query and bounded materialisation are implemented; durable asynchronous progress and resume remain outstanding."
+    "notes": "Server-side multi-million member query and bounded materialisation are implemented; durable asynchronous progress and resume remain outstanding.",
+    "status": "PARTIAL"
   },
-  "CAM-004": {
-    "status": "IMPLEMENTED_TESTED",
+  "UX-015": {
     "evidence": [
-      "internal/segment/snapshot.go",
-      "internal/campaign/model.go",
-      "internal/campaign/service.go",
-      "internal/campaign/model_test.go",
-      "internal/campaign/model_test.go"
+      "internal/platform/httpserver/server.go",
+      "internal/platform/httpserver/server_test.go"
     ],
-    "notes": "Campaign release binds an immutable snapshot and material changes invalidate approvals."
-  },
-  "AC-006": {
-    "status": "IMPLEMENTED_TESTED",
-    "evidence": [
-      "internal/segment/snapshot.go",
-      "internal/segment/postgres.go",
-      "internal/audience/cohort/execution.go",
-      "database/migrations/0043_segment_definition_and_cohort_execution.sql"
-    ],
-    "notes": "Snapshot preserves definition, consent policy and configuration versions."
+    "status": "IMPLEMENTED_TESTED"
   }
 }

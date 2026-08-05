@@ -147,3 +147,78 @@ func TestTrustedSourcePolicyUsesGovernedTrustBeforeRecency(t *testing.T) {
 		t.Fatalf("equal trusted newer source did not update profile: %s", got)
 	}
 }
+
+func TestBuildReconciliationDetectsBalancedAndPendingConflicts(t *testing.T) {
+	now := time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)
+	batch := ImportBatch{ID: "imp-1", Status: ImportCompletedWithExceptions, UploadedRows: 100, ValidRows: 80, InvalidRows: 10, DuplicateRows: 5, SuppressedRows: 5, InsertedContacts: 50, UpdatedContacts: 30}
+	result := BuildReconciliation(batch, ConflictSummary{Pending: 2, Resolved: 3, Total: 5}, now)
+	if !result.ValidationBalanced || !result.MergeWithinValidRows {
+		t.Fatalf("expected balanced reconciliation: %+v", result)
+	}
+	if result.ReadyForClosure {
+		t.Fatal("pending conflicts must prevent closure")
+	}
+	if len(result.Warnings) != 1 || result.Warnings[0] != "PENDING_PROFILE_CONFLICTS" {
+		t.Fatalf("unexpected warnings: %+v", result.Warnings)
+	}
+
+	result = BuildReconciliation(batch, ConflictSummary{Resolved: 5, Total: 5}, now)
+	if !result.ReadyForClosure {
+		t.Fatalf("expected ready for closure: %+v", result)
+	}
+}
+
+func TestMemoryConflictRepositorySummary(t *testing.T) {
+	repository := NewMemoryConflictRepository()
+	repository.Add(ProfileConflict{AudienceImportID: "imp-1", Status: ConflictPending})
+	resolved := repository.Add(ProfileConflict{AudienceImportID: "imp-1", Status: ConflictPending})
+	if _, err := repository.Resolve(context.Background(), resolved.ID, ResolutionKeepExisting, "retain trusted source", "reviewer-1", 1, time.Now().UTC()); err != nil {
+		t.Fatal(err)
+	}
+	repository.Add(ProfileConflict{AudienceImportID: "other", Status: ConflictPending})
+	summary, err := repository.Summary(context.Background(), "imp-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Pending != 1 || summary.Resolved != 1 || summary.Total != 2 {
+		t.Fatalf("unexpected summary: %+v", summary)
+	}
+}
+
+func TestConflictServiceResolveBatchIsAtomic(t *testing.T) {
+	repository := NewMemoryConflictRepository()
+	first := repository.Add(ProfileConflict{AudienceImportID: "imp-1", Status: ConflictPending})
+	second := repository.Add(ProfileConflict{AudienceImportID: "imp-1", Status: ConflictPending})
+	service := &ConflictService{Repository: repository, Clock: func() time.Time { return time.Date(2026, 8, 5, 14, 0, 0, 0, time.UTC) }}
+	result, err := service.ResolveBatch(context.Background(), []ConflictDecision{
+		{ConflictID: first.ID, Resolution: ResolutionKeepExisting, Reason: "retain verified existing value", ExpectedVersion: 1},
+		{ConflictID: second.ID, Resolution: ResolutionUseIncoming, Reason: "accept verified incoming value", ExpectedVersion: 1},
+	}, "reviewer-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Count != 2 || len(result.Resolved) != 2 {
+		t.Fatalf("unexpected batch result: %+v", result)
+	}
+
+	third := repository.Add(ProfileConflict{AudienceImportID: "imp-1", Status: ConflictPending})
+	fourth := repository.Add(ProfileConflict{AudienceImportID: "imp-1", Status: ConflictPending})
+	_, err = service.ResolveBatch(context.Background(), []ConflictDecision{
+		{ConflictID: third.ID, Resolution: ResolutionKeepExisting, Reason: "retain verified existing value", ExpectedVersion: 1},
+		{ConflictID: fourth.ID, Resolution: ResolutionUseIncoming, Reason: "accept verified incoming value", ExpectedVersion: 99},
+	}, "reviewer-1")
+	if err != ErrConflictVersion {
+		t.Fatalf("expected version error, got %v", err)
+	}
+	items, err := repository.List(context.Background(), "imp-1", ConflictPending, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := map[string]bool{}
+	for _, item := range items {
+		pending[item.ID] = true
+	}
+	if !pending[third.ID] || !pending[fourth.ID] {
+		t.Fatal("failed batch must not partially resolve conflicts")
+	}
+}

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -262,4 +264,165 @@ func cloneDefinition(v Definition) Definition {
 	payload, _ := json.Marshal(v.Definition)
 	_ = json.Unmarshal(payload, &v.Definition)
 	return v
+}
+
+type CloneDefinitionInput struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	Reason      string `json:"reason"`
+	ActorID     string `json:"-"`
+}
+
+type RuleChange struct {
+	Path   string               `json:"path"`
+	Before *audiencefilter.Rule `json:"before,omitempty"`
+	After  *audiencefilter.Rule `json:"after,omitempty"`
+}
+
+type VersionComparison struct {
+	SegmentID          string       `json:"segmentId"`
+	FromVersion        int64        `json:"fromVersion"`
+	ToVersion          int64        `json:"toVersion"`
+	NameChanged        bool         `json:"nameChanged"`
+	DescriptionChanged bool         `json:"descriptionChanged"`
+	StatusChanged      bool         `json:"statusChanged"`
+	JoinChanged        bool         `json:"joinChanged"`
+	AddedRules         []RuleChange `json:"addedRules"`
+	RemovedRules       []RuleChange `json:"removedRules"`
+	ChangedRules       []RuleChange `json:"changedRules"`
+	Equivalent         bool         `json:"equivalent"`
+}
+
+func (s *DefinitionService) Clone(ctx context.Context, identifier string, input CloneDefinitionInput, hasPermission func(string) bool) (Definition, error) {
+	if s == nil || s.Repository == nil || s.Registry == nil {
+		return Definition{}, errors.New("segment definition service is not configured")
+	}
+	source, err := s.Repository.Get(ctx, strings.TrimSpace(identifier))
+	if err != nil {
+		return Definition{}, err
+	}
+	input.Name = strings.TrimSpace(input.Name)
+	input.Description = strings.TrimSpace(input.Description)
+	input.ActorID = strings.TrimSpace(input.ActorID)
+	input.Reason = strings.TrimSpace(input.Reason)
+	if input.Name == "" || input.ActorID == "" || len(input.Reason) < 8 {
+		return Definition{}, errors.New("name, actor and a reason of at least 8 characters are required")
+	}
+	if input.Description == "" {
+		input.Description = source.Description
+	}
+	if err := source.Definition.ValidateForPermissions(s.Registry, hasPermission); err != nil {
+		return Definition{}, err
+	}
+	identifierNew, err := id.New()
+	if err != nil {
+		return Definition{}, err
+	}
+	now := time.Now().UTC()
+	if s.Clock != nil {
+		now = s.Clock().UTC()
+	}
+	clone := Definition{
+		ID: identifierNew, OrganisationID: source.OrganisationID, Name: input.Name,
+		Description: input.Description, Definition: cloneGroup(source.Definition), Status: StatusActive,
+		Version: 1, CreatedBy: input.ActorID, UpdatedBy: input.ActorID, CreatedAt: now, UpdatedAt: now,
+	}
+	return s.Repository.Create(ctx, clone, "cloned from "+source.ID+": "+input.Reason)
+}
+
+func (s *DefinitionService) CompareVersions(ctx context.Context, identifier string, fromVersion, toVersion int64) (VersionComparison, error) {
+	if s == nil || s.Repository == nil {
+		return VersionComparison{}, errors.New("segment definition service is not configured")
+	}
+	if fromVersion <= 0 || toVersion <= 0 || fromVersion == toVersion {
+		return VersionComparison{}, errors.New("two different positive versions are required")
+	}
+	versions, err := s.Repository.Versions(ctx, strings.TrimSpace(identifier), 500)
+	if err != nil {
+		return VersionComparison{}, err
+	}
+	var from, to *DefinitionVersion
+	for i := range versions {
+		v := versions[i]
+		if v.Version == fromVersion {
+			copyValue := v
+			from = &copyValue
+		}
+		if v.Version == toVersion {
+			copyValue := v
+			to = &copyValue
+		}
+	}
+	if from == nil || to == nil {
+		return VersionComparison{}, errors.New("requested segment version was not found")
+	}
+	comparison := VersionComparison{
+		SegmentID: identifier, FromVersion: fromVersion, ToVersion: toVersion,
+		NameChanged: from.Name != to.Name, DescriptionChanged: from.Description != to.Description,
+		StatusChanged: from.Status != to.Status, JoinChanged: from.Definition.Join != to.Definition.Join,
+		AddedRules: []RuleChange{}, RemovedRules: []RuleChange{}, ChangedRules: []RuleChange{},
+	}
+	left := flattenRules(from.Definition)
+	right := flattenRules(to.Definition)
+	paths := map[string]struct{}{}
+	for path := range left {
+		paths[path] = struct{}{}
+	}
+	for path := range right {
+		paths[path] = struct{}{}
+	}
+	ordered := make([]string, 0, len(paths))
+	for path := range paths {
+		ordered = append(ordered, path)
+	}
+	sort.Strings(ordered)
+	for _, path := range ordered {
+		before, hasBefore := left[path]
+		after, hasAfter := right[path]
+		switch {
+		case !hasBefore && hasAfter:
+			value := after
+			comparison.AddedRules = append(comparison.AddedRules, RuleChange{Path: path, After: &value})
+		case hasBefore && !hasAfter:
+			value := before
+			comparison.RemovedRules = append(comparison.RemovedRules, RuleChange{Path: path, Before: &value})
+		case !rulesEqual(before, after):
+			leftValue, rightValue := before, after
+			comparison.ChangedRules = append(comparison.ChangedRules, RuleChange{Path: path, Before: &leftValue, After: &rightValue})
+		}
+	}
+	comparison.Equivalent = !comparison.NameChanged && !comparison.DescriptionChanged && !comparison.StatusChanged && !comparison.JoinChanged && len(comparison.AddedRules) == 0 && len(comparison.RemovedRules) == 0 && len(comparison.ChangedRules) == 0
+	return comparison, nil
+}
+
+func cloneGroup(group audiencefilter.Group) audiencefilter.Group {
+	result := audiencefilter.Group{Join: group.Join, Rules: make([]audiencefilter.Rule, len(group.Rules)), Children: make([]audiencefilter.Group, len(group.Children))}
+	for i, rule := range group.Rules {
+		result.Rules[i] = audiencefilter.Rule{DefinitionCode: rule.DefinitionCode, Operator: rule.Operator, Values: append([]any(nil), rule.Values...)}
+	}
+	for i, child := range group.Children {
+		result.Children[i] = cloneGroup(child)
+	}
+	return result
+}
+
+func flattenRules(group audiencefilter.Group) map[string]audiencefilter.Rule {
+	out := map[string]audiencefilter.Rule{}
+	var walk func(audiencefilter.Group, string)
+	walk = func(current audiencefilter.Group, path string) {
+		for index, rule := range current.Rules {
+			out[fmt.Sprintf("%s/rules/%d", path, index)] = audiencefilter.Rule{DefinitionCode: rule.DefinitionCode, Operator: rule.Operator, Values: append([]any(nil), rule.Values...)}
+		}
+		for index, child := range current.Children {
+			walk(child, fmt.Sprintf("%s/children/%d", path, index))
+		}
+	}
+	walk(group, "")
+	return out
+}
+
+func rulesEqual(left, right audiencefilter.Rule) bool {
+	leftJSON, _ := json.Marshal(left)
+	rightJSON, _ := json.Marshal(right)
+	return string(leftJSON) == string(rightJSON)
 }

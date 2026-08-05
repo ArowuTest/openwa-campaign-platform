@@ -366,6 +366,41 @@ paths:
       responses:
         '200': { description: Segment versions returned }
         '404': { description: Segment not found }
+  /segments/{id}/clone:
+    post:
+      operationId: cloneSegment
+      summary: Clone a saved audience segment into a new independently versioned definition
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [name, reason]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 160 }
+                description: { type: string, maxLength: 2000 }
+                reason: { type: string, minLength: 8 }
+      responses:
+        '201': { description: Segment clone created }
+        '404': { description: Source segment not found }
+        '422': { description: Clone rejected }
+  /segments/{id}/compare:
+    get:
+      operationId: compareSegmentVersions
+      summary: Compare two immutable versions of a saved audience segment
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: fromVersion, in: query, required: true, schema: { type: integer, minimum: 1 } }
+        - { name: toVersion, in: query, required: true, schema: { type: integer, minimum: 1 } }
+      responses:
+        '200': { description: Version comparison returned }
+        '400': { description: Invalid version query }
+        '404': { description: Segment not found }
+        '422': { description: Comparison rejected }
   /cohorts/compile:
     post:
       operationId: compileCohort
@@ -452,6 +487,37 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { description: Organisation version conflict }
         '422': { $ref: '#/components/responses/ValidationError' }
+  /audience-import-conflicts/batch-resolve:
+    post:
+      operationId: resolveAudienceImportConflictsBatch
+      summary: Atomically resolve up to 100 pending audience profile conflicts
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [decisions]
+              properties:
+                decisions:
+                  type: array
+                  minItems: 1
+                  maxItems: 100
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [conflictId, resolution, reason, expectedVersion]
+                    properties:
+                      conflictId: { type: string }
+                      resolution: { type: string, enum: [KEEP_EXISTING, USE_INCOMING] }
+                      reason: { type: string, minLength: 8 }
+                      expectedVersion: { type: integer, minimum: 1 }
+      responses:
+        '200': { description: Conflicts resolved atomically }
+        '403': { description: MFA step-up required }
+        '404': { description: A conflict was not found }
+        '409': { description: A conflict changed or was no longer pending }
   /organisations/{id}/audience-source-trust:
     get:
       operationId: listAudienceSourceTrust
@@ -855,6 +921,37 @@ paths:
         '400': { description: Invalid query }
         '401': { description: Authentication required }
         '403': { description: Permission denied }
+  /audience-imports/{id}/reconciliation:
+    get:
+      operationId: getAudienceImportReconciliation
+      summary: Preview or retrieve closed validation, merge and conflict reconciliation for an audience import
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: closed, in: query, required: false, schema: { type: boolean, default: false } }
+      responses:
+        '200': { description: Import reconciliation returned }
+        '404': { description: Audience import or closed reconciliation not found }
+        '503': { description: Reconciliation unavailable }
+    post:
+      operationId: closeAudienceImportReconciliation
+      summary: Close a balanced audience import reconciliation with immutable evidence
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [reason]
+              properties:
+                reason: { type: string, minLength: 8 }
+      responses:
+        '200': { description: Existing identical reconciliation returned }
+        '201': { description: Reconciliation evidence created }
+        '403': { description: MFA step-up required }
+        '409': { description: Reconciliation is not ready or conflicts with existing evidence }
   /audience-import-conflicts/{id}/resolve:
     post:
       operationId: resolveAudienceImportConflict
@@ -881,6 +978,17 @@ paths:
         '404': { description: Conflict not found }
         '409': { description: Optimistic version conflict }
         '422': { description: Resolution rejected }
+  /audience-snapshots/overlap:
+    get:
+      operationId: getAudienceSnapshotOverlap
+      summary: Return identity-free intersection and difference counts for two immutable audience snapshots
+      parameters:
+        - { name: leftId, in: query, required: true, schema: { type: string } }
+        - { name: rightId, in: query, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Snapshot overlap counts returned }
+        '400': { description: Invalid snapshot comparison }
+        '404': { description: One or both snapshots not found }
   /audience-snapshots/{id}:
     get:
       operationId: getAudienceSnapshot

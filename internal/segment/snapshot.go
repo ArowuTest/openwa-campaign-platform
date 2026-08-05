@@ -294,3 +294,64 @@ func (r *MemoryRepository) Members(_ context.Context, snapshotID, afterContactID
 	}
 	return append([]Member(nil), items[start:end]...), nil
 }
+
+type SnapshotOverlap struct {
+	LeftSnapshotID  string  `json:"leftSnapshotId"`
+	RightSnapshotID string  `json:"rightSnapshotId"`
+	LeftCount       int64   `json:"leftCount"`
+	RightCount      int64   `json:"rightCount"`
+	Intersection    int64   `json:"intersection"`
+	OnlyLeft        int64   `json:"onlyLeft"`
+	OnlyRight       int64   `json:"onlyRight"`
+	Union           int64   `json:"union"`
+	OverlapPercent  float64 `json:"overlapPercent"`
+}
+
+type OverlapStore interface {
+	Overlap(context.Context, string, string) (SnapshotOverlap, error)
+}
+
+func (s *Service) Overlap(ctx context.Context, leftID, rightID string) (SnapshotOverlap, error) {
+	if s == nil || s.store == nil {
+		return SnapshotOverlap{}, errors.New("snapshot store is required")
+	}
+	leftID, rightID = strings.TrimSpace(leftID), strings.TrimSpace(rightID)
+	if leftID == "" || rightID == "" || leftID == rightID {
+		return SnapshotOverlap{}, errors.New("two different snapshot IDs are required")
+	}
+	provider, ok := s.store.(OverlapStore)
+	if !ok {
+		return SnapshotOverlap{}, errors.New("snapshot overlap analysis is unavailable")
+	}
+	return provider.Overlap(ctx, leftID, rightID)
+}
+
+func (r *MemoryRepository) Overlap(_ context.Context, leftID, rightID string) (SnapshotOverlap, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	left, leftOK := r.items[leftID]
+	right, rightOK := r.items[rightID]
+	if !leftOK || !rightOK {
+		return SnapshotOverlap{}, ErrSnapshotNotFound
+	}
+	leftSet := map[string]struct{}{}
+	rightSet := map[string]struct{}{}
+	for _, member := range r.members[leftID] {
+		leftSet[member.ContactID] = struct{}{}
+	}
+	for _, member := range r.members[rightID] {
+		rightSet[member.ContactID] = struct{}{}
+	}
+	var intersection int64
+	for id := range leftSet {
+		if _, ok := rightSet[id]; ok {
+			intersection++
+		}
+	}
+	union := int64(len(leftSet)+len(rightSet)) - intersection
+	percent := 0.0
+	if union > 0 {
+		percent = float64(intersection) * 100 / float64(union)
+	}
+	return SnapshotOverlap{LeftSnapshotID: left.ID, RightSnapshotID: right.ID, LeftCount: int64(len(leftSet)), RightCount: int64(len(rightSet)), Intersection: intersection, OnlyLeft: int64(len(leftSet)) - intersection, OnlyRight: int64(len(rightSet)) - intersection, Union: union, OverlapPercent: percent}, nil
+}

@@ -151,6 +151,40 @@ paths:
         - { name: id, in: path, required: true, schema: { type: string } }
       responses:
         '200': { description: Decision recorded }
+  /admin/sender-pacing-policies:
+    get:
+      operationId: listSenderPacingPolicies
+      summary: List governed sender pacing policies
+      responses:
+        '200': { description: Pacing policy list }
+    post:
+      operationId: createSenderPacingPolicy
+      summary: Create a draft sender pacing policy
+      responses:
+        '201': { description: Draft pacing policy created }
+  /admin/sender-pacing-policies/{id}/submit:
+    post:
+      operationId: submitSenderPacingPolicy
+      summary: Submit a sender pacing policy for independent approval
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Pacing policy awaiting approval }
+  /admin/sender-pacing-policies/{id}/decision:
+    post:
+      operationId: decideSenderPacingPolicy
+      summary: Approve or reject a submitted sender pacing policy
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Pacing policy decision recorded }
+  /admin/sender-pacing-policies/resolve:
+    post:
+      operationId: resolveSenderPacingPolicy
+      summary: Resolve the effective pacing policy for a provider, engine, pool, session and campaign hierarchy
+      responses:
+        '200': { description: Effective pacing policy and source versions }
+        '404': { description: No active policy matched }
   /admin/users:
     get:
       operationId: listInternalUsers
@@ -743,6 +777,47 @@ paths:
       responses:
         '200':
           description: Inbound campaign metrics
+  /campaigns/{id}/routing-plans:
+    get:
+      operationId: listCampaignRoutingPlans
+      summary: List immutable multi-pool routing plans for a campaign
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Routing plan list }
+    post:
+      operationId: createCampaignRoutingPlan
+      summary: Approve a multi-pool routing plan and atomically reserve pool capacity
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '201': { description: Routing plan approved }
+        '409': { description: Pool capacity is already reserved }
+  /routing-plans/{id}:
+    get:
+      operationId: getCampaignRoutingPlan
+      summary: Read one immutable campaign routing plan
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Routing plan }
+        '404': { description: Routing plan not found }
+  /routing-plans/{id}/reservations:
+    get:
+      operationId: listRoutingPlanReservations
+      summary: List sender-pool capacity reservations for a routing plan
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Capacity reservation list }
+  /routing-plans/{id}/release:
+    post:
+      operationId: releaseRoutingPlanReservations
+      summary: Release held or active sender-pool capacity reservations
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '204': { description: Reservations released }
   /campaigns/{id}/execution-plan:
     get:
       summary: Evaluate measured sender capacity and forecast campaign completion

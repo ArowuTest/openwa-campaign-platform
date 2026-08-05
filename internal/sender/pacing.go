@@ -79,6 +79,11 @@ type PacingPolicy struct {
 	UpdatedAt           time.Time             `json:"updatedAt"`
 }
 
+type PacingScopeRef struct {
+	Scope PacingScope `json:"scope"`
+	ID    string      `json:"id"`
+}
+
 type ResolvedPacing struct {
 	Policy          PacingPolicy `json:"policy"`
 	SourcePolicyIDs []string     `json:"sourcePolicyIds"`
@@ -228,10 +233,7 @@ func (s *PacingAdministration) List(ctx context.Context) ([]PacingPolicy, error)
 }
 
 // Resolve applies least-specific to most-specific precedence and returns one frozen effective policy.
-func (s *PacingAdministration) Resolve(ctx context.Context, scopes []struct {
-	Scope PacingScope
-	ID    string
-}, at time.Time) (ResolvedPacing, error) {
+func (s *PacingAdministration) Resolve(ctx context.Context, scopes []PacingScopeRef, at time.Time) (ResolvedPacing, error) {
 	if at.IsZero() {
 		at = s.now()
 	}

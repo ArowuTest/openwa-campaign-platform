@@ -6,10 +6,10 @@ Total requirements: **398**
 
 | Status | Count |
 |---|---:|
-| IMPLEMENTED_TESTED | 60 |
-| PARTIAL | 32 |
+| IMPLEMENTED_TESTED | 63 |
+| PARTIAL | 34 |
 | BLOCKED_EXTERNAL | 0 |
-| NOT_STARTED | 306 |
+| NOT_STARTED | 301 |
 
 | ID | Priority | Status | Requirement | Evidence / notes |
 |---|---|---|---|---|
@@ -207,7 +207,7 @@ Total requirements: **398**
 | SND-001 | Must | NOT_STARTED | Maintain an inventory of genuine sender MSISDNs and WhatsApp account metadata. |  |
 | SND-002 | Must | NOT_STARTED | Store sender MSISDN encrypted and display masked by default. |  |
 | SND-003 | Must | NOT_STARTED | Record ownership, registration country, profile/display name, recovery information reference and lifecycle status. |  |
-| SND-004 | Must | NOT_STARTED | Support logical sender pools that map to one or more actual sender accounts. |  |
+| SND-004 | Must | IMPLEMENTED_TESTED | Support logical sender pools that map to one or more actual sender accounts. | `internal/sender/governance.go`, `internal/sender/allocator.go`, `internal/execution/routing_plan.go`, `internal/execution/routing_admin.go`, `internal/execution/routing_admin_test.go`, `internal/execution/routing_postgres.go`, `database/migrations/0052_sender_pacing_and_multi_pool_routing.sql` — Logical sender pools map to governed concrete sessions. Version 0.8.19 adds immutable multi-pool campaign routing plans, deterministic shard/pool allocation evidence and atomic pool-capacity reservations. |
 | SND-005 | Must | NOT_STARTED | Clearly disclose that logical sender is not an alphanumeric WhatsApp sender ID. |  |
 | SND-006 | Must | IMPLEMENTED_TESTED | Support ready, connecting, disconnected, paused, draining, restricted, retired and quarantined sender states. | `internal/sender/governance.go`, `internal/sender/governance_test.go`, `internal/sender/memory_governance.go`, `internal/sender/postgres_governance.go`, `internal/sender/allocator.go`, `internal/platform/httpserver/sender_governance.go`, `database/migrations/0047_sender_session_quarantine.sql` — Governed sender lifecycle includes quarantine; quarantined/restricted/retired sessions are excluded from allocation and runtime heartbeats cannot silently re-enable them. |
 | SND-007 | Must | NOT_STARTED | Allow each session to have exactly one active worker lease. |  |
@@ -216,9 +216,9 @@ Total requirements: **398**
 | SND-010 | Must | NOT_STARTED | Record worker public/stable IP and infrastructure identity. |  |
 | SND-011 | Must | NOT_STARTED | Allow several sessions per VPS only within configured tested resource limits. |  |
 | SND-012 | Must | NOT_STARTED | Support per-session proxy settings only for approved stable routing. |  |
-| SND-013 | Must | NOT_STARTED | Maintain per-sender configured and measured safe throughput. |  |
-| SND-014 | Must | NOT_STARTED | Maintain per-sender hourly/daily safety limits and cooldown. |  |
-| SND-015 | Must | NOT_STARTED | Maintain per-sender failure, disconnect and delivery-health thresholds. |  |
+| SND-013 | Must | PARTIAL | Maintain per-sender configured and measured safe throughput. | `internal/sender/governance.go`, `internal/sender/allocator.go`, `internal/dispatch/throttle.go`, `internal/dispatch/pacing_controller.go`, `internal/execution/routing_plan.go` — Configured safe throughput and runtime pacing are enforced. Observed-rate calibration and live engine-specific capacity evidence still require genuine OpenWA sessions. |
+| SND-014 | Must | IMPLEMENTED_TESTED | Maintain per-sender hourly/daily safety limits and cooldown. | `internal/sender/pacing.go`, `internal/sender/pacing_test.go`, `internal/persistence/postgres/pacing.go`, `internal/dispatch/pacing_controller.go`, `internal/dispatch/throttle_test.go`, `database/migrations/0053_pacing_scope_and_policy_audit.sql`, `database/migrations/0054_sender_pacing_runtime_enforcement.sql` — Effective-dated maker-checker pacing policies govern per-session minimum/maximum delay, jitter, hourly and daily submission allowances, cooldown and active-campaign limits. The campaign worker enforces durable counters before provider submission. |
+| SND-015 | Must | PARTIAL | Maintain per-sender failure, disconnect and delivery-health thresholds. | `internal/sender/pacing.go`, `internal/sender/health.go`, `internal/sender/governance.go`, `internal/dispatch/throttle.go` — Failure, disconnect and health thresholds are represented and influence allocation/throttling; fully automatic threshold-driven quarantine requires live telemetry calibration. |
 | SND-016 | Must | NOT_STARTED | Prevent automatic allocation to a newly paired sender until readiness checks pass. |  |
 | SND-017 | Must | NOT_STARTED | Support sender reservation for a campaign or organisation. |  |
 | SND-018 | Must | NOT_STARTED | Support one-active-campaign-per-sender policy as configurable default. |  |
@@ -327,7 +327,7 @@ Total requirements: **398**
 | BR-007 | Must | NOT_STARTED | Campaign entitlement cannot be transferred or reused by another campaign. |  |
 | BR-008 | Must | IMPLEMENTED_TESTED | Gateway acceptance does not equal sent, delivered or read. | `internal/delivery/model.go`, `internal/delivery/model_test.go` |
 | BR-009 | Must | NOT_STARTED | Only actual registered WhatsApp MSISDNs may be used as OpenWA senders. |  |
-| BR-010 | Must | NOT_STARTED | A logical sender pool is an internal routing abstraction, not a recipient-facing alphanumeric sender ID. |  |
+| BR-010 | Must | IMPLEMENTED_TESTED | A logical sender pool is an internal routing abstraction, not a recipient-facing alphanumeric sender ID. | `internal/sender/governance.go`, `internal/sender/allocator.go`, `internal/execution/routing_plan.go`, `internal/dispatch/postgres_material.go` — Campaigns route through internal sender-pool abstractions while every delivery retains the actual governed session/MSISDN. |
 | BR-011 | Must | PARTIAL | A live WhatsApp session shall have exactly one active worker owner. | `internal/gateway/lease.go`, `internal/gateway/lease_test.go` |
 | BR-012 | Must | NOT_STARTED | Stable worker IPs may be used for isolation; rapid IP rotation or evasion logic is prohibited. |  |
 | BR-013 | Must | NOT_STARTED | A sender’s safe capacity is based on measured evidence and configured headroom, not theoretical batch concurrency. |  |

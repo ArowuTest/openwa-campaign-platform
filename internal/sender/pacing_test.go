@@ -43,10 +43,7 @@ func TestPacingPolicyMakerCheckerAndResolution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolved, err := svc.Resolve(ctx, []struct {
-		Scope PacingScope
-		ID    string
-	}{{PacingPlatform, ""}, {PacingSession, "session-1"}}, clock)
+	resolved, err := svc.Resolve(ctx, []PacingScopeRef{{PacingPlatform, ""}, {PacingSession, "session-1"}}, clock)
 	if err != nil {
 		t.Fatal(err)
 	}

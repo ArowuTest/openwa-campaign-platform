@@ -18,6 +18,9 @@ type JobPayload struct {
 }
 
 type Material struct {
+	SenderPoolID    string
+	Provider        string
+	Engine          string
 	GatewayPoolID   string
 	SessionID       string
 	RecipientE164   string
@@ -101,6 +104,7 @@ type Handler struct {
 	Eligibility FinalEligibility
 	Gateway     Gateway
 	Throttle    Throttle
+	Pacing      PacingController
 	Clock       func() time.Time
 }
 
@@ -143,13 +147,27 @@ func (h *Handler) Handle(ctx context.Context, job jobs.Job) error {
 		return err
 	}
 	attemptKey := fmt.Sprintf("%s:%d", job.ID, job.AttemptCount)
-	if _, _, err = h.Ledger.ApplyEvent(ctx, recipient.ID, delivery.Event{DeduplicationKey: "submitting:" + attemptKey, Type: delivery.EventSubmitting, OccurredAt: now}); err != nil {
-		return err
-	}
-	if h.Throttle != nil {
+	if h.Pacing != nil {
+		if err := h.Pacing.Wait(ctx, recipient, material, now); err != nil {
+			code := "PACING_WAIT_INTERRUPTED"
+			if errors.Is(err, ErrHourlyAllowanceExhausted) {
+				code = "SENDER_HOURLY_ALLOWANCE_EXHAUSTED"
+			}
+			if errors.Is(err, ErrDailyAllowanceExhausted) {
+				code = "SENDER_DAILY_ALLOWANCE_EXHAUSTED"
+			}
+			if errors.Is(err, ErrActiveCampaignLimit) {
+				code = "SENDER_ACTIVE_CAMPAIGN_LIMIT"
+			}
+			return jobs.RetryableError{Code: code, RetryAfter: time.Minute, Err: err}
+		}
+	} else if h.Throttle != nil {
 		if err := h.Throttle.Wait(ctx, material.SessionID); err != nil {
 			return jobs.RetryableError{Code: "THROTTLE_WAIT_INTERRUPTED", Err: err}
 		}
+	}
+	if _, _, err = h.Ledger.ApplyEvent(ctx, recipient.ID, delivery.Event{DeduplicationKey: "submitting:" + attemptKey, Type: delivery.EventSubmitting, OccurredAt: now}); err != nil {
+		return err
 	}
 	result, sendErr := h.Gateway.Send(ctx, GatewayRequest{IdempotencyKey: recipient.IdempotencyKey, GatewayPoolID: material.GatewayPoolID, SessionID: material.SessionID, RecipientE164: material.RecipientE164, MessageType: material.MessageType, Body: material.Body, MediaURL: material.MediaObjectURL, ClientReference: material.ClientReference})
 	if sendErr != nil {

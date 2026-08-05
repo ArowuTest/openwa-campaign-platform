@@ -1996,9 +1996,17 @@
     "requirement": "Support logical sender pools that map to one or more actual sender accounts.",
     "priority": "Must",
     "acceptance": "Operator selects pool; recipient ledger records actual sender.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/sender/governance.go",
+      "internal/sender/allocator.go",
+      "internal/execution/routing_plan.go",
+      "internal/execution/routing_admin.go",
+      "internal/execution/routing_admin_test.go",
+      "internal/execution/routing_postgres.go",
+      "database/migrations/0052_sender_pacing_and_multi_pool_routing.sql"
+    ],
+    "notes": "Logical sender pools map to governed concrete sessions. Version 0.8.19 adds immutable multi-pool campaign routing plans, deterministic shard/pool allocation evidence and atomic pool-capacity reservations."
   },
   {
     "id": "SND-005",
@@ -2085,27 +2093,46 @@
     "requirement": "Maintain per-sender configured and measured safe throughput.",
     "priority": "Must",
     "acceptance": "Capacity view separates configured cap from observed rate.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "PARTIAL",
+    "evidence": [
+      "internal/sender/governance.go",
+      "internal/sender/allocator.go",
+      "internal/dispatch/throttle.go",
+      "internal/dispatch/pacing_controller.go",
+      "internal/execution/routing_plan.go"
+    ],
+    "notes": "Configured safe throughput and runtime pacing are enforced. Observed-rate calibration and live engine-specific capacity evidence still require genuine OpenWA sessions."
   },
   {
     "id": "SND-014",
     "requirement": "Maintain per-sender hourly/daily safety limits and cooldown.",
     "priority": "Must",
     "acceptance": "Scheduler stops allocation at limit.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/sender/pacing.go",
+      "internal/sender/pacing_test.go",
+      "internal/persistence/postgres/pacing.go",
+      "internal/dispatch/pacing_controller.go",
+      "internal/dispatch/throttle_test.go",
+      "database/migrations/0053_pacing_scope_and_policy_audit.sql",
+      "database/migrations/0054_sender_pacing_runtime_enforcement.sql"
+    ],
+    "notes": "Effective-dated maker-checker pacing policies govern per-session minimum/maximum delay, jitter, hourly and daily submission allowances, cooldown and active-campaign limits. The campaign worker enforces durable counters before provider submission."
   },
   {
     "id": "SND-015",
     "requirement": "Maintain per-sender failure, disconnect and delivery-health thresholds.",
     "priority": "Must",
     "acceptance": "Threshold breach pauses or drains sender.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "PARTIAL",
+    "evidence": [
+      "internal/sender/pacing.go",
+      "internal/sender/health.go",
+      "internal/sender/governance.go",
+      "internal/dispatch/throttle.go"
+    ],
+    "notes": "Failure, disconnect and health thresholds are represented and influence allocation/throttling; fully automatic threshold-driven quarantine requires live telemetry calibration."
   },
   {
     "id": "SND-016",
@@ -3208,9 +3235,14 @@
     "requirement": "A logical sender pool is an internal routing abstraction, not a recipient-facing alphanumeric sender ID.",
     "priority": "Must",
     "acceptance": "See acceptance criteria and linked tests.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/sender/governance.go",
+      "internal/sender/allocator.go",
+      "internal/execution/routing_plan.go",
+      "internal/dispatch/postgres_material.go"
+    ],
+    "notes": "Campaigns route through internal sender-pool abstractions while every delivery retains the actual governed session/MSISDN."
   },
   {
     "id": "BR-011",

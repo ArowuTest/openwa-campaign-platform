@@ -77,3 +77,17 @@ func TestMemoryThrottleUniformJitterStaysWithinPolicy(t *testing.T) {
 		}
 	}
 }
+
+func TestPacingIntervalIsDeterministicAndBounded(t *testing.T) {
+	first := pacingInterval("session-1", 4, 3000, 8000, sender.JitterUniform)
+	second := pacingInterval("session-1", 4, 3000, 8000, sender.JitterUniform)
+	if first != second {
+		t.Fatalf("expected deterministic interval: %s != %s", first, second)
+	}
+	if first < 3*time.Second || first > 8*time.Second {
+		t.Fatalf("interval outside configured bounds: %s", first)
+	}
+	if fixed := pacingInterval("session-1", 4, 5000, 5000, sender.JitterUniform); fixed != 5*time.Second {
+		t.Fatalf("fixed interval=%s", fixed)
+	}
+}

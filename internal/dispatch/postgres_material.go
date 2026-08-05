@@ -64,8 +64,8 @@ WHERE cr.id=$1::uuid AND cr.campaign_id=$2::uuid AND cr.contact_id=$3::uuid AND 
 	if err != nil {
 		return Material{}, fmt.Errorf("assign sender: %w", err)
 	}
-	var gatewayPoolID string
-	if err := l.DB.QueryRowContext(ctx, `SELECT gateway_pool_id::text FROM sender_sessions WHERE id=$1::uuid`, sessionID).Scan(&gatewayPoolID); err != nil {
+	var gatewayPoolID, provider, engine string
+	if err := l.DB.QueryRowContext(ctx, `SELECT ss.gateway_pool_id::text,gp.provider,gp.engine FROM sender_sessions ss JOIN gateway_pools gp ON gp.id=ss.gateway_pool_id WHERE ss.id=$1::uuid`, sessionID).Scan(&gatewayPoolID, &provider, &engine); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Material{}, PermanentMaterialError{Err: errors.New("assigned sender session is not governed by a gateway pool")}
 		}
@@ -122,7 +122,7 @@ WHERE cr.id=$1::uuid AND cr.campaign_id=$2::uuid AND cr.contact_id=$3::uuid AND 
 			return Material{}, fmt.Errorf("resolve media object: %w", err)
 		}
 	}
-	return Material{GatewayPoolID: gatewayPoolID, SessionID: sessionID, RecipientE164: e164, MessageType: mappedType, Body: body, MediaObjectURL: mediaURL, ClientReference: recipient.ID}, nil
+	return Material{SenderPoolID: senderPool, Provider: provider, Engine: engine, GatewayPoolID: gatewayPoolID, SessionID: sessionID, RecipientE164: e164, MessageType: mappedType, Body: body, MediaObjectURL: mediaURL, ClientReference: recipient.ID}, nil
 }
 
 func loadDynamicMessageValues(ctx context.Context, db *sql.DB, contactID string) (map[string]string, error) {

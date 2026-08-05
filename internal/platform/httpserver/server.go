@@ -75,8 +75,10 @@ type Dependencies struct {
 	AudienceMaterialisations *materialisation.MaterialisationService
 	Releases                 *orchestration.ReleaseService
 	SenderGovernance         *sender.GovernanceService
+	PacingPolicies           *sender.PacingAdministration
 	DeliveryMetrics          *delivery.MetricsService
 	Execution                *execution.Coordinator
+	RoutingPlans             *execution.RoutingAdministration
 	JobOperations            *jobs.AdministrationService
 	Operations               *operations.Service
 	AudienceImports          *importer.ImportService
@@ -222,6 +224,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/campaigns/{id}/release", s.require("campaign.operate", s.releaseCampaignAudience))
 	mux.Handle("GET /api/v1/campaigns/{id}/metrics", s.require("campaign.read", s.getCampaignMetrics))
 	mux.Handle("GET /api/v1/campaigns/{id}/execution-plan", s.require("campaign.read", s.getCampaignExecutionPlan))
+	mux.Handle("GET /api/v1/campaigns/{id}/routing-plans", s.require("campaign.read", s.listCampaignRoutingPlans))
+	mux.Handle("POST /api/v1/campaigns/{id}/routing-plans", s.require("campaign.approve", s.createCampaignRoutingPlan))
+	mux.Handle("GET /api/v1/routing-plans/{id}", s.require("campaign.read", s.getCampaignRoutingPlan))
+	mux.Handle("GET /api/v1/routing-plans/{id}/reservations", s.require("campaign.read", s.listRoutingPlanReservations))
+	mux.Handle("POST /api/v1/routing-plans/{id}/release", s.require("campaign.operate", s.releaseRoutingPlanReservations))
 	mux.Handle("GET /api/v1/campaigns/{id}/execution-forecast", s.require("campaign.read", s.getCampaignExecutionForecast))
 	mux.Handle("GET /api/v1/operations/dashboard", s.require("operations.read", s.operationsDashboard))
 	mux.Handle("GET /api/v1/operations/incidents", s.require("operations.read", s.listOperationsIncidents))
@@ -243,6 +250,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/campaigns/{id}/inbound-metrics", s.require("campaign.read", s.getCampaignInboundMetrics))
 	mux.Handle("GET /api/v1/audience-snapshots/{id}", s.require("audience.read", s.getAudienceSnapshot))
 	mux.Handle("GET /api/v1/audience-snapshots/overlap", s.require("audience.read", s.getAudienceSnapshotOverlap))
+	mux.Handle("GET /api/v1/admin/sender-pacing-policies", s.require("configuration.write", s.listSenderPacingPolicies))
+	mux.Handle("POST /api/v1/admin/sender-pacing-policies", s.require("configuration.write", s.createSenderPacingPolicy))
+	mux.Handle("POST /api/v1/admin/sender-pacing-policies/{id}/submit", s.require("configuration.write", s.submitSenderPacingPolicy))
+	mux.Handle("POST /api/v1/admin/sender-pacing-policies/{id}/decision", s.require("configuration.approve", s.decideSenderPacingPolicy))
+	mux.Handle("POST /api/v1/admin/sender-pacing-policies/resolve", s.require("sender.read", s.resolveSenderPacingPolicy))
 	mux.Handle("GET /api/v1/sender-pools", s.require("sender.read", s.listSenderPools))
 	mux.Handle("POST /api/v1/sender-pools", s.require("sender.admin", s.createSenderPool))
 	mux.Handle("PUT /api/v1/sender-pools/{id}", s.require("sender.admin", s.updateSenderPool))
@@ -2581,4 +2593,213 @@ func (s *Server) getCampaignInboundMetrics(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, value)
+}
+
+func (s *Server) listSenderPacingPolicies(w http.ResponseWriter, r *http.Request) {
+	if s.deps.PacingPolicies == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "PACING_POLICY_UNAVAILABLE", "Sender pacing policy administration is not configured.", nil)
+		return
+	}
+	values, err := s.deps.PacingPolicies.List(r.Context())
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": values})
+}
+
+func (s *Server) createSenderPacingPolicy(w http.ResponseWriter, r *http.Request) {
+	if s.deps.PacingPolicies == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "PACING_POLICY_UNAVAILABLE", "Sender pacing policy administration is not configured.", nil)
+		return
+	}
+	var input sender.PacingPolicy
+	if err := httpx.DecodeJSON(w, r, 1<<20, &input); err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The pacing policy request is invalid.", map[string]any{"detail": err.Error()})
+		return
+	}
+	principal, _ := identity.PrincipalFromContext(r.Context())
+	value, err := s.deps.PacingPolicies.CreateDraft(r.Context(), input, principal.User.ID, input.Reason)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "PACING_POLICY_INVALID", "The pacing policy could not be created.", map[string]any{"detail": err.Error()})
+		return
+	}
+	httpx.WriteJSON(w, http.StatusCreated, value)
+}
+
+func (s *Server) submitSenderPacingPolicy(w http.ResponseWriter, r *http.Request) {
+	if s.deps.PacingPolicies == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "PACING_POLICY_UNAVAILABLE", "Sender pacing policy administration is not configured.", nil)
+		return
+	}
+	var input struct {
+		ExpectedVersion int64  `json:"expectedVersion"`
+		Reason          string `json:"reason"`
+	}
+	if err := httpx.DecodeJSON(w, r, 1<<20, &input); err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The pacing policy submission is invalid.", nil)
+		return
+	}
+	principal, _ := identity.PrincipalFromContext(r.Context())
+	value, err := s.deps.PacingPolicies.Submit(r.Context(), r.PathValue("id"), input.ExpectedVersion, principal.User.ID, input.Reason)
+	if errors.Is(err, sender.ErrPacingConflict) {
+		httpx.WriteError(w, r, http.StatusConflict, "PACING_POLICY_CONFLICT", "The pacing policy changed; reload before submitting.", nil)
+		return
+	}
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "PACING_POLICY_INVALID", "The pacing policy submission was rejected.", map[string]any{"detail": err.Error()})
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, value)
+}
+
+func (s *Server) decideSenderPacingPolicy(w http.ResponseWriter, r *http.Request) {
+	if s.deps.PacingPolicies == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "PACING_POLICY_UNAVAILABLE", "Sender pacing policy administration is not configured.", nil)
+		return
+	}
+	var input struct {
+		ExpectedVersion int64  `json:"expectedVersion"`
+		Approve         bool   `json:"approve"`
+		Reason          string `json:"reason"`
+	}
+	if err := httpx.DecodeJSON(w, r, 1<<20, &input); err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The pacing policy decision is invalid.", nil)
+		return
+	}
+	principal, _ := identity.PrincipalFromContext(r.Context())
+	if !identity.StepUpSatisfied(principal.Session, time.Now().UTC(), 10*time.Minute) {
+		httpx.WriteError(w, r, http.StatusForbidden, "MFA_STEP_UP_REQUIRED", "Recent MFA verification is required.", nil)
+		return
+	}
+	value, err := s.deps.PacingPolicies.Decide(r.Context(), r.PathValue("id"), input.ExpectedVersion, input.Approve, principal.User.ID, input.Reason)
+	if errors.Is(err, sender.ErrPacingConflict) {
+		httpx.WriteError(w, r, http.StatusConflict, "PACING_POLICY_CONFLICT", "The pacing policy changed; reload before deciding.", nil)
+		return
+	}
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "PACING_POLICY_INVALID", "The pacing policy decision was rejected.", map[string]any{"detail": err.Error()})
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, value)
+}
+
+func (s *Server) resolveSenderPacingPolicy(w http.ResponseWriter, r *http.Request) {
+	if s.deps.PacingPolicies == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "PACING_POLICY_UNAVAILABLE", "Sender pacing policy administration is not configured.", nil)
+		return
+	}
+	var input struct {
+		Scopes []sender.PacingScopeRef `json:"scopes"`
+		At     *time.Time              `json:"at,omitempty"`
+	}
+	if err := httpx.DecodeJSON(w, r, 1<<20, &input); err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The pacing policy resolution request is invalid.", nil)
+		return
+	}
+	at := time.Now().UTC()
+	if input.At != nil {
+		at = input.At.UTC()
+	}
+	value, err := s.deps.PacingPolicies.Resolve(r.Context(), input.Scopes, at)
+	if errors.Is(err, sender.ErrPacingNotFound) {
+		httpx.WriteError(w, r, http.StatusNotFound, "PACING_POLICY_NOT_FOUND", "No active pacing policy matched the requested scope hierarchy.", nil)
+		return
+	}
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, value)
+}
+
+func (s *Server) listCampaignRoutingPlans(w http.ResponseWriter, r *http.Request) {
+	if s.deps.RoutingPlans == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "ROUTING_PLAN_UNAVAILABLE", "Campaign routing-plan administration is not configured.", nil)
+		return
+	}
+	values, err := s.deps.RoutingPlans.ListByCampaign(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": values})
+}
+func (s *Server) createCampaignRoutingPlan(w http.ResponseWriter, r *http.Request) {
+	if s.deps.RoutingPlans == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "ROUTING_PLAN_UNAVAILABLE", "Campaign routing-plan administration is not configured.", nil)
+		return
+	}
+	principal, _ := identity.PrincipalFromContext(r.Context())
+	if !identity.StepUpSatisfied(principal.Session, time.Now().UTC(), 10*time.Minute) {
+		httpx.WriteError(w, r, http.StatusForbidden, "MFA_STEP_UP_REQUIRED", "Recent MFA verification is required.", nil)
+		return
+	}
+	var input execution.RoutingPlan
+	if err := httpx.DecodeJSON(w, r, 1<<20, &input); err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The routing plan request is invalid.", map[string]any{"detail": err.Error()})
+		return
+	}
+	input.CampaignID = r.PathValue("id")
+	value, err := s.deps.RoutingPlans.CreateApproved(r.Context(), input, principal.User.ID)
+	if errors.Is(err, execution.ErrCapacityOverbooked) {
+		httpx.WriteError(w, r, http.StatusConflict, "ROUTING_CAPACITY_OVERBOOKED", "The requested sender-pool capacity is already reserved.", nil)
+		return
+	}
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "ROUTING_PLAN_INVALID", "The routing plan could not be approved.", map[string]any{"detail": err.Error()})
+		return
+	}
+	httpx.WriteJSON(w, http.StatusCreated, value)
+}
+func (s *Server) getCampaignRoutingPlan(w http.ResponseWriter, r *http.Request) {
+	if s.deps.RoutingPlans == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "ROUTING_PLAN_UNAVAILABLE", "Campaign routing-plan administration is not configured.", nil)
+		return
+	}
+	value, err := s.deps.RoutingPlans.Get(r.Context(), r.PathValue("id"))
+	if errors.Is(err, execution.ErrRoutingPlanNotFound) {
+		httpx.WriteError(w, r, http.StatusNotFound, "ROUTING_PLAN_NOT_FOUND", "The routing plan was not found.", nil)
+		return
+	}
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, value)
+}
+func (s *Server) listRoutingPlanReservations(w http.ResponseWriter, r *http.Request) {
+	if s.deps.RoutingPlans == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "ROUTING_PLAN_UNAVAILABLE", "Campaign routing-plan administration is not configured.", nil)
+		return
+	}
+	values, err := s.deps.RoutingPlans.Reservations(r.Context(), r.PathValue("id"))
+	if errors.Is(err, execution.ErrRoutingPlanNotFound) {
+		httpx.WriteError(w, r, http.StatusNotFound, "ROUTING_PLAN_NOT_FOUND", "The routing plan was not found.", nil)
+		return
+	}
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": values})
+}
+func (s *Server) releaseRoutingPlanReservations(w http.ResponseWriter, r *http.Request) {
+	if s.deps.RoutingPlans == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "ROUTING_PLAN_UNAVAILABLE", "Campaign routing-plan administration is not configured.", nil)
+		return
+	}
+	principal, _ := identity.PrincipalFromContext(r.Context())
+	if !identity.StepUpSatisfied(principal.Session, time.Now().UTC(), 10*time.Minute) {
+		httpx.WriteError(w, r, http.StatusForbidden, "MFA_STEP_UP_REQUIRED", "Recent MFA verification is required.", nil)
+		return
+	}
+	if err := s.deps.RoutingPlans.Release(r.Context(), r.PathValue("id"), principal.User.ID); errors.Is(err, execution.ErrRoutingPlanNotFound) {
+		httpx.WriteError(w, r, http.StatusNotFound, "ROUTING_PLAN_NOT_FOUND", "The routing plan or active reservations were not found.", nil)
+		return
+	} else if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

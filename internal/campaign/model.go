@@ -97,6 +97,49 @@ type CreateInput struct {
 	CreatedBy                   string             `json:"createdBy"`
 }
 
+type CloneInput struct {
+	Name                    string     `json:"name"`
+	RequestedStartAt        *time.Time `json:"requestedStartAt"`
+	CompletionDeadlineAt    *time.Time `json:"completionDeadlineAt"`
+	Timezone                string     `json:"timezone"`
+	QuietHoursStart         string     `json:"quietHoursStart"`
+	QuietHoursEnd           string     `json:"quietHoursEnd"`
+	MaximumUniqueRecipients int64      `json:"maximumUniqueRecipients"`
+	ActorID                 string     `json:"-"`
+}
+
+func (c Campaign) CloneAsDraft(input CloneInput, now time.Time) (Campaign, error) {
+	name := strings.TrimSpace(input.Name)
+	if name == "" {
+		name = c.Name + " (Copy)"
+	}
+	maximum := input.MaximumUniqueRecipients
+	if maximum <= 0 {
+		maximum = c.MaximumUniqueRecipients
+	}
+	timezone := input.Timezone
+	if strings.TrimSpace(timezone) == "" {
+		timezone = c.Timezone
+	}
+	quietStart, quietEnd := input.QuietHoursStart, input.QuietHoursEnd
+	if strings.TrimSpace(quietStart) == "" && strings.TrimSpace(quietEnd) == "" {
+		quietStart, quietEnd = c.QuietHoursStart, c.QuietHoursEnd
+	}
+	start, deadline := input.RequestedStartAt, input.CompletionDeadlineAt
+	if start == nil {
+		start = c.RequestedStartAt
+	}
+	if deadline == nil {
+		deadline = c.CompletionDeadlineAt
+	}
+	return New(CreateInput{
+		OrganisationID: c.OrganisationID, Name: name, PurposeID: c.PurposeID, ConsentReviewID: c.ConsentReviewID,
+		RequestedStartAt: start, CompletionDeadlineAt: deadline, Timezone: timezone, QuietHoursStart: quietStart, QuietHoursEnd: quietEnd,
+		MaximumUniqueRecipients: maximum, MaximumMessagesPerRecipient: c.MaximumMessagesPerRecipient, SenderPool: c.SenderPool,
+		Transport: c.Transport, CreatedBy: strings.TrimSpace(input.ActorID),
+	}, now)
+}
+
 type TransitionInput struct {
 	Action                Action `json:"action"`
 	ActorID               string `json:"-"`

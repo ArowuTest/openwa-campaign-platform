@@ -212,6 +212,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/campaigns", s.require("campaign.read", s.listCampaigns))
 	mux.Handle("POST /api/v1/campaigns", s.require("campaign.write", s.createCampaign))
 	mux.Handle("POST /api/v1/campaigns/{id}/transition", s.require("campaign.write", s.transitionCampaign))
+	mux.Handle("POST /api/v1/campaigns/{id}/clone", s.require("campaign.write", s.cloneCampaign))
 	mux.Handle("POST /api/v1/campaigns/{id}/material-amendment", s.require("campaign.write", s.amendCampaignMaterial))
 	mux.Handle("GET /api/v1/campaigns/{id}/material-changes", s.require("campaign.read", s.listCampaignMaterialChanges))
 	mux.Handle("GET /api/v1/campaigns/{id}/message-versions", s.require("campaign.read", s.listMessageVersions))
@@ -1201,6 +1202,31 @@ func (s *Server) createCampaign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusCreated, entity)
+}
+
+func (s *Server) cloneCampaign(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Campaigns == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "CAMPAIGNS_UNAVAILABLE", "Campaign management is unavailable.", nil)
+		return
+	}
+	var input campaign.CloneInput
+	if err := httpx.DecodeJSON(w, r, 256<<10, &input); err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The campaign clone request is invalid.", map[string]any{"detail": err.Error()})
+		return
+	}
+	principal, _ := identity.PrincipalFromContext(r.Context())
+	input.ActorID = principal.User.ID
+	value, err := s.deps.Campaigns.Clone(r.Context(), r.PathValue("id"), input)
+	switch {
+	case errors.Is(err, campaign.ErrNotFound):
+		httpx.WriteError(w, r, http.StatusNotFound, "CAMPAIGN_NOT_FOUND", "The source campaign was not found.", nil)
+	case errors.Is(err, organisation.ErrNotActive):
+		httpx.WriteError(w, r, http.StatusConflict, "ORGANISATION_NOT_ACTIVE", "The organisation must be active before a campaign can be cloned.", nil)
+	case err != nil:
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "CAMPAIGN_CLONE_REJECTED", "The campaign could not be cloned.", map[string]any{"detail": err.Error()})
+	default:
+		httpx.WriteJSON(w, http.StatusCreated, value)
+	}
 }
 
 func (s *Server) transitionCampaign(w http.ResponseWriter, r *http.Request) {

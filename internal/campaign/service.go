@@ -114,6 +114,27 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (Campaign, erro
 	return entity, nil
 }
 
+func (s *Service) Clone(ctx context.Context, identifier string, input CloneInput) (Campaign, error) {
+	source, err := s.repository.Get(ctx, identifier)
+	if err != nil {
+		return Campaign{}, err
+	}
+	if err := s.requireActiveOrganisation(ctx, source.OrganisationID); err != nil {
+		return Campaign{}, err
+	}
+	if input.ActorID == "" {
+		return Campaign{}, errors.New("actor identity is required")
+	}
+	clone, err := source.CloneAsDraft(input, s.clock())
+	if err != nil {
+		return Campaign{}, err
+	}
+	if err := s.repository.Create(ctx, clone); err != nil {
+		return Campaign{}, err
+	}
+	return clone, nil
+}
+
 func (s *Service) Transition(ctx context.Context, identifier string, input TransitionInput) (Campaign, error) {
 	entity, err := s.repository.Get(ctx, identifier)
 	if err != nil {

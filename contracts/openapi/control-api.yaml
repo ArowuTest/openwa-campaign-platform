@@ -672,6 +672,31 @@ paths:
       responses:
         '201': { description: Draft campaign created }
         '422': { $ref: '#/components/responses/ValidationError' }
+  /campaigns/{id}/clone:
+    post:
+      operationId: cloneCampaign
+      summary: Clone reusable campaign configuration into a new draft requiring fresh evidence and approvals
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                requestedStartAt: { type: string, format: date-time, nullable: true }
+                completionDeadlineAt: { type: string, format: date-time, nullable: true }
+                timezone: { type: string }
+                quietHoursStart: { type: string }
+                quietHoursEnd: { type: string }
+                maximumUniqueRecipients: { type: integer, format: int64, minimum: 1 }
+      responses:
+        '201': { description: Fresh draft campaign created without audience, message, commercial or final approval evidence }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: The organisation is not active }
+        '422': { $ref: '#/components/responses/ValidationError' }
   /campaigns/{id}/transition:
     post:
       operationId: transitionCampaign

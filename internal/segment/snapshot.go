@@ -59,6 +59,40 @@ func NewBuilder(campaignID, segmentID string, definition audiencefilter.Group, d
 	return &Builder{campaignID: campaignID, segmentID: segmentID, definition: definition, definitionVersion: definitionVersion, consentPolicyVersion: consentPolicyVersion, configurationVersion: configurationVersion, createdBy: createdBy, hash: seed}, nil
 }
 
+// RestoreBuilder recreates the deterministic rolling snapshot hash from a durable
+// checkpoint. It is used by restart-safe audience materialisation workers and
+// rejects malformed or inconsistent checkpoint evidence.
+func RestoreBuilder(campaignID, segmentID string, definition audiencefilter.Group, definitionVersion int64, consentPolicyVersion, configurationVersion, createdBy, lastContactID, hash string, count int64) (*Builder, error) {
+	builder, err := NewBuilder(campaignID, segmentID, definition, definitionVersion, consentPolicyVersion, configurationVersion, createdBy)
+	if err != nil {
+		return nil, err
+	}
+	if count < 0 {
+		return nil, errors.New("snapshot checkpoint count cannot be negative")
+	}
+	if count == 0 {
+		if strings.TrimSpace(lastContactID) != "" {
+			return nil, errors.New("empty snapshot checkpoint cannot contain a last contact")
+		}
+		_, seedHash, _ := builder.Checkpoint()
+		if strings.TrimSpace(hash) != "" && !strings.EqualFold(strings.TrimSpace(hash), seedHash) {
+			return nil, errors.New("snapshot checkpoint seed hash is invalid")
+		}
+		return builder, nil
+	}
+	if strings.TrimSpace(lastContactID) == "" {
+		return nil, errors.New("non-empty snapshot checkpoint requires a last contact")
+	}
+	decoded, err := hex.DecodeString(strings.TrimSpace(hash))
+	if err != nil || len(decoded) != sha256.Size {
+		return nil, errors.New("snapshot checkpoint hash must be a SHA-256 hex digest")
+	}
+	copy(builder.hash[:], decoded)
+	builder.count = count
+	builder.lastContactID = strings.TrimSpace(lastContactID)
+	return builder, nil
+}
+
 // Add must receive contact IDs in strictly increasing order. Database snapshot workers
 // therefore use ORDER BY contact_id and may resume from the last committed ID.
 func (b *Builder) Add(contactID, eligibilityEvidenceHash string) error {

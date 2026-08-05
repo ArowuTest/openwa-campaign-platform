@@ -19,6 +19,7 @@ import (
 	"campaign-platform/internal/audience/cohort"
 	audiencefilter "campaign-platform/internal/audience/filter"
 	"campaign-platform/internal/audience/importer"
+	"campaign-platform/internal/audience/materialisation"
 	"campaign-platform/internal/campaign"
 	"campaign-platform/internal/commercial"
 	"campaign-platform/internal/consent"
@@ -70,6 +71,7 @@ type Dependencies struct {
 	Messages                 *message.Service
 	Snapshots                *segment.Service
 	SegmentDefinitions       *segment.DefinitionService
+	AudienceMaterialisations *materialisation.MaterialisationService
 	Releases                 *orchestration.ReleaseService
 	SenderGovernance         *sender.GovernanceService
 	DeliveryMetrics          *delivery.MetricsService
@@ -210,6 +212,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/message-versions/{id}/approve", s.require("campaign.approve", s.approveMessageVersion))
 	mux.Handle("POST /api/v1/campaigns/{id}/audience-snapshots", s.require("audience.write", s.createAudienceSnapshot))
 	mux.Handle("POST /api/v1/campaigns/{id}/audience-snapshots/materialise", s.require("audience.write", s.materialiseAudienceSnapshot))
+	mux.Handle("POST /api/v1/campaigns/{id}/audience-materialisations", s.require("audience.write", s.scheduleAudienceMaterialisation))
+	mux.Handle("GET /api/v1/campaigns/{id}/audience-materialisations", s.require("audience.read", s.listAudienceMaterialisations))
+	mux.Handle("GET /api/v1/audience-materialisations/{id}", s.require("audience.read", s.getAudienceMaterialisation))
+	mux.Handle("POST /api/v1/audience-materialisations/{id}/cancel", s.require("audience.approve", s.cancelAudienceMaterialisation))
 	mux.Handle("POST /api/v1/campaigns/{id}/release", s.require("campaign.operate", s.releaseCampaignAudience))
 	mux.Handle("GET /api/v1/campaigns/{id}/metrics", s.require("campaign.read", s.getCampaignMetrics))
 	mux.Handle("GET /api/v1/campaigns/{id}/execution-plan", s.require("campaign.read", s.getCampaignExecutionPlan))
@@ -1945,6 +1951,156 @@ func (s *Server) materialiseAudienceSnapshot(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	httpx.WriteJSON(w, http.StatusCreated, created)
+}
+
+type scheduleAudienceMaterialisationRequest struct {
+	Definition           audiencefilter.Group `json:"definition"`
+	SegmentID            string               `json:"segmentId,omitempty"`
+	DefinitionVersion    int64                `json:"definitionVersion"`
+	ConsentPolicyVersion string               `json:"consentPolicyVersion"`
+	ConfigurationVersion string               `json:"configurationVersion"`
+	AsOf                 *time.Time           `json:"asOf,omitempty"`
+}
+
+func (s *Server) scheduleAudienceMaterialisation(w http.ResponseWriter, r *http.Request) {
+	if s.deps.AudienceMaterialisations == nil || s.deps.Cohorts == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "AUDIENCE_MATERIALISATION_UNAVAILABLE", "Asynchronous audience materialisation is unavailable.", nil)
+		return
+	}
+	entity, err := s.deps.Campaigns.Get(r.Context(), r.PathValue("id"))
+	if errors.Is(err, campaign.ErrNotFound) {
+		httpx.WriteError(w, r, http.StatusNotFound, "CAMPAIGN_NOT_FOUND", "The campaign was not found.", nil)
+		return
+	}
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	if entity.Status != campaign.StatusAudienceBuilding {
+		httpx.WriteError(w, r, http.StatusConflict, "MATERIALISATION_NOT_ALLOWED", "Audience materialisation can be scheduled only while the campaign audience is building.", nil)
+		return
+	}
+	var input scheduleAudienceMaterialisationRequest
+	if err := httpx.DecodeJSON(w, r, 1<<20, &input); err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The materialisation request is invalid.", map[string]any{"detail": err.Error()})
+		return
+	}
+	principal, _ := identity.PrincipalFromContext(r.Context())
+	segmentID := strings.TrimSpace(input.SegmentID)
+	definition := input.Definition
+	definitionVersion := input.DefinitionVersion
+	if segmentID != "" {
+		if s.deps.SegmentDefinitions == nil {
+			httpx.WriteError(w, r, http.StatusServiceUnavailable, "SEGMENT_SERVICE_UNAVAILABLE", "Saved segments are unavailable.", nil)
+			return
+		}
+		saved, loadErr := s.deps.SegmentDefinitions.Get(r.Context(), segmentID)
+		if errors.Is(loadErr, segment.ErrDefinitionNotFound) {
+			httpx.WriteError(w, r, http.StatusNotFound, "SEGMENT_NOT_FOUND", "The saved segment was not found.", nil)
+			return
+		}
+		if loadErr != nil {
+			s.internalError(w, r, loadErr)
+			return
+		}
+		if saved.OrganisationID != entity.OrganisationID || saved.Status != segment.StatusActive {
+			httpx.WriteError(w, r, http.StatusUnprocessableEntity, "SEGMENT_NOT_ELIGIBLE", "The saved segment is not active for this campaign organisation.", nil)
+			return
+		}
+		definition = saved.Definition
+		definitionVersion = saved.Version
+	} else if definitionVersion <= 0 {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "DEFINITION_VERSION_REQUIRED", "An inline definition version is required.", nil)
+		return
+	}
+	asOf := time.Now().UTC()
+	if input.AsOf != nil {
+		asOf = input.AsOf.UTC()
+	}
+	eligibility := cohort.EligibilityContext{OrganisationID: entity.OrganisationID, PurposeID: entity.PurposeID, Channel: "WHATSAPP", AsOf: asOf}
+	estimate, err := s.deps.Cohorts.Estimate(r.Context(), definition, eligibility, principal.User.HasPermission)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "COHORT_ESTIMATE_FAILED", "The eligible audience could not be estimated.", map[string]any{"detail": err.Error()})
+		return
+	}
+	if estimate.EligibleCount <= 0 {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "EMPTY_COHORT", "The cohort contains no eligible recipients.", nil)
+		return
+	}
+	if estimate.EligibleCount > entity.MaximumUniqueRecipients {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "COHORT_EXCEEDS_ENTITLEMENT", "The eligible cohort exceeds the campaign recipient entitlement.", map[string]any{"eligibleCount": estimate.EligibleCount, "maximumUniqueRecipients": entity.MaximumUniqueRecipients})
+		return
+	}
+	job, err := s.deps.AudienceMaterialisations.Schedule(r.Context(), materialisation.ScheduleMaterialisation{CampaignID: entity.ID, SegmentID: segmentID, Definition: definition, DefinitionVersion: definitionVersion, Eligibility: eligibility, ConsentPolicyVersion: input.ConsentPolicyVersion, ConfigurationVersion: input.ConfigurationVersion, RequestedBy: principal.User.ID, ExpectedCount: estimate.EligibleCount})
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "MATERIALISATION_SCHEDULE_FAILED", "The audience materialisation could not be scheduled.", map[string]any{"detail": err.Error()})
+		return
+	}
+	httpx.WriteJSON(w, http.StatusAccepted, job)
+}
+func (s *Server) listAudienceMaterialisations(w http.ResponseWriter, r *http.Request) {
+	if s.deps.AudienceMaterialisations == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "AUDIENCE_MATERIALISATION_UNAVAILABLE", "Audience materialisation is unavailable.", nil)
+		return
+	}
+	items, err := s.deps.AudienceMaterialisations.List(r.Context(), r.PathValue("id"), 50)
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+func (s *Server) getAudienceMaterialisation(w http.ResponseWriter, r *http.Request) {
+	if s.deps.AudienceMaterialisations == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "AUDIENCE_MATERIALISATION_UNAVAILABLE", "Audience materialisation is unavailable.", nil)
+		return
+	}
+	item, err := s.deps.AudienceMaterialisations.Get(r.Context(), r.PathValue("id"))
+	if errors.Is(err, materialisation.ErrMaterialisationNotFound) {
+		httpx.WriteError(w, r, http.StatusNotFound, "MATERIALISATION_NOT_FOUND", "The audience materialisation was not found.", nil)
+		return
+	}
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, item)
+}
+
+type cancelAudienceMaterialisationRequest struct {
+	ExpectedVersion int64  `json:"expectedVersion"`
+	Reason          string `json:"reason"`
+}
+
+func (s *Server) cancelAudienceMaterialisation(w http.ResponseWriter, r *http.Request) {
+	if s.deps.AudienceMaterialisations == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "AUDIENCE_MATERIALISATION_UNAVAILABLE", "Audience materialisation is unavailable.", nil)
+		return
+	}
+	var input cancelAudienceMaterialisationRequest
+	if err := httpx.DecodeJSON(w, r, 64<<10, &input); err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The cancellation request is invalid.", nil)
+		return
+	}
+	if strings.TrimSpace(input.Reason) == "" {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "REASON_REQUIRED", "A cancellation reason is required.", nil)
+		return
+	}
+	principal, _ := identity.PrincipalFromContext(r.Context())
+	item, err := s.deps.AudienceMaterialisations.Cancel(r.Context(), r.PathValue("id"), principal.User.ID, input.Reason, input.ExpectedVersion)
+	if errors.Is(err, materialisation.ErrMaterialisationConflict) {
+		httpx.WriteError(w, r, http.StatusConflict, "MATERIALISATION_CONFLICT", "The materialisation changed or can no longer be cancelled.", nil)
+		return
+	}
+	if errors.Is(err, materialisation.ErrMaterialisationNotFound) {
+		httpx.WriteError(w, r, http.StatusNotFound, "MATERIALISATION_NOT_FOUND", "The audience materialisation was not found.", nil)
+		return
+	}
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, item)
 }
 
 func (s *Server) getAudienceSnapshotOverlap(w http.ResponseWriter, r *http.Request) {

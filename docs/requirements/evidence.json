@@ -797,6 +797,17 @@
     "notes": "Immutable snapshot membership, deterministic hash and policy/configuration versions are enforced.",
     "status": "IMPLEMENTED_TESTED"
   },
+  "SEG-016": {
+    "evidence": [
+      "internal/segment/snapshot.go",
+      "internal/segment/postgres.go",
+      "internal/audience/materialisation/materialisation.go",
+      "internal/audience/materialisation/postgres.go",
+      "internal/audience/materialisation/materialisation_test.go"
+    ],
+    "notes": "Snapshots and materialisation jobs preserve creation time, initiating user, definition version, consent policy version and configuration version.",
+    "status": "IMPLEMENTED_TESTED"
+  },
   "SEG-018": {
     "evidence": [
       "internal/segment/snapshot.go",
@@ -810,11 +821,16 @@
   },
   "SEG-020": {
     "evidence": [
-      "internal/audience/cohort/execution.go",
+      "internal/audience/materialisation/materialisation.go",
+      "internal/audience/materialisation/postgres.go",
+      "internal/audience/materialisation/memory.go",
+      "internal/audience/materialisation/materialisation_test.go",
+      "database/migrations/0045_async_audience_materialisation.sql",
+      "cmd/audience-worker/main.go",
       "internal/platform/httpserver/server.go"
     ],
-    "notes": "Server-side multi-million member query and bounded materialisation are implemented; durable asynchronous progress and resume remain outstanding.",
-    "status": "PARTIAL"
+    "notes": "Durable asynchronous multi-million audience materialisation uses bounded pages, fenced leases, persistent cursors, rolling hashes, progress, retries, cancellation evidence and restart-safe continuation without duplicate membership.",
+    "status": "IMPLEMENTED_TESTED"
   },
   "UX-015": {
     "evidence": [

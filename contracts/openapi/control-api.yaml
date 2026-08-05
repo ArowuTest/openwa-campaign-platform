@@ -1018,6 +1018,69 @@ paths:
         '400': { description: Invalid request }
         '401': { description: Authentication required }
         '403': { description: Permission denied }
+  /campaigns/{id}/audience-materialisations:
+    post:
+      operationId: scheduleAudienceMaterialisation
+      summary: Schedule a durable restart-safe audience snapshot materialisation job
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [definition, definitionVersion, consentPolicyVersion, configurationVersion]
+              properties:
+                definition: { type: object }
+                segmentId: { type: string }
+                definitionVersion: { type: integer, minimum: 1 }
+                consentPolicyVersion: { type: string, minLength: 1 }
+                configurationVersion: { type: string, minLength: 1 }
+                asOf: { type: string, format: date-time }
+      responses:
+        '202': { description: Audience materialisation scheduled }
+        '404': { description: Campaign not found }
+        '409': { description: Campaign is not building an audience }
+        '422': { description: Cohort invalid, empty or exceeds campaign entitlement }
+    get:
+      operationId: listAudienceMaterialisations
+      summary: List durable audience materialisation jobs for a campaign
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Materialisation jobs returned }
+  /audience-materialisations/{id}:
+    get:
+      operationId: getAudienceMaterialisation
+      summary: Get audience materialisation progress and terminal evidence
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Materialisation job returned }
+        '404': { description: Materialisation job not found }
+  /audience-materialisations/{id}/cancel:
+    post:
+      operationId: cancelAudienceMaterialisation
+      summary: Cancel a pending or running audience materialisation using optimistic concurrency
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedVersion, reason]
+              properties:
+                expectedVersion: { type: integer, minimum: 1 }
+                reason: { type: string, minLength: 5, maxLength: 1000 }
+      responses:
+        '200': { description: Materialisation cancelled }
+        '404': { description: Materialisation job not found }
+        '409': { description: Materialisation changed or is terminal }
   /campaigns/{id}/audience-snapshots/materialise:
     post:
       operationId: materialiseAudienceSnapshot

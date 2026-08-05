@@ -10,9 +10,14 @@ import (
 	"syscall"
 	"time"
 
+	"campaign-platform/internal/audience/cohort"
+	audiencefilter "campaign-platform/internal/audience/filter"
 	"campaign-platform/internal/audience/importer"
+	"campaign-platform/internal/audience/materialisation"
 	"campaign-platform/internal/geography"
 	"campaign-platform/internal/persistence/database"
+	postgresrepo "campaign-platform/internal/persistence/postgres"
+	"campaign-platform/internal/segment"
 	sharedcrypto "campaign-platform/internal/shared/crypto"
 	"campaign-platform/internal/storage"
 	workerconfig "campaign-platform/internal/worker/config"
@@ -88,7 +93,32 @@ func main() {
 		},
 	}
 
-	health := workerruntime.NewHealth("audience-worker", db, worker.Active)
+	filterDefinitions, err := (&postgresrepo.FilterDefinitionStore{DB: db}).List(rootCtx)
+	if err != nil {
+		logger.Error("audience worker filter registry startup failed", "error", err)
+		os.Exit(1)
+	}
+	registry, err := audiencefilter.NewRegistry(filterDefinitions...)
+	if err != nil {
+		logger.Error("audience worker filter registry is invalid", "error", err)
+		os.Exit(1)
+	}
+	cohortExecution := cohort.NewExecutionService(cohort.NewCompiler(registry), &cohort.PostgreSQLQueryRepository{DB: db})
+	materialisationWorker := &materialisation.MaterialisationWorker{
+		Repository:    &materialisation.PostgreSQLRepository{DB: db},
+		Cohorts:       cohortExecution,
+		Snapshots:     &segment.PostgreSQLStore{DB: db},
+		WorkerID:      cfg.WorkerID + "-materialisation",
+		BatchSize:     cfg.MaterialisationBatchSize,
+		ClaimBatch:    cfg.MaterialisationClaimBatch,
+		LeaseDuration: cfg.MaterialisationLeaseDuration,
+		PollInterval:  cfg.MaterialisationPollInterval,
+		OnError: func(job materialisation.MaterialisationJob, err error) {
+			logger.Error("audience materialisation work failed", "jobId", job.ID, "campaignId", job.CampaignID, "error", err)
+		},
+	}
+
+	health := workerruntime.NewHealth("audience-worker", db, func() int64 { return worker.Active() + materialisationWorker.Active() })
 	healthServer := &http.Server{
 		Addr: cfg.HealthAddr, Handler: health.Handler(),
 		ReadHeaderTimeout: 3 * time.Second, ReadTimeout: 5 * time.Second,
@@ -104,18 +134,28 @@ func main() {
 	}()
 	health.SetReady(true)
 
-	workerErrors := make(chan error, 1)
-	go func() { workerErrors <- worker.Run(rootCtx) }()
-	logger.Info("audience validation worker started",
-		"workerId", cfg.WorkerID, "concurrency", cfg.Concurrency,
-		"claimBatch", cfg.ClaimBatch, "leaseDuration", cfg.ValidationLeaseDuration.String())
+	type workerResult struct {
+		name string
+		err  error
+	}
+	workerErrors := make(chan workerResult, 2)
+	go func() { workerErrors <- workerResult{name: "validation", err: worker.Run(rootCtx)} }()
+	go func() { workerErrors <- workerResult{name: "materialisation", err: materialisationWorker.Run(rootCtx)} }()
+	logger.Info("audience workers started",
+		"workerId", cfg.WorkerID, "validationConcurrency", cfg.Concurrency,
+		"validationClaimBatch", cfg.ClaimBatch, "validationLeaseDuration", cfg.ValidationLeaseDuration.String(),
+		"materialisationBatchSize", cfg.MaterialisationBatchSize, "materialisationClaimBatch", cfg.MaterialisationClaimBatch)
 
 	var runErr error
-	workerStopped := false
+	stoppedWorkers := 0
 	select {
 	case <-rootCtx.Done():
-	case runErr = <-workerErrors:
-		workerStopped = true
+	case result := <-workerErrors:
+		stoppedWorkers++
+		runErr = result.err
+		if runErr != nil && !errors.Is(runErr, context.Canceled) {
+			logger.Error("audience worker component stopped", "component", result.name, "error", runErr)
+		}
 		stop()
 	case runErr = <-healthErrors:
 		stop()
@@ -127,14 +167,15 @@ func main() {
 	if err := healthServer.Shutdown(shutdownCtx); err != nil {
 		logger.Error("audience worker health shutdown failed", "error", err)
 	}
-	if !workerStopped {
+	for stoppedWorkers < 2 {
 		select {
-		case err := <-workerErrors:
-			if runErr == nil {
-				runErr = err
+		case result := <-workerErrors:
+			stoppedWorkers++
+			if runErr == nil && result.err != nil && !errors.Is(result.err, context.Canceled) {
+				runErr = result.err
 			}
 		case <-shutdownCtx.Done():
-			logger.Error("audience worker shutdown timed out", "active", worker.Active())
+			logger.Error("audience worker shutdown timed out", "validationActive", worker.Active(), "materialisationActive", materialisationWorker.Active())
 			os.Exit(1)
 		}
 	}
@@ -142,5 +183,5 @@ func main() {
 		logger.Error("audience worker stopped with error", "error", runErr)
 		os.Exit(1)
 	}
-	logger.Info("audience validation worker stopped", "active", worker.Active())
+	logger.Info("audience workers stopped", "validationActive", worker.Active(), "materialisationActive", materialisationWorker.Active())
 }

@@ -6,10 +6,10 @@ Total requirements: **398**
 
 | Status | Count |
 |---|---:|
-| IMPLEMENTED_TESTED | 54 |
-| PARTIAL | 33 |
+| IMPLEMENTED_TESTED | 56 |
+| PARTIAL | 32 |
 | BLOCKED_EXTERNAL | 0 |
-| NOT_STARTED | 311 |
+| NOT_STARTED | 310 |
 
 | ID | Priority | Status | Requirement | Evidence / notes |
 |---|---|---|---|---|
@@ -160,11 +160,11 @@ Total requirements: **398**
 | SEG-013 | Must | IMPLEMENTED_TESTED | Save, version, clone, retire and compare segment definitions. | `internal/segment/definition.go`, `internal/segment/definition_postgres.go`, `internal/segment/definition_test.go`, `internal/platform/httpserver/server.go`, `contracts/openapi/control-api.yaml`, `database/migrations/0043_segment_definition_and_cohort_execution.sql` — Saved segments support create, version, clone, archive and version comparison. Clones receive independent identifiers and histories while historical versions remain immutable. |
 | SEG-014 | Must | IMPLEMENTED_TESTED | Restrict segment fields based on user permission and data-use policy. | `internal/audience/filter/query.go`, `internal/audience/cohort/compiler.go`, `internal/platform/httpserver/server.go`, `internal/audience/filter/administration_test.go`, `internal/audience/cohort/compiler_test.go` — Sensitive governed filter definitions require the configured permission during HTTP validation, compilation and snapshot creation; direct code submission cannot bypass hidden UI fields. |
 | SEG-015 | Must | IMPLEMENTED_TESTED | Create an immutable audience snapshot with hash and policy versions. | `internal/segment/snapshot.go`, `internal/segment/postgres.go`, `internal/segment/snapshot_test.go`, `internal/audience/cohort/execution.go`, `internal/audience/cohort/execution_test.go` — Immutable snapshot membership, deterministic hash and policy/configuration versions are enforced. |
-| SEG-016 | Must | NOT_STARTED | Store snapshot creation time, rule version and initiating user. |  |
+| SEG-016 | Must | IMPLEMENTED_TESTED | Store snapshot creation time, rule version and initiating user. | `internal/segment/snapshot.go`, `internal/segment/postgres.go`, `internal/audience/materialisation/materialisation.go`, `internal/audience/materialisation/postgres.go`, `internal/audience/materialisation/materialisation_test.go` — Snapshots and materialisation jobs preserve creation time, initiating user, definition version, consent policy version and configuration version. |
 | SEG-017 | Must | NOT_STARTED | Perform final live suppression/consent check before each send. |  |
 | SEG-018 | Must | IMPLEMENTED_TESTED | Support cohort overlap analysis without exporting identities. | `internal/segment/snapshot.go`, `internal/segment/postgres.go`, `internal/segment/snapshot_test.go`, `internal/platform/httpserver/server.go`, `contracts/openapi/control-api.yaml` — Identity-free audience snapshot overlap returns intersection, left-only, right-only and union counts without exporting contact identifiers. |
 | SEG-019 | Must | NOT_STARTED | Prevent tiny cohort reporting below configurable privacy threshold. |  |
-| SEG-020 | Must | PARTIAL | Support asynchronous snapshot creation for multi-million audiences with progress and resumability. | `internal/audience/cohort/execution.go`, `internal/platform/httpserver/server.go` — Server-side multi-million member query and bounded materialisation are implemented; durable asynchronous progress and resume remain outstanding. |
+| SEG-020 | Must | IMPLEMENTED_TESTED | Support asynchronous snapshot creation for multi-million audiences with progress and resumability. | `internal/audience/materialisation/materialisation.go`, `internal/audience/materialisation/postgres.go`, `internal/audience/materialisation/memory.go`, `internal/audience/materialisation/materialisation_test.go`, `database/migrations/0045_async_audience_materialisation.sql`, `cmd/audience-worker/main.go`, `internal/platform/httpserver/server.go` — Durable asynchronous multi-million audience materialisation uses bounded pages, fenced leases, persistent cursors, rolling hashes, progress, retries, cancellation evidence and restart-safe continuation without duplicate membership. |
 | CAM-001 | Must | NOT_STARTED | Create campaigns linked to one internal organisation and consent-review basis. |  |
 | CAM-002 | Must | NOT_STARTED | Store campaign name, purpose, category, owner, requested window and completion deadline. |  |
 | CAM-003 | Must | NOT_STARTED | Support draft, review, approved, scheduled, dispatching, paused, completed, exception, cancelled and expired states. |  |

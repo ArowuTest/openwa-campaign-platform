@@ -1520,9 +1520,15 @@
     "requirement": "Store snapshot creation time, rule version and initiating user.",
     "priority": "Must",
     "acceptance": "Audit view is complete.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/segment/snapshot.go",
+      "internal/segment/postgres.go",
+      "internal/audience/materialisation/materialisation.go",
+      "internal/audience/materialisation/postgres.go",
+      "internal/audience/materialisation/materialisation_test.go"
+    ],
+    "notes": "Snapshots and materialisation jobs preserve creation time, initiating user, definition version, consent policy version and configuration version."
   },
   {
     "id": "SEG-017",
@@ -1562,12 +1568,17 @@
     "requirement": "Support asynchronous snapshot creation for multi-million audiences with progress and resumability.",
     "priority": "Must",
     "acceptance": "Large job can resume without duplicate membership.",
-    "status": "PARTIAL",
+    "status": "IMPLEMENTED_TESTED",
     "evidence": [
-      "internal/audience/cohort/execution.go",
+      "internal/audience/materialisation/materialisation.go",
+      "internal/audience/materialisation/postgres.go",
+      "internal/audience/materialisation/memory.go",
+      "internal/audience/materialisation/materialisation_test.go",
+      "database/migrations/0045_async_audience_materialisation.sql",
+      "cmd/audience-worker/main.go",
       "internal/platform/httpserver/server.go"
     ],
-    "notes": "Server-side multi-million member query and bounded materialisation are implemented; durable asynchronous progress and resume remain outstanding."
+    "notes": "Durable asynchronous multi-million audience materialisation uses bounded pages, fenced leases, persistent cursors, rolling hashes, progress, retries, cancellation evidence and restart-safe continuation without duplicate membership."
   },
   {
     "id": "CAM-001",

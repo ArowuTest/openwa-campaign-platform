@@ -1,6 +1,6 @@
 # Current status
 
-Version `0.8.12` is the latest operational-core checkpoint on branch `work/operational-core-audience-ii`.
+Version `0.8.13` is the latest operational-core checkpoint on branch `work/operational-core-audience-iii`.
 
 Completed capability milestones in the actual repository history:
 
@@ -48,3 +48,8 @@ Governed rolling frequency caps are now stored in effective-dated organisation p
 - Import validation, merge and conflict totals can be previewed and closed with immutable reconciliation evidence.
 - The traceability baseline is 54 implemented/tested, 33 partial and 311 not started.
 - Durable asynchronous snapshot jobs and live PostgreSQL scale evidence remain outstanding.
+
+
+## 0.8.13 audience operational-core update
+
+Durable asynchronous audience materialisation now supports bounded pages, fenced leases, persistent progress, restart-safe continuation, retries, cancellation evidence and atomic immutable snapshot completion. Live PostgreSQL and production-scale performance evidence remain open.

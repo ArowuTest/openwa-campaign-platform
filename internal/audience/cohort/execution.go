@@ -84,19 +84,20 @@ func (s *ExecutionService) Materialise(ctx context.Context, definition audiencef
 	if len(ids) > limit {
 		return nil, ErrCohortTooLarge
 	}
-	evidenceSeed, err := json.Marshal(struct {
+	members := make([]segment.Member, 0, len(ids))
+	for _, contactID := range ids {
+		members = append(members, segment.Member{ContactID: contactID, EligibilityEvidenceHash: EvidenceHash(definition, eligibility, contactID)})
+	}
+	return members, nil
+}
+
+func EvidenceHash(definition audiencefilter.Group, eligibility EligibilityContext, contactID string) string {
+	payload, _ := json.Marshal(struct {
 		Definition  audiencefilter.Group `json:"definition"`
 		Eligibility EligibilityContext   `json:"eligibility"`
 	}{definition, eligibility})
-	if err != nil {
-		return nil, err
-	}
-	members := make([]segment.Member, 0, len(ids))
-	for _, contactID := range ids {
-		digest := sha256.Sum256(append(append([]byte("cohort-eligibility-v1\x00"), evidenceSeed...), []byte("\x00"+contactID)...))
-		members = append(members, segment.Member{ContactID: contactID, EligibilityEvidenceHash: hex.EncodeToString(digest[:])})
-	}
-	return members, nil
+	digest := sha256.Sum256(append(append([]byte("cohort-eligibility-v1\x00"), payload...), []byte("\x00"+strings.TrimSpace(contactID))...))
+	return hex.EncodeToString(digest[:])
 }
 
 type PostgreSQLQueryRepository struct{ DB *sql.DB }
@@ -138,6 +139,31 @@ func (r *PostgreSQLQueryRepository) Members(ctx context.Context, compiled Compil
 	return ids, rows.Err()
 }
 
+func (r *PostgreSQLQueryRepository) MembersAfter(ctx context.Context, compiled CompiledQuery, after string, limit int) ([]string, error) {
+	if r == nil || r.DB == nil {
+		return nil, errors.New("database is required")
+	}
+	if limit <= 0 || limit > 10000 {
+		return nil, errors.New("invalid cohort page limit")
+	}
+	query := "SELECT id::text FROM (" + strings.TrimSpace(compiled.SQL) + ") eligible WHERE ($" + fmt.Sprint(len(compiled.Args)+1) + "='' OR id>$" + fmt.Sprint(len(compiled.Args)+1) + "::uuid) ORDER BY id LIMIT $" + fmt.Sprint(len(compiled.Args)+2)
+	args := append(append([]any(nil), compiled.Args...), after, limit)
+	rows, err := r.DB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("page eligible cohort members: %w", err)
+	}
+	defer rows.Close()
+	ids := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 type MemoryQueryRepository struct {
 	EligibleContactIDs []string
 }
@@ -161,4 +187,23 @@ func (r *MemoryQueryRepository) Members(_ context.Context, _ CompiledQuery, limi
 		ids = ids[:limit]
 	}
 	return ids, nil
+}
+
+func (r *MemoryQueryRepository) MembersAfter(_ context.Context, _ CompiledQuery, after string, limit int) ([]string, error) {
+	if r == nil {
+		return nil, errors.New("memory cohort repository is required")
+	}
+	if limit <= 0 {
+		return nil, errors.New("positive cohort member limit is required")
+	}
+	out := []string{}
+	for _, v := range r.EligibleContactIDs {
+		if v > after {
+			out = append(out, v)
+			if len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out, nil
 }

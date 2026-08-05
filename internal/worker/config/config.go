@@ -17,30 +17,34 @@ import (
 // worker. It deliberately does not reuse the control-plane configuration because
 // workers must not require bootstrap-admin or browser-session secrets.
 type AudienceConfig struct {
-	Environment             string
-	HealthAddr              string
-	DatabaseDriver          string
-	DatabaseURL             string
-	DBMaxOpen               int
-	DBMaxIdle               int
-	DBConnMaxLifetime       time.Duration
-	DBConnMaxIdleTime       time.Duration
-	DBPingTimeout           time.Duration
-	WorkerID                string
-	ObjectStoreRoot         string
-	MSISDNEncryptionKey     string
-	MSISDNLookupKey         string
-	Concurrency             int
-	ClaimBatch              int
-	PollInterval            time.Duration
-	ClaimFailureBackoff     time.Duration
-	MaximumFailureBackoff   time.Duration
-	ValidationLeaseDuration time.Duration
-	StageBatchSize          int
-	MaxRows                 int
-	MaxIssues               int
-	DefaultCountryISO2      string
-	ShutdownTimeout         time.Duration
+	Environment                  string
+	HealthAddr                   string
+	DatabaseDriver               string
+	DatabaseURL                  string
+	DBMaxOpen                    int
+	DBMaxIdle                    int
+	DBConnMaxLifetime            time.Duration
+	DBConnMaxIdleTime            time.Duration
+	DBPingTimeout                time.Duration
+	WorkerID                     string
+	ObjectStoreRoot              string
+	MSISDNEncryptionKey          string
+	MSISDNLookupKey              string
+	Concurrency                  int
+	ClaimBatch                   int
+	PollInterval                 time.Duration
+	ClaimFailureBackoff          time.Duration
+	MaximumFailureBackoff        time.Duration
+	ValidationLeaseDuration      time.Duration
+	MaterialisationBatchSize     int
+	MaterialisationClaimBatch    int
+	MaterialisationLeaseDuration time.Duration
+	MaterialisationPollInterval  time.Duration
+	StageBatchSize               int
+	MaxRows                      int
+	MaxIssues                    int
+	DefaultCountryISO2           string
+	ShutdownTimeout              time.Duration
 }
 
 func LoadAudience() (AudienceConfig, error) {
@@ -66,6 +70,12 @@ func LoadAudience() (AudienceConfig, error) {
 		return AudienceConfig{}, err
 	}
 	if cfg.ClaimBatch, err = integer("AUDIENCE_WORKER_CLAIM_BATCH", 2); err != nil {
+		return AudienceConfig{}, err
+	}
+	if cfg.MaterialisationBatchSize, err = integer("AUDIENCE_MATERIALISATION_BATCH_SIZE", 5000); err != nil {
+		return AudienceConfig{}, err
+	}
+	if cfg.MaterialisationClaimBatch, err = integer("AUDIENCE_MATERIALISATION_CLAIM_BATCH", 1); err != nil {
 		return AudienceConfig{}, err
 	}
 	if cfg.StageBatchSize, err = integer("AUDIENCE_STAGE_BATCH_SIZE", 1000); err != nil {
@@ -96,6 +106,12 @@ func LoadAudience() (AudienceConfig, error) {
 		return AudienceConfig{}, err
 	}
 	if cfg.ValidationLeaseDuration, err = duration("AUDIENCE_VALIDATION_LEASE_DURATION", 2*time.Minute); err != nil {
+		return AudienceConfig{}, err
+	}
+	if cfg.MaterialisationLeaseDuration, err = duration("AUDIENCE_MATERIALISATION_LEASE_DURATION", 2*time.Minute); err != nil {
+		return AudienceConfig{}, err
+	}
+	if cfg.MaterialisationPollInterval, err = duration("AUDIENCE_MATERIALISATION_POLL_INTERVAL", time.Second); err != nil {
 		return AudienceConfig{}, err
 	}
 	if cfg.ShutdownTimeout, err = duration("WORKER_SHUTDOWN_TIMEOUT", 30*time.Second); err != nil {
@@ -150,6 +166,18 @@ func (c AudienceConfig) Validate() error {
 	}
 	if c.ClaimBatch < 1 || c.ClaimBatch > c.Concurrency {
 		return errors.New("AUDIENCE_WORKER_CLAIM_BATCH must be between 1 and worker concurrency")
+	}
+	if c.MaterialisationBatchSize < 100 || c.MaterialisationBatchSize > 10_000 {
+		return errors.New("AUDIENCE_MATERIALISATION_BATCH_SIZE must be between 100 and 10000")
+	}
+	if c.MaterialisationClaimBatch < 1 || c.MaterialisationClaimBatch > 16 {
+		return errors.New("AUDIENCE_MATERIALISATION_CLAIM_BATCH must be between 1 and 16")
+	}
+	if c.MaterialisationLeaseDuration < 15*time.Second || c.MaterialisationLeaseDuration > 30*time.Minute {
+		return errors.New("AUDIENCE_MATERIALISATION_LEASE_DURATION must be between 15 seconds and 30 minutes")
+	}
+	if c.MaterialisationPollInterval <= 0 || c.MaterialisationPollInterval > time.Minute {
+		return errors.New("AUDIENCE_MATERIALISATION_POLL_INTERVAL must be positive and no more than one minute")
 	}
 	if c.StageBatchSize < 1 || c.StageBatchSize > 10_000 {
 		return errors.New("AUDIENCE_STAGE_BATCH_SIZE must be between 1 and 10000")

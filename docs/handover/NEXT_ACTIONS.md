@@ -38,10 +38,15 @@
 5. Run EXPLAIN ANALYZE and scale tests once live PostgreSQL is available.
 
 
-## After 0.8.12
+## After 0.8.13
 
 1. Implement durable asynchronous snapshot-materialisation jobs with fenced leases, page checkpoints and restart-safe continuation.
 2. Add database-backed eligibility waterfalls and privacy-safe anonymised cohort samples.
 3. Add an explicit unchanged-contact count and legally safe import rollback workflow.
 4. Execute migrations through 0044 against live PostgreSQL and run high-volume EXPLAIN ANALYZE evidence.
 5. Continue toward the agreed 90% operational-core target before frontend integration.
+
+
+## Operational Core Phase 2
+
+Proceed with the messaging and dispatch core: bounded dispatch shards, queue back-pressure, sender health-aware allocation, retry/dead-letter administration, contradiction reconciliation and real OpenWA dependency-resolved build evidence.

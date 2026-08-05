@@ -549,9 +549,16 @@
     "requirement": "Record commercial references such as quote, invoice and payment status.",
     "priority": "Must",
     "acceptance": "Campaign release policy can require commercial approval.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/commercial/service.go",
+      "internal/commercial/service_test.go",
+      "internal/persistence/postgres/commercial.go",
+      "database/migrations/0039_campaign_commercial_governance.sql",
+      "internal/platform/httpserver/server.go",
+      "internal/campaign/commercial_gate_test.go"
+    ],
+    "notes": "Versioned campaign commercial records now capture quotation, invoice, currency, recipient volume, pricing, payment reference and payment timestamp with maker-checker approval and revocation."
   },
   {
     "id": "ORG-008",
@@ -1797,18 +1804,32 @@
     "requirement": "Record quote, invoice, payment and commercial-approval references without requiring online payment.",
     "priority": "Must",
     "acceptance": "Finance status is visible and auditable.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/commercial/service.go",
+      "internal/commercial/service_test.go",
+      "internal/persistence/postgres/commercial.go",
+      "database/migrations/0039_campaign_commercial_governance.sql",
+      "internal/platform/httpserver/server.go",
+      "internal/campaign/commercial_gate_test.go"
+    ],
+    "notes": "Commercial evidence is recorded offline without requiring a public wallet or online payment flow; approval requires independent finance review and verified payment evidence."
   },
   {
     "id": "APR-009",
     "requirement": "Optionally block release until payment/commercial approval.",
     "priority": "Must",
     "acceptance": "Policy switch is effective-dated.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/commercial/service.go",
+      "internal/commercial/service_test.go",
+      "internal/persistence/postgres/commercial.go",
+      "database/migrations/0039_campaign_commercial_governance.sql",
+      "internal/platform/httpserver/server.go",
+      "internal/campaign/commercial_gate_test.go"
+    ],
+    "notes": "Campaign commercial progression now resolves an approved campaign-specific commercial record and enforces the authorised recipient ceiling before COMMERCIAL_APPROVED."
   },
   {
     "id": "APR-010",

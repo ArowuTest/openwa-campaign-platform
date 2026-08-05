@@ -12,3 +12,6 @@
 1. Obtain a reproducible pinned PostgreSQL driver and run every migration against a live PostgreSQL instance.
 2. Add PostgreSQL integration tests for source trust, manual conflicts, conflict resolution and organisation policy activation.
 3. Continue backend remediation with commercial records, effective-dated organisation contacts, contact lineage corrections and data-subject workflows.
+
+- Execute migration 0039 and commercial repository tests against live PostgreSQL once the pinned driver is available.
+- Continue adversarial remediation with consent/suppression precedence and higher-risk persistence/runtime coverage.

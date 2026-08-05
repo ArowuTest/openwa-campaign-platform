@@ -31,6 +31,9 @@ type Service struct {
 	policies interface {
 		ValidatePurpose(context.Context, string, string) error
 	}
+	commercial interface {
+		ValidateCampaignApproval(context.Context, string, string, int64) (string, error)
+	}
 	clock func() time.Time
 }
 
@@ -42,6 +45,13 @@ func (s *Service) WithOrganisationReader(reader interface {
 	Get(context.Context, string) (organisation.Organisation, error)
 }) *Service {
 	s.organisations = reader
+	return s
+}
+
+func (s *Service) WithCommercialApprovals(reader interface {
+	ValidateCampaignApproval(context.Context, string, string, int64) (string, error)
+}) *Service {
+	s.commercial = reader
 	return s
 }
 
@@ -97,6 +107,16 @@ func (s *Service) Transition(ctx context.Context, identifier string, input Trans
 		if err := s.requireActiveOrganisation(ctx, entity.OrganisationID); err != nil {
 			return Campaign{}, err
 		}
+	}
+	if input.Action == ActionApproveCommercial {
+		if s.commercial == nil {
+			return Campaign{}, errors.New("commercial approval service is required")
+		}
+		approvalID, validationErr := s.commercial.ValidateCampaignApproval(ctx, entity.ID, entity.OrganisationID, entity.MaximumUniqueRecipients)
+		if validationErr != nil {
+			return Campaign{}, validationErr
+		}
+		input.CommercialApprovalID = approvalID
 	}
 	originalVersion := entity.Version
 	entity, err = entity.Transition(input, s.clock())

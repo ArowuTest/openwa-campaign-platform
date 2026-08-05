@@ -70,6 +70,7 @@ type Campaign struct {
 	Transport                   TransportSelection `json:"transport"`
 	CreatedBy                   string             `json:"createdBy"`
 	FinalApprovedBy             string             `json:"finalApprovedBy,omitempty"`
+	CommercialApprovalID        string             `json:"commercialApprovalId,omitempty"`
 	PauseReason                 string             `json:"pauseReason,omitempty"`
 	CreatedAt                   time.Time          `json:"createdAt"`
 	UpdatedAt                   time.Time          `json:"updatedAt"`
@@ -100,6 +101,7 @@ type TransitionInput struct {
 	MessageVersionID      string `json:"messageVersionId"`
 	MessageContentHash    string `json:"-"`
 	FailedCount           int64  `json:"failedCount"`
+	CommercialApprovalID  string `json:"-"`
 	UnknownCount          int64  `json:"unknownCount"`
 	ExpectedVersion       int64  `json:"expectedVersion"`
 }
@@ -185,6 +187,9 @@ func (c Campaign) Transition(input TransitionInput, now time.Time) (Campaign, er
 		}
 		c.MessageVersionID = input.MessageVersionID
 		c.MessageContentHash = input.MessageContentHash
+	}
+	if input.Action == ActionApproveCommercial && strings.TrimSpace(input.CommercialApprovalID) != "" {
+		c.CommercialApprovalID = strings.TrimSpace(input.CommercialApprovalID)
 	}
 	if input.Action == ActionApproveFinal {
 		if c.RequestedStartAt == nil || c.CompletionDeadlineAt == nil {

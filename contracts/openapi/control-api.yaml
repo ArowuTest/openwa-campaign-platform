@@ -1115,6 +1115,44 @@ paths:
                 reason: { type: string, minLength: 5 }
       responses:
         '200': { description: Decision recorded }
+  /commercial-records:
+    get:
+      operationId: listCommercialRecords
+      summary: List governed commercial records
+      responses:
+        '200': { description: Commercial records }
+  /campaigns/{id}/commercial-record:
+    post:
+      operationId: createCommercialRecord
+      summary: Create a campaign commercial record draft
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '201': { description: Commercial record created }
+  /commercial-records/{id}/submit:
+    post:
+      operationId: submitCommercialRecord
+      summary: Submit a commercial record for maker-checker approval
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Commercial record submitted }
+  /commercial-records/{id}/decision:
+    post:
+      operationId: decideCommercialRecord
+      summary: Approve or reject a commercial record
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Commercial decision recorded }
+  /commercial-records/{id}/revoke:
+    post:
+      operationId: revokeCommercialRecord
+      summary: Revoke an approved commercial record
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Commercial record revoked }
 components:
   securitySchemes:
     internalSession:

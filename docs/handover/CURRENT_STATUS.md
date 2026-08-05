@@ -22,3 +22,7 @@ No production-ready or deployment-certified claim should be made until `make rel
 ## 0.8.5 audience merge remediation
 
 The audience-import merge layer now has implemented paths for all declared update policies. `TRUSTED_SOURCE` is governed by organisation/source trust policies, while `MANUAL_CONFLICT` creates durable review items instead of overwriting disputed canonical profile values. Conflict resolution and trust-policy administration are exposed through protected APIs and migration 0037.
+
+## 0.8.7 commercial-governance remediation
+
+Campaign commercial approval is now backed by campaign-specific quotation, invoice, payment and entitlement evidence. A campaign cannot enter `COMMERCIAL_APPROVED` through the service layer unless an independently approved, non-revoked commercial record exists for the same campaign and organisation and authorises at least the campaign maximum recipient count.

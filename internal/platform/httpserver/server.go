@@ -20,6 +20,7 @@ import (
 	audiencefilter "campaign-platform/internal/audience/filter"
 	"campaign-platform/internal/audience/importer"
 	"campaign-platform/internal/campaign"
+	"campaign-platform/internal/commercial"
 	"campaign-platform/internal/consent"
 	"campaign-platform/internal/delivery"
 	"campaign-platform/internal/execution"
@@ -58,6 +59,7 @@ type Dependencies struct {
 	InboundRetentionPolicies *inbound.RetentionPolicyAdministration
 	InboundRotation          *inbound.RotationService
 	Campaigns                *campaign.Service
+	Commercial               *commercial.Service
 	Geography                *geography.Catalogue
 	MaxImportPreviewRows     int
 	Identity                 *identity.Service
@@ -178,6 +180,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/audience-import-conflicts/{id}/resolve", s.require("audience.approve", s.resolveAudienceImportConflict))
 	mux.Handle("GET /api/v1/organisations/{id}/audience-source-trust", s.require("audience.read", s.listAudienceSourceTrust))
 	mux.Handle("PUT /api/v1/organisations/{id}/audience-source-trust/{source}", s.require("audience.write", s.upsertAudienceSourceTrust))
+	mux.Handle("GET /api/v1/commercial-records", s.require("finance.read", s.listCommercialRecords))
+	mux.Handle("POST /api/v1/campaigns/{id}/commercial-record", s.require("finance.write", s.createCommercialRecord))
+	mux.Handle("POST /api/v1/commercial-records/{id}/submit", s.require("finance.write", s.submitCommercialRecord))
+	mux.Handle("POST /api/v1/commercial-records/{id}/decision", s.require("finance.approve", s.decideCommercialRecord))
+	mux.Handle("POST /api/v1/commercial-records/{id}/revoke", s.require("finance.approve", s.revokeCommercialRecord))
 	mux.Handle("GET /api/v1/campaigns", s.require("campaign.read", s.listCampaigns))
 	mux.Handle("POST /api/v1/campaigns", s.require("campaign.write", s.createCampaign))
 	mux.Handle("POST /api/v1/campaigns/{id}/transition", s.require("campaign.write", s.transitionCampaign))
@@ -735,6 +742,116 @@ func (s *Server) decideOrganisationPolicy(w http.ResponseWriter, r *http.Request
 	}
 	if err != nil {
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "ORGANISATION_POLICY_INVALID", "The organisation policy decision was rejected.", map[string]any{"detail": err.Error()})
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, value)
+}
+
+func (s *Server) listCommercialRecords(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Commercial == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "COMMERCIAL_UNAVAILABLE", "Commercial governance is not configured.", nil)
+		return
+	}
+	items, err := s.deps.Commercial.List(r.Context(), strings.TrimSpace(r.URL.Query().Get("organisationId")))
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+func (s *Server) createCommercialRecord(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Commercial == nil || s.deps.Campaigns == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "COMMERCIAL_UNAVAILABLE", "Commercial governance is not configured.", nil)
+		return
+	}
+	var input commercial.Record
+	if err := httpx.DecodeJSON(w, r, 1<<20, &input); err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The commercial record request is invalid.", map[string]any{"detail": err.Error()})
+		return
+	}
+	campaignValue, err := s.deps.Campaigns.Get(r.Context(), r.PathValue("id"))
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusNotFound, "CAMPAIGN_NOT_FOUND", "The campaign was not found.", nil)
+		return
+	}
+	principal, _ := identity.PrincipalFromContext(r.Context())
+	input.CampaignID = campaignValue.ID
+	input.OrganisationID = campaignValue.OrganisationID
+	value, err := s.deps.Commercial.CreateDraft(r.Context(), input, principal.User.ID, input.Reason)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "COMMERCIAL_INVALID", "The commercial record could not be created.", map[string]any{"detail": err.Error()})
+		return
+	}
+	httpx.WriteJSON(w, http.StatusCreated, value)
+}
+func (s *Server) submitCommercialRecord(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		ExpectedVersion int64  `json:"expectedVersion"`
+		Reason          string `json:"reason"`
+	}
+	if err := httpx.DecodeJSON(w, r, 1<<20, &input); err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The commercial submission is invalid.", nil)
+		return
+	}
+	principal, _ := identity.PrincipalFromContext(r.Context())
+	value, err := s.deps.Commercial.Submit(r.Context(), r.PathValue("id"), input.ExpectedVersion, principal.User.ID, input.Reason)
+	if errors.Is(err, commercial.ErrConflict) {
+		httpx.WriteError(w, r, http.StatusConflict, "COMMERCIAL_CONFLICT", "The commercial record changed; reload before submitting.", nil)
+		return
+	}
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "COMMERCIAL_INVALID", "The commercial submission was rejected.", map[string]any{"detail": err.Error()})
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, value)
+}
+func (s *Server) decideCommercialRecord(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		ExpectedVersion int64  `json:"expectedVersion"`
+		Approve         bool   `json:"approve"`
+		Reason          string `json:"reason"`
+	}
+	if err := httpx.DecodeJSON(w, r, 1<<20, &input); err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The commercial decision is invalid.", nil)
+		return
+	}
+	principal, _ := identity.PrincipalFromContext(r.Context())
+	if !identity.StepUpSatisfied(principal.Session, time.Now().UTC(), 10*time.Minute) {
+		httpx.WriteError(w, r, http.StatusForbidden, "MFA_STEP_UP_REQUIRED", "Recent MFA verification is required.", nil)
+		return
+	}
+	value, err := s.deps.Commercial.Decide(r.Context(), r.PathValue("id"), input.ExpectedVersion, input.Approve, principal.User.ID, input.Reason)
+	if errors.Is(err, commercial.ErrConflict) {
+		httpx.WriteError(w, r, http.StatusConflict, "COMMERCIAL_CONFLICT", "The commercial record changed; reload before deciding.", nil)
+		return
+	}
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "COMMERCIAL_INVALID", "The commercial decision was rejected.", map[string]any{"detail": err.Error()})
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, value)
+}
+func (s *Server) revokeCommercialRecord(w http.ResponseWriter, r *http.Request) {
+	var input struct {
+		ExpectedVersion int64  `json:"expectedVersion"`
+		Reason          string `json:"reason"`
+	}
+	if err := httpx.DecodeJSON(w, r, 1<<20, &input); err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The commercial revocation is invalid.", nil)
+		return
+	}
+	principal, _ := identity.PrincipalFromContext(r.Context())
+	if !identity.StepUpSatisfied(principal.Session, time.Now().UTC(), 10*time.Minute) {
+		httpx.WriteError(w, r, http.StatusForbidden, "MFA_STEP_UP_REQUIRED", "Recent MFA verification is required.", nil)
+		return
+	}
+	value, err := s.deps.Commercial.Revoke(r.Context(), r.PathValue("id"), input.ExpectedVersion, principal.User.ID, input.Reason)
+	if errors.Is(err, commercial.ErrConflict) {
+		httpx.WriteError(w, r, http.StatusConflict, "COMMERCIAL_CONFLICT", "The commercial record changed; reload before revoking.", nil)
+		return
+	}
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "COMMERCIAL_INVALID", "The commercial revocation was rejected.", map[string]any{"detail": err.Error()})
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, value)

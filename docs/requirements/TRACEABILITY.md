@@ -6,10 +6,10 @@ Total requirements: **398**
 
 | Status | Count |
 |---|---:|
-| IMPLEMENTED_TESTED | 40 |
+| IMPLEMENTED_TESTED | 43 |
 | PARTIAL | 31 |
 | BLOCKED_EXTERNAL | 0 |
-| NOT_STARTED | 327 |
+| NOT_STARTED | 324 |
 
 | ID | Priority | Status | Requirement | Evidence / notes |
 |---|---|---|---|---|
@@ -65,7 +65,7 @@ Total requirements: **398**
 | ORG-004 | Must | NOT_STARTED | Record controller, processor or joint-controller role where known. |  |
 | ORG-005 | Must | IMPLEMENTED_TESTED | Record organisation-level restrictions and prohibited purposes. | `internal/organisation/policy.go`, `internal/organisation/policy_test.go`, `internal/persistence/postgres/organisation_policy.go`, `database/migrations/0038_organisation_policy_governance.sql`, `internal/platform/httpserver/server.go` — Organisation-specific allowed and prohibited campaign purposes are governed through versioned maker-checker policy records and enforced during campaign creation. |
 | ORG-006 | Must | NOT_STARTED | Support active, suspended, under-review and closed status. |  |
-| ORG-007 | Must | NOT_STARTED | Record commercial references such as quote, invoice and payment status. |  |
+| ORG-007 | Must | IMPLEMENTED_TESTED | Record commercial references such as quote, invoice and payment status. | `internal/commercial/service.go`, `internal/commercial/service_test.go`, `internal/persistence/postgres/commercial.go`, `database/migrations/0039_campaign_commercial_governance.sql`, `internal/platform/httpserver/server.go`, `internal/campaign/commercial_gate_test.go` — Versioned campaign commercial records now capture quotation, invoice, currency, recipient volume, pricing, payment reference and payment timestamp with maker-checker approval and revocation. |
 | ORG-008 | Must | IMPLEMENTED_TESTED | Retain an audit history of organisation changes. | `internal/organisation/service.go`, `internal/persistence/postgres/organisation.go`, `database/migrations/0036_organisation_lifecycle_governance.sql`, `internal/organisation/lifecycle_test.go`, `internal/platform/httpserver/server_test.go` — Material profile and lifecycle changes create immutable versioned organisation events with actor, reason and before/after status evidence. |
 | ORG-009 | Must | IMPLEMENTED_TESTED | Prevent accidental duplicate organisation creation. | `internal/organisation/service.go`, `internal/persistence/postgres/organisation.go`, `database/migrations/0036_organisation_lifecycle_governance.sql`, `internal/organisation/lifecycle_test.go` — Active organisations are protected by a normalised legal-name and country uniqueness rule in both memory and PostgreSQL repositories. |
 | ORG-010 | Must | IMPLEMENTED_TESTED | Support organisation-specific data-retention and report branding settings. | `internal/organisation/policy.go`, `internal/organisation/policy_test.go`, `internal/persistence/postgres/organisation_policy.go`, `database/migrations/0038_organisation_policy_governance.sql` — Effective-dated organisation policy versions govern contact/campaign retention periods and report branding metadata. |
@@ -196,8 +196,8 @@ Total requirements: **398**
 | APR-005 | Must | NOT_STARTED | Enforce maker-checker based on configuration and campaign threshold. |  |
 | APR-006 | Must | NOT_STARTED | Record approval decision, actor, time, comments and object version. |  |
 | APR-007 | Must | NOT_STARTED | Invalidate approval when approved data changes. |  |
-| APR-008 | Must | NOT_STARTED | Record quote, invoice, payment and commercial-approval references without requiring online payment. |  |
-| APR-009 | Must | NOT_STARTED | Optionally block release until payment/commercial approval. |  |
+| APR-008 | Must | IMPLEMENTED_TESTED | Record quote, invoice, payment and commercial-approval references without requiring online payment. | `internal/commercial/service.go`, `internal/commercial/service_test.go`, `internal/persistence/postgres/commercial.go`, `database/migrations/0039_campaign_commercial_governance.sql`, `internal/platform/httpserver/server.go`, `internal/campaign/commercial_gate_test.go` — Commercial evidence is recorded offline without requiring a public wallet or online payment flow; approval requires independent finance review and verified payment evidence. |
+| APR-009 | Must | IMPLEMENTED_TESTED | Optionally block release until payment/commercial approval. | `internal/commercial/service.go`, `internal/commercial/service_test.go`, `internal/persistence/postgres/commercial.go`, `database/migrations/0039_campaign_commercial_governance.sql`, `internal/platform/httpserver/server.go`, `internal/campaign/commercial_gate_test.go` — Campaign commercial progression now resolves an approved campaign-specific commercial record and enforces the authorised recipient ceiling before COMMERCIAL_APPROVED. |
 | APR-010 | Must | NOT_STARTED | Create a campaign entitlement defining maximum unique recipients and messages per recipient. |  |
 | APR-011 | Must | NOT_STARTED | Tie entitlement to organisation, campaign, snapshot and message version. |  |
 | APR-012 | Must | NOT_STARTED | Consume/reserve entitlement atomically with recipient ledger creation. |  |

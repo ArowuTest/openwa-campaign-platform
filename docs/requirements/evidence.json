@@ -101,6 +101,30 @@
     ],
     "status": "PARTIAL"
   },
+  "APR-008": {
+    "evidence": [
+      "internal/commercial/service.go",
+      "internal/commercial/service_test.go",
+      "internal/persistence/postgres/commercial.go",
+      "database/migrations/0039_campaign_commercial_governance.sql",
+      "internal/platform/httpserver/server.go",
+      "internal/campaign/commercial_gate_test.go"
+    ],
+    "notes": "Commercial evidence is recorded offline without requiring a public wallet or online payment flow; approval requires independent finance review and verified payment evidence.",
+    "status": "IMPLEMENTED_TESTED"
+  },
+  "APR-009": {
+    "evidence": [
+      "internal/commercial/service.go",
+      "internal/commercial/service_test.go",
+      "internal/persistence/postgres/commercial.go",
+      "database/migrations/0039_campaign_commercial_governance.sql",
+      "internal/platform/httpserver/server.go",
+      "internal/campaign/commercial_gate_test.go"
+    ],
+    "notes": "Campaign commercial progression now resolves an approved campaign-specific commercial record and enforces the authorised recipient ceiling before COMMERCIAL_APPROVED.",
+    "status": "IMPLEMENTED_TESTED"
+  },
   "BR-004": {
     "evidence": [
       "internal/delivery/model.go",
@@ -504,6 +528,18 @@
       "internal/platform/httpserver/server.go"
     ],
     "notes": "Organisation-specific allowed and prohibited campaign purposes are governed through versioned maker-checker policy records and enforced during campaign creation.",
+    "status": "IMPLEMENTED_TESTED"
+  },
+  "ORG-007": {
+    "evidence": [
+      "internal/commercial/service.go",
+      "internal/commercial/service_test.go",
+      "internal/persistence/postgres/commercial.go",
+      "database/migrations/0039_campaign_commercial_governance.sql",
+      "internal/platform/httpserver/server.go",
+      "internal/campaign/commercial_gate_test.go"
+    ],
+    "notes": "Versioned campaign commercial records now capture quotation, invoice, currency, recipient volume, pricing, payment reference and payment timestamp with maker-checker approval and revocation.",
     "status": "IMPLEMENTED_TESTED"
   },
   "ORG-008": {

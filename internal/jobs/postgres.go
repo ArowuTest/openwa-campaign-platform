@@ -290,3 +290,155 @@ func intervalLiteral(duration time.Duration) string {
 	}
 	return fmt.Sprintf("%f seconds", duration.Seconds())
 }
+
+func (r *PostgreSQLRepository) List(ctx context.Context, q Query) ([]Job, error) {
+	if r == nil || r.DB == nil {
+		return nil, errors.New("database is required")
+	}
+	if q.Limit <= 0 || q.Limit > 500 {
+		q.Limit = 100
+	}
+	statuses, err := json.Marshal(q.Statuses)
+	if err != nil {
+		return nil, err
+	}
+	types, err := json.Marshal(q.Types)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.DB.QueryContext(ctx, `SELECT id,job_type,deduplication_key,payload,status,priority,attempt_count,max_attempts,available_at,lease_owner,lease_expires_at,lease_version,last_error_code,last_error_detail,created_at,updated_at,completed_at
+FROM durable_jobs
+WHERE (jsonb_array_length($1::jsonb)=0 OR status IN (SELECT jsonb_array_elements_text($1::jsonb)))
+  AND (jsonb_array_length($2::jsonb)=0 OR job_type IN (SELECT jsonb_array_elements_text($2::jsonb)))
+ORDER BY created_at DESC,id DESC LIMIT $3`, string(statuses), string(types), q.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]Job, 0, q.Limit)
+	for rows.Next() {
+		v, e := scanJob(rows)
+		if e != nil {
+			return nil, e
+		}
+		items = append(items, v)
+	}
+	return items, rows.Err()
+}
+
+func (r *PostgreSQLRepository) Summary(ctx context.Context, now time.Time) (QueueSummary, error) {
+	if r == nil || r.DB == nil {
+		return QueueSummary{}, errors.New("database is required")
+	}
+	out := QueueSummary{AsAt: now.UTC(), CountsByStatus: map[Status]int64{}, CountsByType: map[string]int64{}}
+	rows, err := r.DB.QueryContext(ctx, `SELECT status,count(*) FROM durable_jobs GROUP BY status`)
+	if err != nil {
+		return out, err
+	}
+	for rows.Next() {
+		var s Status
+		var c int64
+		if err := rows.Scan(&s, &c); err != nil {
+			rows.Close()
+			return out, err
+		}
+		out.CountsByStatus[s] = c
+	}
+	if err := rows.Close(); err != nil {
+		return out, err
+	}
+	rows, err = r.DB.QueryContext(ctx, `SELECT job_type,count(*) FROM durable_jobs GROUP BY job_type`)
+	if err != nil {
+		return out, err
+	}
+	for rows.Next() {
+		var t string
+		var c int64
+		if err := rows.Scan(&t, &c); err != nil {
+			rows.Close()
+			return out, err
+		}
+		out.CountsByType[t] = c
+	}
+	if err := rows.Close(); err != nil {
+		return out, err
+	}
+	var oldest sql.NullTime
+	err = r.DB.QueryRowContext(ctx, `SELECT min(created_at),count(*) FILTER(WHERE status='PROCESSING'),count(*) FILTER(WHERE status='PROCESSING' AND lease_expires_at<=$1) FROM durable_jobs WHERE status IN ('PENDING','PROCESSING')`, now.UTC()).Scan(&oldest, &out.ProcessingLeases, &out.ExpiredLeases)
+	if err != nil {
+		return out, err
+	}
+	if oldest.Valid {
+		v := oldest.Time
+		out.OldestPendingAt = &v
+	}
+	return out, nil
+}
+
+func (r *PostgreSQLRepository) RetryDeadLetter(ctx context.Context, id, actor, reason string, now time.Time) (Job, error) {
+	if r == nil || r.DB == nil {
+		return Job{}, errors.New("database is required")
+	}
+	row := r.DB.QueryRowContext(ctx, `WITH updated AS (
+ UPDATE durable_jobs SET status='PENDING',attempt_count=0,available_at=$4,last_error_code=NULL,last_error_detail=NULL,completed_at=NULL,updated_at=$4
+ WHERE id=$1::uuid AND status='DEAD_LETTER'
+ RETURNING id,job_type,deduplication_key,payload,status,priority,attempt_count,max_attempts,available_at,lease_owner,lease_expires_at,lease_version,last_error_code,last_error_detail,created_at,updated_at,completed_at
+), event AS (
+ INSERT INTO durable_job_administration_events(job_id,action,actor_id,reason,previous_status,current_status,occurred_at)
+ SELECT id,'RETRY_DEAD_LETTER',$2::uuid,$3,'DEAD_LETTER','PENDING',$4 FROM updated
+)
+SELECT * FROM updated`, id, actor, reason, now.UTC())
+	job, err := scanJob(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Job{}, r.administrativeMiss(ctx, id)
+	}
+	return job, err
+}
+func (r *PostgreSQLRepository) CancelPending(ctx context.Context, id, actor, reason string, now time.Time) (Job, error) {
+	if r == nil || r.DB == nil {
+		return Job{}, errors.New("database is required")
+	}
+	row := r.DB.QueryRowContext(ctx, `WITH updated AS (
+ UPDATE durable_jobs SET status='CANCELLED',updated_at=$4 WHERE id=$1::uuid AND status='PENDING'
+ RETURNING id,job_type,deduplication_key,payload,status,priority,attempt_count,max_attempts,available_at,lease_owner,lease_expires_at,lease_version,last_error_code,last_error_detail,created_at,updated_at,completed_at
+), event AS (
+ INSERT INTO durable_job_administration_events(job_id,action,actor_id,reason,previous_status,current_status,occurred_at)
+ SELECT id,'CANCEL_PENDING',$2::uuid,$3,'PENDING','CANCELLED',$4 FROM updated
+)
+SELECT * FROM updated`, id, actor, reason, now.UTC())
+	job, err := scanJob(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Job{}, r.administrativeMiss(ctx, id)
+	}
+	return job, err
+}
+func (r *PostgreSQLRepository) administrativeMiss(ctx context.Context, id string) error {
+	var status string
+	err := r.DB.QueryRowContext(ctx, `SELECT status FROM durable_jobs WHERE id=$1::uuid`, id).Scan(&status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	return ErrAdministrativeConflict
+}
+func (r *PostgreSQLRepository) Events(ctx context.Context, id string, limit int) ([]AdministrationEvent, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	rows, err := r.DB.QueryContext(ctx, `SELECT job_id::text,action,actor_id::text,reason,previous_status,current_status,occurred_at FROM durable_job_administration_events WHERE job_id=$1::uuid ORDER BY occurred_at DESC,id DESC LIMIT $2`, id, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AdministrationEvent
+	for rows.Next() {
+		var v AdministrationEvent
+		if err := rows.Scan(&v.JobID, &v.Action, &v.ActorID, &v.Reason, &v.Previous, &v.Current, &v.OccurredAt); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}

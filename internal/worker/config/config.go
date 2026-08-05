@@ -286,35 +286,37 @@ func ValidateHealthAddress(address string) error {
 // share one database pool but have independent fencing leases and concurrency
 // bounds so publishing pressure cannot starve gateway dispatch.
 type CampaignConfig struct {
-	Environment          string
-	HealthAddr           string
-	DatabaseDriver       string
-	DatabaseURL          string
-	DBMaxOpen            int
-	DBMaxIdle            int
-	DBConnMaxLifetime    time.Duration
-	DBConnMaxIdleTime    time.Duration
-	DBPingTimeout        time.Duration
-	WorkerID             string
-	MSISDNEncryptionKey  string
-	MSISDNLookupKey      string
-	GatewayURL           string
-	GatewayCommandSecret string
-	MediaDownloadBaseURL string
-	MediaDownloadSecret  string
-	GatewayHTTPTimeout   time.Duration
-	GatewayMaxResponse   int64
-	SenderHeartbeatTTL   time.Duration
-	JobConcurrency       int
-	JobClaimBatch        int
-	JobLease             time.Duration
-	JobPollInterval      time.Duration
-	OutboxConcurrency    int
-	OutboxClaimBatch     int
-	OutboxLease          time.Duration
-	OutboxPollInterval   time.Duration
-	OperationTimeout     time.Duration
-	ShutdownTimeout      time.Duration
+	Environment                    string
+	HealthAddr                     string
+	DatabaseDriver                 string
+	DatabaseURL                    string
+	DBMaxOpen                      int
+	DBMaxIdle                      int
+	DBConnMaxLifetime              time.Duration
+	DBConnMaxIdleTime              time.Duration
+	DBPingTimeout                  time.Duration
+	WorkerID                       string
+	MSISDNEncryptionKey            string
+	MSISDNLookupKey                string
+	GatewayURL                     string
+	GatewayCommandSecret           string
+	MediaDownloadBaseURL           string
+	MediaDownloadSecret            string
+	GatewayHTTPTimeout             time.Duration
+	GatewayMaxResponse             int64
+	SenderHeartbeatTTL             time.Duration
+	JobConcurrency                 int
+	JobClaimBatch                  int
+	JobLease                       time.Duration
+	JobPollInterval                time.Duration
+	OutboxConcurrency              int
+	OutboxClaimBatch               int
+	DispatchQueueBackpressureLimit int
+	DispatchQueueBackpressureRetry time.Duration
+	OutboxLease                    time.Duration
+	OutboxPollInterval             time.Duration
+	OperationTimeout               time.Duration
+	ShutdownTimeout                time.Duration
 }
 
 func LoadCampaign() (CampaignConfig, error) {
@@ -350,6 +352,9 @@ func LoadCampaign() (CampaignConfig, error) {
 	if cfg.OutboxClaimBatch, err = integer("OUTBOX_CLAIM_BATCH", 4); err != nil {
 		return CampaignConfig{}, err
 	}
+	if cfg.DispatchQueueBackpressureLimit, err = integer("DISPATCH_QUEUE_BACKPRESSURE_LIMIT", 100000); err != nil {
+		return CampaignConfig{}, err
+	}
 	if cfg.GatewayMaxResponse, err = int64Value("GATEWAY_MAX_RESPONSE_BYTES", 1<<20); err != nil {
 		return CampaignConfig{}, err
 	}
@@ -378,6 +383,9 @@ func LoadCampaign() (CampaignConfig, error) {
 		return CampaignConfig{}, err
 	}
 	if cfg.OutboxPollInterval, err = duration("OUTBOX_POLL_INTERVAL", 500*time.Millisecond); err != nil {
+		return CampaignConfig{}, err
+	}
+	if cfg.DispatchQueueBackpressureRetry, err = duration("DISPATCH_QUEUE_BACKPRESSURE_RETRY", 5*time.Second); err != nil {
 		return CampaignConfig{}, err
 	}
 	if cfg.OperationTimeout, err = duration("WORKER_OPERATION_TIMEOUT", 10*time.Second); err != nil {

@@ -824,6 +824,68 @@ paths:
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500 } }
       responses:
         '200': { description: Delivery exception queue }
+  /operations/jobs:
+    get:
+      operationId: listOperationalJobs
+      summary: List durable operational jobs by type and status
+      parameters:
+        - { name: status, in: query, schema: { type: string } }
+        - { name: type, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500 } }
+      responses:
+        '200': { description: Durable job list }
+  /operations/jobs/summary:
+    get:
+      operationId: getOperationalJobSummary
+      summary: Get queue depth, lease and oldest-pending evidence
+      responses:
+        '200': { description: Durable queue summary }
+  /operations/jobs/{id}:
+    get:
+      operationId: getOperationalJob
+      summary: Get one durable operational job
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Durable job }
+        '404': { description: Job not found }
+  /operations/jobs/{id}/events:
+    get:
+      operationId: listOperationalJobEvents
+      summary: List append-only administrative evidence for a durable job
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500 } }
+      responses:
+        '200': { description: Job administration event list }
+  /operations/jobs/{id}/retry:
+    post:
+      operationId: retryOperationalJob
+      summary: Requeue a dead-letter job under MFA and audit controls
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OperationalJobAction' }
+      responses:
+        '200': { description: Job returned to pending state }
+        '409': { description: Job is not dead-lettered }
+  /operations/jobs/{id}/cancel:
+    post:
+      operationId: cancelOperationalJob
+      summary: Cancel a pending job under MFA and audit controls
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OperationalJobAction' }
+      responses:
+        '200': { description: Job cancelled }
+        '409': { description: Job is not pending }
   /campaigns/{id}/report:
     get:
       operationId: getCampaignReport
@@ -1654,6 +1716,11 @@ components:
         transport: { type: object, additionalProperties: true }
         changeEntitlement: { type: boolean }
         maximumUniqueRecipients: { type: integer, format: int64, minimum: 1 }
+    OperationalJobAction:
+      type: object
+      required: [reason]
+      properties:
+        reason: { type: string, minLength: 8, maxLength: 1000 }
     CampaignTransition:
       type: object
       required: [action, actorId]

@@ -108,6 +108,13 @@ func NewService(repository Repository) *Service {
 	return &Service{repository: repository, clock: time.Now}
 }
 
+func (s *Service) PendingCount(ctx context.Context, types []string, now time.Time) (int, error) {
+	if s == nil || s.repository == nil {
+		return 0, errors.New("job repository is required")
+	}
+	return s.repository.PendingCount(ctx, types, now.UTC())
+}
+
 func (s *Service) Enqueue(ctx context.Context, input EnqueueInput) (Job, bool, error) {
 	job, err := NewJob(input, s.clock())
 	if err != nil {
@@ -119,9 +126,10 @@ func (s *Service) Enqueue(ctx context.Context, input EnqueueInput) (Job, bool, e
 // MemoryRepository models the durable queue contract and is safe for concurrent
 // tests. PostgreSQL remains the authoritative production implementation.
 type MemoryRepository struct {
-	mu      sync.Mutex
-	items   map[string]Job
-	byDedup map[string]string
+	mu          sync.Mutex
+	items       map[string]Job
+	byDedup     map[string]string
+	adminEvents []AdministrationEvent
 }
 
 func NewMemoryRepository() *MemoryRepository {
@@ -325,3 +333,111 @@ func jsonEqual(left, right json.RawMessage) bool {
 	return string(leftCanonical) == string(rightCanonical)
 }
 func clean(value string) string { return strings.TrimSpace(value) }
+
+func (r *MemoryRepository) List(_ context.Context, q Query) ([]Job, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	statuses := map[Status]struct{}{}
+	for _, v := range q.Statuses {
+		statuses[v] = struct{}{}
+	}
+	types := map[string]struct{}{}
+	for _, v := range q.Types {
+		types[strings.TrimSpace(v)] = struct{}{}
+	}
+	items := make([]Job, 0)
+	for _, job := range r.items {
+		if len(statuses) > 0 {
+			if _, ok := statuses[job.Status]; !ok {
+				continue
+			}
+		}
+		if len(types) > 0 {
+			if _, ok := types[job.Type]; !ok {
+				continue
+			}
+		}
+		items = append(items, cloneJob(job))
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].CreatedAt.After(items[j].CreatedAt) })
+	if q.Limit <= 0 || q.Limit > 500 {
+		q.Limit = 100
+	}
+	if len(items) > q.Limit {
+		items = items[:q.Limit]
+	}
+	return items, nil
+}
+func (r *MemoryRepository) Summary(_ context.Context, now time.Time) (QueueSummary, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := QueueSummary{AsAt: now.UTC(), CountsByStatus: map[Status]int64{}, CountsByType: map[string]int64{}}
+	for _, job := range r.items {
+		out.CountsByStatus[job.Status]++
+		out.CountsByType[job.Type]++
+		if job.Status == StatusPending && (out.OldestPendingAt == nil || job.CreatedAt.Before(*out.OldestPendingAt)) {
+			v := job.CreatedAt
+			out.OldestPendingAt = &v
+		}
+		if job.Status == StatusProcessing {
+			out.ProcessingLeases++
+			if job.LeaseExpiresAt != nil && !job.LeaseExpiresAt.After(now) {
+				out.ExpiredLeases++
+			}
+		}
+	}
+	return out, nil
+}
+func (r *MemoryRepository) RetryDeadLetter(_ context.Context, id, actor, reason string, now time.Time) (Job, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	job, ok := r.items[id]
+	if !ok {
+		return Job{}, ErrNotFound
+	}
+	if job.Status != StatusDeadLetter {
+		return Job{}, ErrAdministrativeConflict
+	}
+	prev := job.Status
+	job.Status = StatusPending
+	job.AttemptCount = 0
+	job.AvailableAt = now.UTC()
+	job.LastErrorCode = ""
+	job.LastError = ""
+	job.CompletedAt = nil
+	job.UpdatedAt = now.UTC()
+	r.items[id] = job
+	r.appendAdminEvent(AdministrationEvent{JobID: id, Action: "RETRY_DEAD_LETTER", ActorID: actor, Reason: reason, Previous: prev, Current: job.Status, OccurredAt: now.UTC()})
+	return cloneJob(job), nil
+}
+func (r *MemoryRepository) CancelPending(_ context.Context, id, actor, reason string, now time.Time) (Job, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	job, ok := r.items[id]
+	if !ok {
+		return Job{}, ErrNotFound
+	}
+	if job.Status != StatusPending {
+		return Job{}, ErrAdministrativeConflict
+	}
+	prev := job.Status
+	job.Status = StatusCancelled
+	job.UpdatedAt = now.UTC()
+	r.items[id] = job
+	r.appendAdminEvent(AdministrationEvent{JobID: id, Action: "CANCEL_PENDING", ActorID: actor, Reason: reason, Previous: prev, Current: job.Status, OccurredAt: now.UTC()})
+	return cloneJob(job), nil
+}
+func (r *MemoryRepository) Events(_ context.Context, id string, limit int) ([]AdministrationEvent, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []AdministrationEvent
+	for i := len(r.adminEvents) - 1; i >= 0 && len(out) < limit; i-- {
+		if r.adminEvents[i].JobID == id {
+			out = append(out, r.adminEvents[i])
+		}
+	}
+	return out, nil
+}
+func (r *MemoryRepository) appendAdminEvent(v AdministrationEvent) {
+	r.adminEvents = append(r.adminEvents, v)
+}

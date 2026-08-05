@@ -50,3 +50,11 @@
 ## Operational Core Phase 2
 
 Proceed with the messaging and dispatch core: bounded dispatch shards, queue back-pressure, sender health-aware allocation, retry/dead-letter administration, contradiction reconciliation and real OpenWA dependency-resolved build evidence.
+
+## Messaging operational-core continuation after 0.8.14
+
+1. Add contradiction-resolution workflows for UNKNOWN and conflicting provider evidence.
+2. Add sender-health quarantine and governed re-entry evidence.
+3. Add campaign-level queue sharding and measurable admission/backlog forecasting.
+4. Resolve the pinned PostgreSQL driver and execute the migration chain against live PostgreSQL.
+5. Complete a dependency-resolved OpenWA gateway build and live session validation.

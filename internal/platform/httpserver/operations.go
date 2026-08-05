@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"campaign-platform/internal/identity"
+	"campaign-platform/internal/jobs"
 	"campaign-platform/internal/operations"
 	"campaign-platform/internal/shared/httpx"
 )
@@ -178,4 +179,121 @@ func (s *Server) listDeliveryExceptions(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
+}
+
+type operationalJobActionRequest struct {
+	Reason string `json:"reason"`
+}
+
+func (s *Server) listOperationalJobs(w http.ResponseWriter, r *http.Request) {
+	if s.deps.JobOperations == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "JOB_OPERATIONS_UNAVAILABLE", "Job operations are unavailable.", nil)
+		return
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	var statuses []jobs.Status
+	for _, value := range strings.Split(r.URL.Query().Get("status"), ",") {
+		if value = strings.TrimSpace(value); value != "" {
+			statuses = append(statuses, jobs.Status(strings.ToUpper(value)))
+		}
+	}
+	var types []string
+	for _, value := range strings.Split(r.URL.Query().Get("type"), ",") {
+		if value = strings.TrimSpace(value); value != "" {
+			types = append(types, value)
+		}
+	}
+	items, err := s.deps.JobOperations.List(r.Context(), jobs.Query{Statuses: statuses, Types: types, Limit: limit})
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
+}
+func (s *Server) getOperationalJobSummary(w http.ResponseWriter, r *http.Request) {
+	if s.deps.JobOperations == nil {
+		httpx.WriteError(w, r, 503, "JOB_OPERATIONS_UNAVAILABLE", "Job operations are unavailable.", nil)
+		return
+	}
+	v, err := s.deps.JobOperations.Summary(r.Context())
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, 200, v)
+}
+func (s *Server) getOperationalJob(w http.ResponseWriter, r *http.Request) {
+	if s.deps.JobOperations == nil {
+		httpx.WriteError(w, r, 503, "JOB_OPERATIONS_UNAVAILABLE", "Job operations are unavailable.", nil)
+		return
+	}
+	items, err := s.deps.JobOperations.List(r.Context(), jobs.Query{Limit: 500})
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	for _, v := range items {
+		if v.ID == r.PathValue("id") {
+			httpx.WriteJSON(w, 200, v)
+			return
+		}
+	}
+	httpx.WriteError(w, r, 404, "JOB_NOT_FOUND", "The job was not found.", nil)
+}
+func (s *Server) listOperationalJobEvents(w http.ResponseWriter, r *http.Request) {
+	if s.deps.JobOperations == nil {
+		httpx.WriteError(w, r, 503, "JOB_OPERATIONS_UNAVAILABLE", "Job operations are unavailable.", nil)
+		return
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	items, err := s.deps.JobOperations.Events(r.Context(), r.PathValue("id"), limit)
+	if err != nil {
+		writeJobOperationsError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, 200, map[string]any{"items": items, "count": len(items)})
+}
+func (s *Server) retryOperationalJob(w http.ResponseWriter, r *http.Request) {
+	s.performOperationalJobAction(w, r, true)
+}
+func (s *Server) cancelOperationalJob(w http.ResponseWriter, r *http.Request) {
+	s.performOperationalJobAction(w, r, false)
+}
+func (s *Server) performOperationalJobAction(w http.ResponseWriter, r *http.Request, retry bool) {
+	if s.deps.JobOperations == nil {
+		httpx.WriteError(w, r, 503, "JOB_OPERATIONS_UNAVAILABLE", "Job operations are unavailable.", nil)
+		return
+	}
+	principal, _ := identity.PrincipalFromContext(r.Context())
+	if !identity.StepUpSatisfied(principal.Session, time.Now().UTC(), 10*time.Minute) {
+		httpx.WriteError(w, r, 403, "STEP_UP_REQUIRED", "Recent multi-factor verification is required for job operations.", nil)
+		return
+	}
+	var in operationalJobActionRequest
+	if err := httpx.DecodeJSON(w, r, 32<<10, &in); err != nil {
+		httpx.WriteError(w, r, 400, "INVALID_JSON", "The job action is invalid.", nil)
+		return
+	}
+	var v jobs.Job
+	var err error
+	if retry {
+		v, err = s.deps.JobOperations.Retry(r.Context(), r.PathValue("id"), principal.User.ID, in.Reason)
+	} else {
+		v, err = s.deps.JobOperations.Cancel(r.Context(), r.PathValue("id"), principal.User.ID, in.Reason)
+	}
+	if err != nil {
+		writeJobOperationsError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, 200, v)
+}
+func writeJobOperationsError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, jobs.ErrNotFound):
+		httpx.WriteError(w, r, 404, "JOB_NOT_FOUND", "The job was not found.", nil)
+	case errors.Is(err, jobs.ErrAdministrativeConflict):
+		httpx.WriteError(w, r, 409, "JOB_STATE_CONFLICT", "The job is not eligible for this action.", nil)
+	default:
+		httpx.WriteError(w, r, 422, "JOB_OPERATION_REJECTED", "The job operation was rejected.", map[string]any{"detail": err.Error()})
+	}
 }

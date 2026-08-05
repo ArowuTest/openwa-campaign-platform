@@ -191,6 +191,10 @@ handled:
 	var permanent PermanentError
 	retryable := !errors.As(publishErr, &permanent)
 	after := time.Duration(1<<min(item.AttemptCount, 8)) * time.Second
+	var pressure QueueBackpressureError
+	if errors.As(publishErr, &pressure) && pressure.RetryAfter > 0 {
+		after = pressure.RetryAfter
+	}
 	opCtx, opCancel := context.WithTimeout(context.Background(), r.OperationTimeout)
 	err := r.Repository.Fail(opCtx, item.ID, r.Owner, item.LeaseVersion, now, retryable, after, "PUBLISH_FAILED", safeDetail(publishErr))
 	opCancel()

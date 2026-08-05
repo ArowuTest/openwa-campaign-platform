@@ -29,6 +29,7 @@ import (
 	"campaign-platform/internal/geography"
 	"campaign-platform/internal/identity"
 	"campaign-platform/internal/inbound"
+	"campaign-platform/internal/jobs"
 	"campaign-platform/internal/message"
 	"campaign-platform/internal/operations"
 	"campaign-platform/internal/orchestration"
@@ -76,6 +77,7 @@ type Dependencies struct {
 	SenderGovernance         *sender.GovernanceService
 	DeliveryMetrics          *delivery.MetricsService
 	Execution                *execution.Coordinator
+	JobOperations            *jobs.AdministrationService
 	Operations               *operations.Service
 	AudienceImports          *importer.ImportService
 	AudienceConflicts        *importer.ConflictService
@@ -223,6 +225,12 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/operations/incidents", s.require("operations.read", s.listOperationsIncidents))
 	mux.Handle("GET /api/v1/operations/audit-events", s.require("audit.read", s.searchAuditEvents))
 	mux.Handle("GET /api/v1/operations/delivery-exceptions", s.require("operations.read", s.listDeliveryExceptions))
+	mux.Handle("GET /api/v1/operations/jobs", s.require("operations.read", s.listOperationalJobs))
+	mux.Handle("GET /api/v1/operations/jobs/summary", s.require("operations.read", s.getOperationalJobSummary))
+	mux.Handle("GET /api/v1/operations/jobs/{id}", s.require("operations.read", s.getOperationalJob))
+	mux.Handle("GET /api/v1/operations/jobs/{id}/events", s.require("operations.read", s.listOperationalJobEvents))
+	mux.Handle("POST /api/v1/operations/jobs/{id}/retry", s.require("operations.write", s.retryOperationalJob))
+	mux.Handle("POST /api/v1/operations/jobs/{id}/cancel", s.require("operations.write", s.cancelOperationalJob))
 	mux.Handle("POST /api/v1/operations/incidents", s.require("operations.write", s.createOperationsIncident))
 	mux.Handle("PUT /api/v1/operations/incidents/{id}", s.require("operations.write", s.updateOperationsIncident))
 	mux.Handle("GET /api/v1/campaigns/{id}/report", s.require("report.read", s.getCampaignReport))

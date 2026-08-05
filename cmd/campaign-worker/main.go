@@ -66,7 +66,7 @@ func main() {
 	outboxRepository := &outbox.PostgreSQLRepository{DB: db}
 	outboxRunner := &outbox.Runner{
 		Repository: outboxRepository,
-		Publisher:  &outbox.Publisher{Outbox: outboxRepository, Jobs: jobService},
+		Publisher:  &outbox.Publisher{Outbox: outboxRepository, Jobs: jobService, QueueBackpressureLimit: cfg.DispatchQueueBackpressureLimit, BackpressureRetryAfter: cfg.DispatchQueueBackpressureRetry},
 		Owner:      cfg.WorkerID + ":outbox", Lease: cfg.OutboxLease,
 		Batch: cfg.OutboxClaimBatch, Concurrency: cfg.OutboxConcurrency,
 		PollInterval: cfg.OutboxPollInterval, OperationTimeout: cfg.OperationTimeout,

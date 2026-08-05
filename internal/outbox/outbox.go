@@ -55,10 +55,23 @@ type Repository interface {
 	Renew(context.Context, string, string, int64, time.Time, time.Duration) error
 	Get(context.Context, string) (Record, error)
 }
+
+type QueueBackpressureError struct {
+	Pending    int
+	Limit      int
+	RetryAfter time.Duration
+}
+
+func (e QueueBackpressureError) Error() string {
+	return fmt.Sprintf("dispatch queue backpressure: %d pending jobs reached limit %d", e.Pending, e.Limit)
+}
+
 type Publisher struct {
-	Outbox Repository
-	Jobs   *jobs.Service
-	Clock  func() time.Time
+	Outbox                 Repository
+	Jobs                   *jobs.Service
+	Clock                  func() time.Time
+	QueueBackpressureLimit int
+	BackpressureRetryAfter time.Duration
 }
 
 func (p *Publisher) Publish(ctx context.Context, record Record) error {
@@ -79,6 +92,23 @@ func (p *Publisher) Publish(ctx context.Context, record Record) error {
 	recipientID, _ := payload["campaignRecipientId"].(string)
 	if recipientID == "" {
 		return PermanentError{Err: errors.New("campaignRecipientId is required")}
+	}
+	now := time.Now().UTC()
+	if p.Clock != nil {
+		now = p.Clock().UTC()
+	}
+	if p.QueueBackpressureLimit > 0 {
+		pending, countErr := p.Jobs.PendingCount(ctx, []string{jobType}, now)
+		if countErr != nil {
+			return fmt.Errorf("check dispatch queue backpressure: %w", countErr)
+		}
+		if pending >= p.QueueBackpressureLimit {
+			after := p.BackpressureRetryAfter
+			if after <= 0 {
+				after = 5 * time.Second
+			}
+			return QueueBackpressureError{Pending: pending, Limit: p.QueueBackpressureLimit, RetryAfter: after}
+		}
 	}
 	_, _, err := p.Jobs.Enqueue(ctx, jobs.EnqueueInput{Type: jobType, DedupKey: record.DedupKey, Payload: dispatch.JobPayload{CampaignRecipientID: recipientID}, Priority: 0, MaxAttempts: 8, AvailableAt: record.AvailableAt})
 	return err

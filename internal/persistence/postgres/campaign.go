@@ -22,8 +22,8 @@ func (r *CampaignRepository) CompareAndSwap(ctx context.Context, v campaign.Camp
 	if r.DB == nil {
 		return errors.New("database is required")
 	}
-	const q = `UPDATE campaigns SET status=$2,audience_snapshot_id=NULLIF($3,'')::uuid,approved_message_version_id=NULLIF($4,'')::uuid,final_approved_by=NULLIF($5,'')::uuid,final_approved_at=CASE WHEN NULLIF($5,'') IS NULL THEN final_approved_at ELSE coalesce(final_approved_at,$6) END,sender_pool=NULLIF($7,''),pause_reason=NULLIF($8,''),commercial_approval_id=NULLIF($9,'')::uuid,transport_channel=$10,transport_provider=$11,transport_engine=$12,transport_routing_mode=$13,gateway_pool_id=$14,transport_session_id=NULLIF($15,'')::uuid,transport_sender_pool_id=NULLIF($16,'')::uuid,provider_adapter_version=$17,required_capabilities=$18,fallback_mode=$19,routing_policy_version=$20,capacity_evidence_version=$21,updated_at=$6,version=$22 WHERE id=$1 AND version=$23`
-	res, err := r.DB.ExecContext(ctx, q, v.ID, v.Status, v.AudienceSnapshotID, v.MessageVersionID, v.FinalApprovedBy, v.UpdatedAt, v.SenderPool, v.PauseReason, v.CommercialApprovalID, v.Transport.Channel, v.Transport.Provider, v.Transport.Engine, v.Transport.RoutingMode, v.Transport.GatewayPoolID, v.Transport.SessionID, v.Transport.SenderPoolID, v.Transport.AdapterVersion, pqStringArrayJSON(v.Transport.RequiredCapabilities), v.Transport.FallbackMode, v.Transport.RoutingPolicyVersion, v.Transport.CapacityEvidenceVersion, v.Version, expected)
+	const q = `UPDATE campaigns SET status=$2,requested_start_at=$3,completion_deadline_at=$4,maximum_unique_recipients=$5,audience_snapshot_id=NULLIF($6,'')::uuid,approved_message_version_id=NULLIF($7,'')::uuid,final_approved_by=NULLIF($8,'')::uuid,final_approved_at=CASE WHEN NULLIF($8,'') IS NULL THEN NULL ELSE coalesce(final_approved_at,$9) END,sender_pool=NULLIF($10,''),pause_reason=NULLIF($11,''),commercial_approval_id=NULLIF($12,'')::uuid,transport_channel=$13,transport_provider=$14,transport_engine=$15,transport_routing_mode=$16,gateway_pool_id=$17,transport_session_id=NULLIF($18,'')::uuid,transport_sender_pool_id=NULLIF($19,'')::uuid,provider_adapter_version=$20,required_capabilities=$21,fallback_mode=$22,routing_policy_version=$23,capacity_evidence_version=$24,updated_at=$9,version=$25 WHERE id=$1 AND version=$26`
+	res, err := r.DB.ExecContext(ctx, q, v.ID, v.Status, v.RequestedStartAt, v.CompletionDeadlineAt, v.MaximumUniqueRecipients, v.AudienceSnapshotID, v.MessageVersionID, v.FinalApprovedBy, v.UpdatedAt, v.SenderPool, v.PauseReason, v.CommercialApprovalID, v.Transport.Channel, v.Transport.Provider, v.Transport.Engine, v.Transport.RoutingMode, v.Transport.GatewayPoolID, v.Transport.SessionID, v.Transport.SenderPoolID, v.Transport.AdapterVersion, pqStringArrayJSON(v.Transport.RequiredCapabilities), v.Transport.FallbackMode, v.Transport.RoutingPolicyVersion, v.Transport.CapacityEvidenceVersion, v.Version, expected)
 	if err != nil {
 		return err
 	}
@@ -88,3 +88,56 @@ func scanCampaign(row scanner) (campaign.Campaign, error) {
 }
 
 func pqStringArrayJSON(v []string) []byte { b, _ := json.Marshal(v); return b }
+
+func (r *CampaignRepository) AmendMaterial(ctx context.Context, v campaign.Campaign, event campaign.MaterialChangeEvent, expected int64) error {
+	if r.DB == nil {
+		return errors.New("database is required")
+	}
+	tx, err := r.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	const update = `UPDATE campaigns SET status=$2,requested_start_at=$3,completion_deadline_at=$4,maximum_unique_recipients=$5,audience_snapshot_id=NULLIF($6,'')::uuid,approved_message_version_id=NULLIF($7,'')::uuid,final_approved_by=NULL,final_approved_at=NULL,sender_pool=NULLIF($8,''),commercial_approval_id=NULLIF($9,'')::uuid,transport_channel=$10,transport_provider=$11,transport_engine=$12,transport_routing_mode=$13,gateway_pool_id=$14,transport_session_id=NULLIF($15,'')::uuid,transport_sender_pool_id=NULLIF($16,'')::uuid,provider_adapter_version=$17,required_capabilities=$18,fallback_mode=$19,routing_policy_version=$20,capacity_evidence_version=$21,updated_at=$22,version=$23 WHERE id=$1 AND version=$24`
+	res, err := tx.ExecContext(ctx, update, v.ID, v.Status, v.RequestedStartAt, v.CompletionDeadlineAt, v.MaximumUniqueRecipients, v.AudienceSnapshotID, v.MessageVersionID, v.SenderPool, v.CommercialApprovalID, v.Transport.Channel, v.Transport.Provider, v.Transport.Engine, v.Transport.RoutingMode, v.Transport.GatewayPoolID, v.Transport.SessionID, v.Transport.SenderPoolID, v.Transport.AdapterVersion, pqStringArrayJSON(v.Transport.RequiredCapabilities), v.Transport.FallbackMode, v.Transport.RoutingPolicyVersion, v.Transport.CapacityEvidenceVersion, v.UpdatedAt, v.Version, expected)
+	if err != nil {
+		return err
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return campaign.ErrConflict
+	}
+	var seq int64
+	if err := tx.QueryRowContext(ctx, `SELECT coalesce(max(sequence),0)+1 FROM campaign_material_change_events WHERE campaign_id=$1`, v.ID).Scan(&seq); err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO campaign_material_change_events(id,campaign_id,sequence,actor_id,reason,changed_fields,previous_status,new_status,previous_version,new_version,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, event.ID, event.CampaignID, seq, event.ActorID, event.Reason, pqStringArrayJSON(event.ChangedFields), event.PreviousStatus, event.NewStatus, event.PreviousVersion, event.NewVersion, event.CreatedAt)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (r *CampaignRepository) ListMaterialChanges(ctx context.Context, campaignID string) ([]campaign.MaterialChangeEvent, error) {
+	if r.DB == nil {
+		return nil, errors.New("database is required")
+	}
+	rows, err := r.DB.QueryContext(ctx, `SELECT id,campaign_id,sequence,actor_id,reason,changed_fields,previous_status,new_status,previous_version,new_version,created_at FROM campaign_material_change_events WHERE campaign_id=$1 ORDER BY sequence`, campaignID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []campaign.MaterialChangeEvent
+	for rows.Next() {
+		var e campaign.MaterialChangeEvent
+		var fields []byte
+		var prev, next string
+		if err := rows.Scan(&e.ID, &e.CampaignID, &e.Sequence, &e.ActorID, &e.Reason, &fields, &prev, &next, &e.PreviousVersion, &e.NewVersion, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		e.PreviousStatus, e.NewStatus = campaign.Status(prev), campaign.Status(next)
+		_ = json.Unmarshal(fields, &e.ChangedFields)
+		items = append(items, e)
+	}
+	return items, rows.Err()
+}

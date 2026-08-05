@@ -21,6 +21,8 @@ type Repository interface {
 	CompareAndSwap(context.Context, Campaign, int64) error
 	Get(context.Context, string) (Campaign, error)
 	List(context.Context) ([]Campaign, error)
+	AmendMaterial(context.Context, Campaign, MaterialChangeEvent, int64) error
+	ListMaterialChanges(context.Context, string) ([]MaterialChangeEvent, error)
 }
 
 type Service struct {
@@ -152,6 +154,34 @@ func (s *Service) Transition(ctx context.Context, identifier string, input Trans
 	return entity, nil
 }
 
+func (s *Service) AmendMaterial(ctx context.Context, identifier string, input MaterialAmendmentInput) (Campaign, error) {
+	entity, err := s.repository.Get(ctx, identifier)
+	if err != nil {
+		return Campaign{}, err
+	}
+	if input.ExpectedVersion != entity.Version {
+		return Campaign{}, ErrConflict
+	}
+	if err := s.requireActiveOrganisation(ctx, entity.OrganisationID); err != nil {
+		return Campaign{}, err
+	}
+	amended, event, err := entity.AmendMaterial(input, s.clock())
+	if err != nil {
+		return Campaign{}, err
+	}
+	if err := s.repository.AmendMaterial(ctx, amended, event, entity.Version); err != nil {
+		return Campaign{}, err
+	}
+	return amended, nil
+}
+
+func (s *Service) ListMaterialChanges(ctx context.Context, identifier string) ([]MaterialChangeEvent, error) {
+	if _, err := s.repository.Get(ctx, identifier); err != nil {
+		return nil, err
+	}
+	return s.repository.ListMaterialChanges(ctx, identifier)
+}
+
 func (s *Service) Get(ctx context.Context, identifier string) (Campaign, error) {
 	return s.repository.Get(ctx, identifier)
 }
@@ -161,12 +191,13 @@ func (s *Service) List(ctx context.Context) ([]Campaign, error) {
 }
 
 type MemoryRepository struct {
-	mu    sync.RWMutex
-	items map[string]Campaign
+	mu     sync.RWMutex
+	items  map[string]Campaign
+	events map[string][]MaterialChangeEvent
 }
 
 func NewMemoryRepository() *MemoryRepository {
-	return &MemoryRepository{items: make(map[string]Campaign)}
+	return &MemoryRepository{items: make(map[string]Campaign), events: make(map[string][]MaterialChangeEvent)}
 }
 
 func (r *MemoryRepository) Create(_ context.Context, entity Campaign) error {
@@ -211,5 +242,31 @@ func (r *MemoryRepository) List(_ context.Context) ([]Campaign, error) {
 		items = append(items, item)
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].CreatedAt.After(items[j].CreatedAt) })
+	return items, nil
+}
+
+func (r *MemoryRepository) AmendMaterial(_ context.Context, entity Campaign, event MaterialChangeEvent, expectedVersion int64) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	current, ok := r.items[entity.ID]
+	if !ok {
+		return ErrNotFound
+	}
+	if current.Version != expectedVersion || entity.Version != expectedVersion+1 {
+		return ErrConflict
+	}
+	event.Sequence = int64(len(r.events[entity.ID]) + 1)
+	r.items[entity.ID] = entity
+	r.events[entity.ID] = append(r.events[entity.ID], event)
+	return nil
+}
+
+func (r *MemoryRepository) ListMaterialChanges(_ context.Context, campaignID string) ([]MaterialChangeEvent, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if _, ok := r.items[campaignID]; !ok {
+		return nil, ErrNotFound
+	}
+	items := append([]MaterialChangeEvent(nil), r.events[campaignID]...)
 	return items, nil
 }

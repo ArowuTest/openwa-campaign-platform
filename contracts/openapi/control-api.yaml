@@ -529,6 +529,32 @@ paths:
         '200': { description: Campaign transitioned }
         '404': { $ref: '#/components/responses/NotFound' }
         '422': { $ref: '#/components/responses/ValidationError' }
+  /campaigns/{id}/material-amendment:
+    post:
+      operationId: amendCampaignMaterial
+      summary: Replace material approved evidence and automatically invalidate downstream approvals
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CampaignMaterialAmendment' }
+      responses:
+        '200': { description: Campaign amended and regressed to the required approval stage }
+        '403': { description: Recent MFA step-up is required }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Optimistic concurrency conflict }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /campaigns/{id}/material-changes:
+    get:
+      operationId: listCampaignMaterialChanges
+      summary: List immutable material-change and approval-invalidation evidence
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Ordered material-change evidence }
+        '404': { $ref: '#/components/responses/NotFound' }
   /inbound-replies:
     get:
       summary: List governed inbound replies for authorised operations users
@@ -1361,6 +1387,23 @@ components:
         maximumMessagesPerRecipient: { type: integer, enum: [1], default: 1 }
         senderPool: { type: string }
         createdBy: { type: string, format: uuid }
+    CampaignMaterialAmendment:
+      type: object
+      required: [expectedVersion, reason]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 1 }
+        reason: { type: string, minLength: 1 }
+        changeSchedule: { type: boolean }
+        requestedStartAt: { type: string, format: date-time }
+        completionDeadlineAt: { type: string, format: date-time }
+        changeAudience: { type: boolean }
+        audienceSnapshotId: { type: string, format: uuid }
+        changeMessage: { type: boolean }
+        messageVersionId: { type: string, format: uuid }
+        changeTransport: { type: boolean }
+        transport: { type: object, additionalProperties: true }
+        changeEntitlement: { type: boolean }
+        maximumUniqueRecipients: { type: integer, format: int64, minimum: 1 }
     CampaignTransition:
       type: object
       required: [action, actorId]

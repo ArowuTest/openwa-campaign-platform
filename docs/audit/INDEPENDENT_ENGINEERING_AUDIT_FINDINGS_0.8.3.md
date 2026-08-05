@@ -48,3 +48,10 @@ This first audit pass reviewed repository recoverability, build coverage, organi
 - Status: Closed in 0.8.8
 - Finding: final eligibility treated any historical withdrawal as permanently blocking, even after a later valid re-consent, and campaign progression did not consistently revalidate consent-review expiry and channel scope.
 - Remediation: latest-effective-grant precedence is now deterministic; suppression remains dominant; campaign approval, release and final dispatch revalidate live organisation and consent-review evidence with precise exclusion reasons.
+
+### AUD-007 — Material campaign changes did not invalidate approvals
+
+- Severity: High
+- Status: Closed in 0.8.9
+- Finding: approved campaigns had no governed amendment workflow for replacement audience, message, entitlement, transport or schedule evidence. Repository updates also did not persist all material schedule and entitlement fields, so a change could not be evidenced or forced through reapproval consistently.
+- Remediation: explicit MFA-protected material amendments now validate authoritative immutable evidence, use optimistic concurrency, regress the campaign to the correct approval stage, clear downstream approvals, persist all changed fields transactionally and record append-only change events.

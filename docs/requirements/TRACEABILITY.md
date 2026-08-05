@@ -6,10 +6,10 @@ Total requirements: **398**
 
 | Status | Count |
 |---|---:|
-| IMPLEMENTED_TESTED | 43 |
+| IMPLEMENTED_TESTED | 45 |
 | PARTIAL | 31 |
 | BLOCKED_EXTERNAL | 0 |
-| NOT_STARTED | 324 |
+| NOT_STARTED | 322 |
 
 | ID | Priority | Status | Requirement | Evidence / notes |
 |---|---|---|---|---|
@@ -176,7 +176,7 @@ Total requirements: **398**
 | CAM-009 | Must | NOT_STARTED | Send controlled test messages only to approved test numbers. |  |
 | CAM-010 | Must | NOT_STARTED | Version message text, media, variables and links. |  |
 | CAM-011 | Must | NOT_STARTED | Hash the approved message version and include it in campaign release. |  |
-| CAM-012 | Must | NOT_STARTED | Require reapproval after material message, media, link, audience, sender or schedule change. |  |
+| CAM-012 | Must | IMPLEMENTED_TESTED | Require reapproval after material message, media, link, audience, sender or schedule change. | `internal/campaign/model.go`, `internal/campaign/model_test.go`, `internal/campaign/service.go`, `internal/persistence/postgres/campaign.go`, `internal/platform/httpserver/server.go`, `database/migrations/0041_campaign_material_change_invalidation.sql`, `contracts/openapi/control-api.yaml` — Material audience, message, entitlement, transport and schedule changes are explicit, MFA-protected, optimistically versioned, recorded append-only and automatically regress the campaign to the required approval stage. |
 | CAM-013 | Must | NOT_STARTED | Support optional reply/STOP instruction policy by campaign type. |  |
 | CAM-014 | Must | NOT_STARTED | Support tracked links using a controlled redirect domain and signed identifiers. |  |
 | CAM-015 | Must | NOT_STARTED | Validate destination URLs against configured safety rules. |  |
@@ -195,7 +195,7 @@ Total requirements: **398**
 | APR-004 | Must | NOT_STARTED | Require final campaign release approval by an authorised user. |  |
 | APR-005 | Must | NOT_STARTED | Enforce maker-checker based on configuration and campaign threshold. |  |
 | APR-006 | Must | NOT_STARTED | Record approval decision, actor, time, comments and object version. |  |
-| APR-007 | Must | NOT_STARTED | Invalidate approval when approved data changes. |  |
+| APR-007 | Must | IMPLEMENTED_TESTED | Invalidate approval when approved data changes. | `internal/campaign/model.go`, `internal/campaign/model_test.go`, `internal/campaign/service.go`, `database/migrations/0041_campaign_material_change_invalidation.sql` — Any material approved-data replacement clears final approval; message, audience or entitlement changes also clear commercial approval as appropriate and require a new approval path. |
 | APR-008 | Must | IMPLEMENTED_TESTED | Record quote, invoice, payment and commercial-approval references without requiring online payment. | `internal/commercial/service.go`, `internal/commercial/service_test.go`, `internal/persistence/postgres/commercial.go`, `database/migrations/0039_campaign_commercial_governance.sql`, `internal/platform/httpserver/server.go`, `internal/campaign/commercial_gate_test.go` — Commercial evidence is recorded offline without requiring a public wallet or online payment flow; approval requires independent finance review and verified payment evidence. |
 | APR-009 | Must | IMPLEMENTED_TESTED | Optionally block release until payment/commercial approval. | `internal/commercial/service.go`, `internal/commercial/service_test.go`, `internal/persistence/postgres/commercial.go`, `database/migrations/0039_campaign_commercial_governance.sql`, `internal/platform/httpserver/server.go`, `internal/campaign/commercial_gate_test.go` — Campaign commercial progression now resolves an approved campaign-specific commercial record and enforces the authorised recipient ceiling before COMMERCIAL_APPROVED. |
 | APR-010 | Must | NOT_STARTED | Create a campaign entitlement defining maximum unique recipients and messages per recipient. |  |

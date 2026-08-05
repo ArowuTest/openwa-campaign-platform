@@ -666,5 +666,28 @@
       "internal/platform/httpserver/server_test.go"
     ],
     "status": "IMPLEMENTED_TESTED"
+  },
+  "CAM-012": {
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/campaign/model.go",
+      "internal/campaign/model_test.go",
+      "internal/campaign/service.go",
+      "internal/persistence/postgres/campaign.go",
+      "internal/platform/httpserver/server.go",
+      "database/migrations/0041_campaign_material_change_invalidation.sql",
+      "contracts/openapi/control-api.yaml"
+    ],
+    "notes": "Material audience, message, entitlement, transport and schedule changes are explicit, MFA-protected, optimistically versioned, recorded append-only and automatically regress the campaign to the required approval stage."
+  },
+  "APR-007": {
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/campaign/model.go",
+      "internal/campaign/model_test.go",
+      "internal/campaign/service.go",
+      "database/migrations/0041_campaign_material_change_invalidation.sql"
+    ],
+    "notes": "Any material approved-data replacement clears final approval; message, audience or entitlement changes also clear commercial approval as appropriate and require a new approval path."
   }
 }

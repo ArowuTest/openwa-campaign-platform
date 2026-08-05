@@ -188,6 +188,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/campaigns", s.require("campaign.read", s.listCampaigns))
 	mux.Handle("POST /api/v1/campaigns", s.require("campaign.write", s.createCampaign))
 	mux.Handle("POST /api/v1/campaigns/{id}/transition", s.require("campaign.write", s.transitionCampaign))
+	mux.Handle("POST /api/v1/campaigns/{id}/material-amendment", s.require("campaign.write", s.amendCampaignMaterial))
+	mux.Handle("GET /api/v1/campaigns/{id}/material-changes", s.require("campaign.read", s.listCampaignMaterialChanges))
 	mux.Handle("GET /api/v1/campaigns/{id}/message-versions", s.require("campaign.read", s.listMessageVersions))
 	mux.Handle("POST /api/v1/campaigns/{id}/message-versions", s.require("campaign.write", s.createMessageVersion))
 	mux.Handle("POST /api/v1/message-versions/{id}/approve", s.require("campaign.approve", s.approveMessageVersion))
@@ -986,6 +988,70 @@ func (s *Server) transitionCampaign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, entity)
+}
+
+func (s *Server) amendCampaignMaterial(w http.ResponseWriter, r *http.Request) {
+	var input campaign.MaterialAmendmentInput
+	if err := httpx.DecodeJSON(w, r, 2<<20, &input); err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The material amendment request is invalid.", map[string]any{"detail": err.Error()})
+		return
+	}
+	principal, _ := identity.PrincipalFromContext(r.Context())
+	if !identity.StepUpSatisfied(principal.Session, time.Now().UTC(), 10*time.Minute) {
+		s.deps.Identity.RecordStepUpRequired(r.Context(), principal.User.ID, "campaign.material_amendment", authenticationAttempt(r, principal.User.Email))
+		httpx.WriteError(w, r, http.StatusForbidden, "STEP_UP_REQUIRED", "Recent multi-factor verification is required for a material campaign amendment.", nil)
+		return
+	}
+	input.ActorID = principal.User.ID
+	current, err := s.deps.Campaigns.Get(r.Context(), r.PathValue("id"))
+	if errors.Is(err, campaign.ErrNotFound) {
+		httpx.WriteError(w, r, http.StatusNotFound, "CAMPAIGN_NOT_FOUND", "The campaign was not found.", nil)
+		return
+	}
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	if input.ChangeAudience {
+		snapshot, err := s.deps.Snapshots.Get(r.Context(), input.AudienceSnapshotID)
+		if err != nil || snapshot.CampaignID != current.ID {
+			httpx.WriteError(w, r, http.StatusUnprocessableEntity, "AUDIENCE_SNAPSHOT_INVALID", "The replacement audience snapshot is not authoritative for this campaign.", nil)
+			return
+		}
+		input.AudienceSnapshotHash = snapshot.SnapshotHash
+		input.EligibleAudienceCount = snapshot.EligibleCount
+	}
+	if input.ChangeMessage {
+		version, err := s.deps.Messages.Get(r.Context(), input.MessageVersionID)
+		if err != nil || version.CampaignID != current.ID || version.Status != message.StatusApproved {
+			httpx.WriteError(w, r, http.StatusUnprocessableEntity, "MESSAGE_VERSION_INVALID", "The replacement message version is not an approved version for this campaign.", nil)
+			return
+		}
+		input.MessageContentHash = version.ContentHash
+	}
+	entity, err := s.deps.Campaigns.AmendMaterial(r.Context(), current.ID, input)
+	if errors.Is(err, campaign.ErrConflict) {
+		httpx.WriteError(w, r, http.StatusConflict, "CAMPAIGN_VERSION_CONFLICT", "The campaign changed; reload before retrying.", nil)
+		return
+	}
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "CAMPAIGN_AMENDMENT_REJECTED", "The material amendment was rejected.", map[string]any{"detail": err.Error()})
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, entity)
+}
+
+func (s *Server) listCampaignMaterialChanges(w http.ResponseWriter, r *http.Request) {
+	items, err := s.deps.Campaigns.ListMaterialChanges(r.Context(), r.PathValue("id"))
+	if errors.Is(err, campaign.ErrNotFound) {
+		httpx.WriteError(w, r, http.StatusNotFound, "CAMPAIGN_NOT_FOUND", "The campaign was not found.", nil)
+		return
+	}
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
 }
 
 type audienceImportMetadata struct {

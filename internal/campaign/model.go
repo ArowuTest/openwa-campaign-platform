@@ -262,6 +262,122 @@ func (c Campaign) nextStatus(input TransitionInput) (Status, error) {
 	return "", fmt.Errorf("action %s is unavailable from status %s", input.Action, c.Status)
 }
 
+type MaterialAmendmentInput struct {
+	ActorID                 string             `json:"-"`
+	Reason                  string             `json:"reason"`
+	ExpectedVersion         int64              `json:"expectedVersion"`
+	ChangeSchedule          bool               `json:"changeSchedule"`
+	RequestedStartAt        *time.Time         `json:"requestedStartAt"`
+	CompletionDeadlineAt    *time.Time         `json:"completionDeadlineAt"`
+	ChangeAudience          bool               `json:"changeAudience"`
+	AudienceSnapshotID      string             `json:"audienceSnapshotId"`
+	AudienceSnapshotHash    string             `json:"-"`
+	EligibleAudienceCount   int64              `json:"-"`
+	ChangeMessage           bool               `json:"changeMessage"`
+	MessageVersionID        string             `json:"messageVersionId"`
+	MessageContentHash      string             `json:"-"`
+	ChangeTransport         bool               `json:"changeTransport"`
+	Transport               TransportSelection `json:"transport"`
+	ChangeEntitlement       bool               `json:"changeEntitlement"`
+	MaximumUniqueRecipients int64              `json:"maximumUniqueRecipients"`
+}
+
+type MaterialChangeEvent struct {
+	ID              string    `json:"id"`
+	CampaignID      string    `json:"campaignId"`
+	Sequence        int64     `json:"sequence"`
+	ActorID         string    `json:"actorId"`
+	Reason          string    `json:"reason"`
+	ChangedFields   []string  `json:"changedFields"`
+	PreviousStatus  Status    `json:"previousStatus"`
+	NewStatus       Status    `json:"newStatus"`
+	PreviousVersion int64     `json:"previousVersion"`
+	NewVersion      int64     `json:"newVersion"`
+	CreatedAt       time.Time `json:"createdAt"`
+}
+
+func (c Campaign) AmendMaterial(input MaterialAmendmentInput, now time.Time) (Campaign, MaterialChangeEvent, error) {
+	if strings.TrimSpace(input.ActorID) == "" || strings.TrimSpace(input.Reason) == "" {
+		return Campaign{}, MaterialChangeEvent{}, errors.New("actor identity and amendment reason are required")
+	}
+	if input.ExpectedVersion <= 0 || input.ExpectedVersion != c.Version {
+		return Campaign{}, MaterialChangeEvent{}, fmt.Errorf("version conflict: expected %d, current %d", input.ExpectedVersion, c.Version)
+	}
+	allowed := map[Status]bool{
+		StatusAudienceValidated: true, StatusMessageReviewPending: true, StatusMessageApproved: true,
+		StatusCommercialApproved: true, StatusFinalApprovalPending: true, StatusScheduled: true,
+	}
+	if !allowed[c.Status] {
+		return Campaign{}, MaterialChangeEvent{}, fmt.Errorf("material amendment is unavailable from status %s", c.Status)
+	}
+	changed := make([]string, 0, 8)
+	previousStatus, previousVersion := c.Status, c.Version
+	regress := StatusCommercialApproved
+	if input.ChangeSchedule {
+		if input.RequestedStartAt == nil || input.CompletionDeadlineAt == nil || !input.CompletionDeadlineAt.After(*input.RequestedStartAt) {
+			return Campaign{}, MaterialChangeEvent{}, errors.New("schedule amendment requires a start time and later completion deadline")
+		}
+		c.RequestedStartAt, c.CompletionDeadlineAt = input.RequestedStartAt, input.CompletionDeadlineAt
+		changed = append(changed, "SCHEDULE")
+	}
+	if input.ChangeTransport {
+		if err := input.Transport.Validate(); err != nil {
+			return Campaign{}, MaterialChangeEvent{}, err
+		}
+		c.Transport = input.Transport
+		c.SenderPool = input.Transport.SenderPoolID
+		changed = append(changed, "TRANSPORT")
+	}
+	if input.ChangeAudience {
+		if strings.TrimSpace(input.AudienceSnapshotID) == "" || strings.TrimSpace(input.AudienceSnapshotHash) == "" || input.EligibleAudienceCount <= 0 {
+			return Campaign{}, MaterialChangeEvent{}, errors.New("audience amendment requires an immutable snapshot, hash and positive eligible count")
+		}
+		if input.EligibleAudienceCount > c.MaximumUniqueRecipients {
+			return Campaign{}, MaterialChangeEvent{}, errors.New("eligible audience exceeds authorised maximum")
+		}
+		c.AudienceSnapshotID, c.AudienceSnapshotHash, c.EligibleAudienceCount = strings.TrimSpace(input.AudienceSnapshotID), strings.TrimSpace(input.AudienceSnapshotHash), input.EligibleAudienceCount
+		changed = append(changed, "AUDIENCE")
+		regress = StatusMessageApproved
+		c.CommercialApprovalID = ""
+	}
+	if input.ChangeMessage {
+		if strings.TrimSpace(input.MessageVersionID) == "" || strings.TrimSpace(input.MessageContentHash) == "" {
+			return Campaign{}, MaterialChangeEvent{}, errors.New("message amendment requires an immutable version and content hash")
+		}
+		c.MessageVersionID, c.MessageContentHash = strings.TrimSpace(input.MessageVersionID), strings.TrimSpace(input.MessageContentHash)
+		changed = append(changed, "MESSAGE")
+		regress = StatusMessageReviewPending
+		c.CommercialApprovalID = ""
+	}
+	if input.ChangeEntitlement {
+		if input.MaximumUniqueRecipients <= 0 || input.MaximumUniqueRecipients < c.EligibleAudienceCount {
+			return Campaign{}, MaterialChangeEvent{}, errors.New("maximum recipients must cover the frozen eligible audience")
+		}
+		c.MaximumUniqueRecipients = input.MaximumUniqueRecipients
+		changed = append(changed, "ENTITLEMENT")
+		if regress != StatusMessageReviewPending {
+			regress = StatusMessageApproved
+		}
+		c.CommercialApprovalID = ""
+	}
+	if len(changed) == 0 {
+		return Campaign{}, MaterialChangeEvent{}, errors.New("at least one material change is required")
+	}
+	if regress == StatusCommercialApproved && c.CommercialApprovalID == "" {
+		regress = StatusMessageApproved
+	}
+	c.Status = regress
+	c.FinalApprovedBy = ""
+	c.PauseReason = ""
+	c.Version++
+	c.UpdatedAt = now.UTC()
+	eventID, err := id.New()
+	if err != nil {
+		return Campaign{}, MaterialChangeEvent{}, err
+	}
+	return c, MaterialChangeEvent{ID: eventID, CampaignID: c.ID, ActorID: strings.TrimSpace(input.ActorID), Reason: strings.TrimSpace(input.Reason), ChangedFields: changed, PreviousStatus: previousStatus, NewStatus: c.Status, PreviousVersion: previousVersion, NewVersion: c.Version, CreatedAt: now.UTC()}, nil
+}
+
 func HashMessage(body string) string {
 	sum := sha256.Sum256([]byte(strings.TrimSpace(body)))
 	return hex.EncodeToString(sum[:])

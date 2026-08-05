@@ -15,3 +15,10 @@
 
 - Execute migration 0039 and commercial repository tests against live PostgreSQL once the pinned driver is available.
 - Continue adversarial remediation with consent/suppression precedence and higher-risk persistence/runtime coverage.
+
+## After 0.8.9
+
+1. Execute migration 0041 and material-amendment transaction tests against live PostgreSQL.
+2. Continue the backend adversarial programme with data-subject access, rectification, objection and anonymisation workflows.
+3. Complete campaign timezone/DST governance and test-send controls.
+4. Keep the final Next.js visual implementation aligned to the external designer's HTML reference when supplied.

@@ -7,3 +7,9 @@
 5. Implement the production Next.js portal against the UI/UX screen matrix and designer reference when available.
 6. Pair genuine OpenWA sessions and execute the signed-command, event-reconciliation, media and unknown-outcome live test plan.
 7. Close the hard gates in `config/release-gates.json`; do not mark 1.0.0 until `make release-gate` passes.
+
+## After 0.8.5
+
+1. Obtain a reproducible pinned PostgreSQL driver and run every migration against a live PostgreSQL instance.
+2. Add PostgreSQL integration tests for source trust, manual conflicts, and conflict resolution.
+3. Continue the backend audit remediation with import exception queues, contact lineage corrections, and data-subject workflows.

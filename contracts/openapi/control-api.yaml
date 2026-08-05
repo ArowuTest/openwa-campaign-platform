@@ -394,6 +394,42 @@ paths:
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { description: Organisation version conflict }
         '422': { $ref: '#/components/responses/ValidationError' }
+  /organisations/{id}/audience-source-trust:
+    get:
+      operationId: listAudienceSourceTrust
+      summary: List governed source trust policies for an organisation
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Source trust policies returned }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+  /organisations/{id}/audience-source-trust/{source}:
+    put:
+      operationId: upsertAudienceSourceTrust
+      summary: Create or update a governed source trust policy with recent MFA
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: source, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [trustLevel, reason, expectedVersion]
+              properties:
+                trustLevel: { type: integer, minimum: 0, maximum: 100 }
+                reason: { type: string, minLength: 8 }
+                expectedVersion: { type: integer, minimum: 0 }
+      responses:
+        '200': { description: Source trust policy stored }
+        '401': { description: Authentication required }
+        '403': { description: Permission or MFA step-up required }
+        '409': { description: Optimistic version conflict }
+        '422': { description: Policy rejected }
   /organisations/{id}/events:
     get:
       operationId: listOrganisationEvents
@@ -722,6 +758,45 @@ paths:
         '400': { description: Invalid request }
         '401': { description: Authentication required }
         '403': { description: Permission denied }
+  /audience-imports/{id}/conflicts:
+    get:
+      operationId: listAudienceImportConflicts
+      summary: List governed profile conflicts created by a manual-conflict import
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: status, in: query, required: false, schema: { type: string, enum: [PENDING, RESOLVED, REJECTED], default: PENDING } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+      responses:
+        '200': { description: Conflict records returned }
+        '400': { description: Invalid query }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+  /audience-import-conflicts/{id}/resolve:
+    post:
+      operationId: resolveAudienceImportConflict
+      summary: Resolve one pending profile conflict with recent MFA
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [resolution, reason, expectedVersion]
+              properties:
+                resolution: { type: string, enum: [KEEP_EXISTING, USE_INCOMING] }
+                reason: { type: string, minLength: 8 }
+                expectedVersion: { type: integer, minimum: 1 }
+      responses:
+        '200': { description: Conflict resolved }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission or MFA step-up required }
+        '404': { description: Conflict not found }
+        '409': { description: Optimistic version conflict }
+        '422': { description: Resolution rejected }
   /audience-snapshots/{id}:
     get:
       operationId: getAudienceSnapshot

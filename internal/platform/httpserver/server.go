@@ -71,6 +71,8 @@ type Dependencies struct {
 	Execution                *execution.Coordinator
 	Operations               *operations.Service
 	AudienceImports          *importer.ImportService
+	AudienceConflicts        *importer.ConflictService
+	AudienceSourceTrust      *importer.SourceTrustService
 	AudienceImportIntake     *importer.IntakeService
 	MaxImportFileBytes       int64
 	DeliveryEvents           *delivery.Service
@@ -167,6 +169,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/audience-imports", s.require("audience.write", s.intakeAudienceImport))
 	mux.Handle("GET /api/v1/audience-imports/{id}", s.require("audience.read", s.getAudienceImport))
 	mux.Handle("POST /api/v1/audience-imports/{id}/approve", s.require("audience.approve", s.approveAudienceImport))
+	mux.Handle("GET /api/v1/audience-imports/{id}/conflicts", s.require("audience.read", s.listAudienceImportConflicts))
+	mux.Handle("POST /api/v1/audience-import-conflicts/{id}/resolve", s.require("audience.approve", s.resolveAudienceImportConflict))
+	mux.Handle("GET /api/v1/organisations/{id}/audience-source-trust", s.require("audience.read", s.listAudienceSourceTrust))
+	mux.Handle("PUT /api/v1/organisations/{id}/audience-source-trust/{source}", s.require("audience.write", s.upsertAudienceSourceTrust))
 	mux.Handle("GET /api/v1/campaigns", s.require("campaign.read", s.listCampaigns))
 	mux.Handle("POST /api/v1/campaigns", s.require("campaign.write", s.createCampaign))
 	mux.Handle("POST /api/v1/campaigns/{id}/transition", s.require("campaign.write", s.transitionCampaign))
@@ -879,6 +885,100 @@ func (s *Server) intakeAudienceImport(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusCreated
 	}
 	httpx.WriteJSON(w, status, map[string]any{"created": created, "import": batch})
+}
+
+func (s *Server) listAudienceImportConflicts(w http.ResponseWriter, r *http.Request) {
+	if s.deps.AudienceConflicts == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "AUDIENCE_CONFLICTS_UNAVAILABLE", "Audience conflict review is not configured.", nil)
+		return
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	items, err := s.deps.AudienceConflicts.List(r.Context(), r.PathValue("id"), importer.ConflictStatus(strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("status")))), limit)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "AUDIENCE_CONFLICT_QUERY_INVALID", "The conflict query is invalid.", map[string]any{"detail": err.Error()})
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
+}
+
+type resolveAudienceConflictRequest struct {
+	Resolution      importer.ConflictResolution `json:"resolution"`
+	Reason          string                      `json:"reason"`
+	ExpectedVersion int64                       `json:"expectedVersion"`
+}
+
+func (s *Server) resolveAudienceImportConflict(w http.ResponseWriter, r *http.Request) {
+	if s.deps.AudienceConflicts == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "AUDIENCE_CONFLICTS_UNAVAILABLE", "Audience conflict review is not configured.", nil)
+		return
+	}
+	principal, _ := identity.PrincipalFromContext(r.Context())
+	if !identity.StepUpSatisfied(principal.Session, time.Now().UTC(), 10*time.Minute) {
+		httpx.WriteError(w, r, http.StatusForbidden, "MFA_STEP_UP_REQUIRED", "Recent MFA verification is required.", nil)
+		return
+	}
+	var input resolveAudienceConflictRequest
+	if !decodeStrictJSON(w, r, &input) {
+		return
+	}
+	value, err := s.deps.AudienceConflicts.Resolve(r.Context(), r.PathValue("id"), input.Resolution, input.Reason, principal.User.ID, input.ExpectedVersion)
+	switch {
+	case errors.Is(err, importer.ErrConflictNotFound):
+		httpx.WriteError(w, r, http.StatusNotFound, "AUDIENCE_CONFLICT_NOT_FOUND", "The audience conflict was not found.", nil)
+	case errors.Is(err, importer.ErrConflictVersion):
+		httpx.WriteError(w, r, http.StatusConflict, "AUDIENCE_CONFLICT_VERSION", "The conflict changed; reload before retrying.", nil)
+	case errors.Is(err, importer.ErrConflictState):
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "AUDIENCE_CONFLICT_STATE", "The conflict is no longer pending.", nil)
+	case err != nil:
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "AUDIENCE_CONFLICT_RESOLUTION_REJECTED", "The conflict resolution was rejected.", map[string]any{"detail": err.Error()})
+	default:
+		httpx.WriteJSON(w, http.StatusOK, value)
+	}
+}
+
+func (s *Server) listAudienceSourceTrust(w http.ResponseWriter, r *http.Request) {
+	if s.deps.AudienceSourceTrust == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "AUDIENCE_SOURCE_TRUST_UNAVAILABLE", "Audience source-trust governance is not configured.", nil)
+		return
+	}
+	items, err := s.deps.AudienceSourceTrust.List(r.Context(), r.PathValue("id"))
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "AUDIENCE_SOURCE_TRUST_QUERY_INVALID", "The source-trust query is invalid.", map[string]any{"detail": err.Error()})
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
+}
+
+type upsertAudienceSourceTrustRequest struct {
+	TrustLevel      int    `json:"trustLevel"`
+	Reason          string `json:"reason"`
+	ExpectedVersion int64  `json:"expectedVersion"`
+}
+
+func (s *Server) upsertAudienceSourceTrust(w http.ResponseWriter, r *http.Request) {
+	if s.deps.AudienceSourceTrust == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "AUDIENCE_SOURCE_TRUST_UNAVAILABLE", "Audience source-trust governance is not configured.", nil)
+		return
+	}
+	principal, _ := identity.PrincipalFromContext(r.Context())
+	if !identity.StepUpSatisfied(principal.Session, time.Now().UTC(), 10*time.Minute) {
+		httpx.WriteError(w, r, http.StatusForbidden, "MFA_STEP_UP_REQUIRED", "Recent MFA verification is required.", nil)
+		return
+	}
+	var input upsertAudienceSourceTrustRequest
+	if !decodeStrictJSON(w, r, &input) {
+		return
+	}
+	value, err := s.deps.AudienceSourceTrust.Upsert(r.Context(), r.PathValue("id"), r.PathValue("source"), input.TrustLevel, input.Reason, principal.User.ID, input.ExpectedVersion)
+	if errors.Is(err, importer.ErrSourceTrustVersion) {
+		httpx.WriteError(w, r, http.StatusConflict, "AUDIENCE_SOURCE_TRUST_VERSION", "The source-trust policy changed; reload before retrying.", nil)
+		return
+	}
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "AUDIENCE_SOURCE_TRUST_REJECTED", "The source-trust policy was rejected.", map[string]any{"detail": err.Error()})
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, value)
 }
 
 func (s *Server) getAudienceImport(w http.ResponseWriter, r *http.Request) {

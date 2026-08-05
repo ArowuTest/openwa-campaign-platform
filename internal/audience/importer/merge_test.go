@@ -128,7 +128,7 @@ func TestMergeEnforcesMakerCheckerAndConsentEvidence(t *testing.T) {
 func TestMergeRejectsUnsupportedUpdatePolicy(t *testing.T) {
 	now := time.Date(2026, 8, 4, 9, 0, 0, 0, time.UTC)
 	input := approvedMemoryImport(now)
-	input.UpdatePolicy = UpdateTrustedSource
+	input.UpdatePolicy = UpdatePolicy("UNKNOWN_POLICY")
 	repository := NewMemoryMergeRepository()
 	repository.Seed(input)
 	_, err := (&MergeService{Repository: repository, Clock: func() time.Time { return now }}).Merge(context.Background(), input.ID)

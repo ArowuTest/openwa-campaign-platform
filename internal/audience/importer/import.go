@@ -45,6 +45,7 @@ const (
 type UpdatePolicy string
 
 const (
+	UpdateInsertOnly     UpdatePolicy = "INSERT_ONLY"
 	UpdateFillNull       UpdatePolicy = "FILL_NULL"
 	UpdateNewestSource   UpdatePolicy = "NEWEST_SOURCE"
 	UpdateTrustedSource  UpdatePolicy = "TRUSTED_SOURCE"
@@ -195,7 +196,7 @@ func ValidateIdempotencyKey(value string) error {
 
 func validUpdatePolicy(value UpdatePolicy) bool {
 	switch value {
-	case UpdateFillNull, UpdateNewestSource, UpdateTrustedSource, UpdateManualConflict:
+	case UpdateInsertOnly, UpdateFillNull, UpdateNewestSource, UpdateTrustedSource, UpdateManualConflict:
 		return true
 	default:
 		return false

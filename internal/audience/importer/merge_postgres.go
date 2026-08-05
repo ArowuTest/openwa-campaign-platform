@@ -77,7 +77,7 @@ func (r *PostgreSQLMergeRepository) mergeOnce(ctx context.Context, importID stri
 	if basis.MalwareStatus != string(MalwareClean) || !basis.ContentSignatureValid {
 		return MergeResult{}, ErrImportScanRequired
 	}
-	if basis.UpdatePolicy != UpdateNewestSource && basis.UpdatePolicy != UpdateFillNull {
+	if basis.UpdatePolicy != UpdateInsertOnly && basis.UpdatePolicy != UpdateNewestSource && basis.UpdatePolicy != UpdateFillNull && basis.UpdatePolicy != UpdateTrustedSource && basis.UpdatePolicy != UpdateManualConflict {
 		return MergeResult{}, ErrUnsupportedUpdatePolicy
 	}
 	var evidenceCount, unsafeEvidence int
@@ -103,8 +103,19 @@ func (r *PostgreSQLMergeRepository) mergeOnce(ctx context.Context, importID stri
 
 	result := MergeResult{}
 	upsertSQL := upsertContactsNewestSQL
-	if basis.UpdatePolicy == UpdateFillNull {
+	if basis.UpdatePolicy == UpdateInsertOnly {
+		upsertSQL = insertContactsOnlySQL
+	}
+	if basis.UpdatePolicy == UpdateFillNull || basis.UpdatePolicy == UpdateManualConflict {
 		upsertSQL = upsertContactsFillNullSQL
+	}
+	if basis.UpdatePolicy == UpdateTrustedSource {
+		upsertSQL = upsertContactsTrustedSQL
+	}
+	if basis.UpdatePolicy == UpdateManualConflict {
+		if err := tx.QueryRowContext(ctx, insertProfileConflictsSQL, importID, now.UTC()).Scan(&result.Conflicts); err != nil {
+			return MergeResult{}, fmt.Errorf("capture profile conflicts: %w", err)
+		}
 	}
 	if err := tx.QueryRowContext(ctx, upsertSQL, importID, now.UTC()).Scan(&result.InsertedContacts, &result.UpdatedContacts); err != nil {
 		return MergeResult{}, fmt.Errorf("merge canonical contacts: %w", err)
@@ -118,7 +129,7 @@ func (r *PostgreSQLMergeRepository) mergeOnce(ctx context.Context, importID stri
 	if err := tx.QueryRowContext(ctx, insertConsentGrantsSQL, importID, now.UTC()).Scan(&result.ConsentGrants); err != nil {
 		return MergeResult{}, fmt.Errorf("merge consent grants: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO audience_import_merge_results(audience_import_id,inserted_contacts,updated_contacts,consent_grants,source_links,profile_history,completed_at) VALUES($1::uuid,$2,$3,$4,$5,$6,$7) ON CONFLICT(audience_import_id) DO NOTHING`, importID, result.InsertedContacts, result.UpdatedContacts, result.ConsentGrants, result.SourceLinks, result.ProfileHistory, now.UTC()); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO audience_import_merge_results(audience_import_id,inserted_contacts,updated_contacts,consent_grants,source_links,profile_history,conflicts,completed_at) VALUES($1::uuid,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(audience_import_id) DO NOTHING`, importID, result.InsertedContacts, result.UpdatedContacts, result.ConsentGrants, result.SourceLinks, result.ProfileHistory, result.Conflicts, now.UTC()); err != nil {
 		return MergeResult{}, fmt.Errorf("store import merge result: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `UPDATE audience_imports SET status=CASE WHEN invalid_rows>0 THEN 'COMPLETED_WITH_EXCEPTIONS' ELSE 'COMPLETED' END,inserted_contacts=$2,updated_contacts=$3,completed_at=$4,failure_reason=NULL,updated_at=$4,version=version+1 WHERE id=$1::uuid AND status='IMPORTING'`, importID, result.InsertedContacts, result.UpdatedContacts, now.UTC()); err != nil {
@@ -152,7 +163,7 @@ FOR UPDATE OF ai`
 
 func loadMergeResult(ctx context.Context, tx *sql.Tx, importID string) (MergeResult, bool, error) {
 	var v MergeResult
-	err := tx.QueryRowContext(ctx, `SELECT inserted_contacts,updated_contacts,consent_grants,source_links,profile_history FROM audience_import_merge_results WHERE audience_import_id=$1::uuid`, importID).Scan(&v.InsertedContacts, &v.UpdatedContacts, &v.ConsentGrants, &v.SourceLinks, &v.ProfileHistory)
+	err := tx.QueryRowContext(ctx, `SELECT inserted_contacts,updated_contacts,consent_grants,source_links,profile_history,conflicts FROM audience_import_merge_results WHERE audience_import_id=$1::uuid`, importID).Scan(&v.InsertedContacts, &v.UpdatedContacts, &v.ConsentGrants, &v.SourceLinks, &v.ProfileHistory, &v.Conflicts)
 	if errors.Is(err, sql.ErrNoRows) {
 		return MergeResult{}, false, nil
 	}
@@ -199,6 +210,40 @@ basis AS MATERIALIZED (
    gender_code=CASE WHEN excluded.gender_code IS NOT NULL AND excluded.profile_recorded_at>=contacts.profile_recorded_at THEN excluded.gender_code ELSE contacts.gender_code END,
    profile_recorded_at=GREATEST(contacts.profile_recorded_at,excluded.profile_recorded_at),
    source_system=excluded.source_system,source_record_id=excluded.source_record_id,updated_at=$2
+ RETURNING msisdn_lookup_hmac
+)
+SELECT (SELECT count(*) FROM merged)-(SELECT count(*) FROM existing),(SELECT count(*) FROM existing)`
+
+const upsertContactsTrustedSQL = resolvedStagingCTE + `,
+basis AS MATERIALIZED (
+ SELECT ai.organisation_id,coalesce(ai.source_system,'AUDIENCE_IMPORT') AS source_system,
+        coalesce(p.trust_level,0) AS incoming_trust
+ FROM audience_imports ai
+ LEFT JOIN audience_source_trust_policies p ON p.organisation_id=ai.organisation_id
+   AND p.source_system=upper(coalesce(ai.source_system,'AUDIENCE_IMPORT'))
+ WHERE ai.id=$1::uuid
+), existing AS MATERIALIZED (
+ SELECT ct.msisdn_lookup_hmac FROM contacts ct JOIN resolved r ON r.msisdn_lookup_hmac=ct.msisdn_lookup_hmac
+), merged AS (
+ INSERT INTO contacts(encrypted_msisdn,msisdn_lookup_hmac,masked_msisdn,country_id,state_id,lga_id,reported_age,age_recorded_at,age_source,age_verified,gender_code,status,source_system,source_record_id,profile_recorded_at,created_at,updated_at)
+ SELECT encrypted_msisdn,msisdn_lookup_hmac,masked_msisdn,country_id,state_id,lga_id,reported_age,age_recorded_at,
+        CASE WHEN reported_age IS NULL THEN NULL ELSE 'SELF_DECLARED_IMPORT' END,false,gender_code,'ACTIVE',
+        b.source_system,$1::text,r.profile_recorded_at,$2,$2
+ FROM resolved r CROSS JOIN basis b
+ ON CONFLICT(msisdn_lookup_hmac) DO UPDATE SET
+   encrypted_msisdn=CASE WHEN (SELECT incoming_trust FROM basis)>=coalesce((SELECT trust_level FROM audience_source_trust_policies p WHERE p.organisation_id=(SELECT organisation_id FROM basis) AND p.source_system=upper(coalesce(contacts.source_system,'AUDIENCE_IMPORT'))),0) THEN excluded.encrypted_msisdn ELSE contacts.encrypted_msisdn END,
+   masked_msisdn=CASE WHEN (SELECT incoming_trust FROM basis)>=coalesce((SELECT trust_level FROM audience_source_trust_policies p WHERE p.organisation_id=(SELECT organisation_id FROM basis) AND p.source_system=upper(coalesce(contacts.source_system,'AUDIENCE_IMPORT'))),0) THEN excluded.masked_msisdn ELSE contacts.masked_msisdn END,
+   country_id=CASE WHEN excluded.country_id IS NOT NULL AND ((SELECT incoming_trust FROM basis)>coalesce((SELECT trust_level FROM audience_source_trust_policies p WHERE p.organisation_id=(SELECT organisation_id FROM basis) AND p.source_system=upper(coalesce(contacts.source_system,'AUDIENCE_IMPORT'))),0) OR ((SELECT incoming_trust FROM basis)=coalesce((SELECT trust_level FROM audience_source_trust_policies p WHERE p.organisation_id=(SELECT organisation_id FROM basis) AND p.source_system=upper(coalesce(contacts.source_system,'AUDIENCE_IMPORT'))),0) AND excluded.profile_recorded_at>=contacts.profile_recorded_at)) THEN excluded.country_id ELSE contacts.country_id END,
+   state_id=CASE WHEN excluded.state_id IS NOT NULL AND ((SELECT incoming_trust FROM basis)>coalesce((SELECT trust_level FROM audience_source_trust_policies p WHERE p.organisation_id=(SELECT organisation_id FROM basis) AND p.source_system=upper(coalesce(contacts.source_system,'AUDIENCE_IMPORT'))),0) OR ((SELECT incoming_trust FROM basis)=coalesce((SELECT trust_level FROM audience_source_trust_policies p WHERE p.organisation_id=(SELECT organisation_id FROM basis) AND p.source_system=upper(coalesce(contacts.source_system,'AUDIENCE_IMPORT'))),0) AND excluded.profile_recorded_at>=contacts.profile_recorded_at)) THEN excluded.state_id ELSE contacts.state_id END,
+   lga_id=CASE WHEN excluded.lga_id IS NOT NULL AND ((SELECT incoming_trust FROM basis)>coalesce((SELECT trust_level FROM audience_source_trust_policies p WHERE p.organisation_id=(SELECT organisation_id FROM basis) AND p.source_system=upper(coalesce(contacts.source_system,'AUDIENCE_IMPORT'))),0) OR ((SELECT incoming_trust FROM basis)=coalesce((SELECT trust_level FROM audience_source_trust_policies p WHERE p.organisation_id=(SELECT organisation_id FROM basis) AND p.source_system=upper(coalesce(contacts.source_system,'AUDIENCE_IMPORT'))),0) AND excluded.profile_recorded_at>=contacts.profile_recorded_at)) THEN excluded.lga_id ELSE contacts.lga_id END,
+   reported_age=CASE WHEN excluded.reported_age IS NOT NULL AND ((SELECT incoming_trust FROM basis)>coalesce((SELECT trust_level FROM audience_source_trust_policies p WHERE p.organisation_id=(SELECT organisation_id FROM basis) AND p.source_system=upper(coalesce(contacts.source_system,'AUDIENCE_IMPORT'))),0) OR ((SELECT incoming_trust FROM basis)=coalesce((SELECT trust_level FROM audience_source_trust_policies p WHERE p.organisation_id=(SELECT organisation_id FROM basis) AND p.source_system=upper(coalesce(contacts.source_system,'AUDIENCE_IMPORT'))),0) AND (contacts.age_recorded_at IS NULL OR excluded.age_recorded_at>=contacts.age_recorded_at))) THEN excluded.reported_age ELSE contacts.reported_age END,
+   age_recorded_at=CASE WHEN excluded.reported_age IS NOT NULL AND ((SELECT incoming_trust FROM basis)>coalesce((SELECT trust_level FROM audience_source_trust_policies p WHERE p.organisation_id=(SELECT organisation_id FROM basis) AND p.source_system=upper(coalesce(contacts.source_system,'AUDIENCE_IMPORT'))),0) OR ((SELECT incoming_trust FROM basis)=coalesce((SELECT trust_level FROM audience_source_trust_policies p WHERE p.organisation_id=(SELECT organisation_id FROM basis) AND p.source_system=upper(coalesce(contacts.source_system,'AUDIENCE_IMPORT'))),0) AND (contacts.age_recorded_at IS NULL OR excluded.age_recorded_at>=contacts.age_recorded_at))) THEN excluded.age_recorded_at ELSE contacts.age_recorded_at END,
+   age_source=CASE WHEN excluded.reported_age IS NOT NULL AND ((SELECT incoming_trust FROM basis)>coalesce((SELECT trust_level FROM audience_source_trust_policies p WHERE p.organisation_id=(SELECT organisation_id FROM basis) AND p.source_system=upper(coalesce(contacts.source_system,'AUDIENCE_IMPORT'))),0) OR ((SELECT incoming_trust FROM basis)=coalesce((SELECT trust_level FROM audience_source_trust_policies p WHERE p.organisation_id=(SELECT organisation_id FROM basis) AND p.source_system=upper(coalesce(contacts.source_system,'AUDIENCE_IMPORT'))),0) AND (contacts.age_recorded_at IS NULL OR excluded.age_recorded_at>=contacts.age_recorded_at))) THEN excluded.age_source ELSE contacts.age_source END,
+   gender_code=CASE WHEN excluded.gender_code IS NOT NULL AND ((SELECT incoming_trust FROM basis)>coalesce((SELECT trust_level FROM audience_source_trust_policies p WHERE p.organisation_id=(SELECT organisation_id FROM basis) AND p.source_system=upper(coalesce(contacts.source_system,'AUDIENCE_IMPORT'))),0) OR ((SELECT incoming_trust FROM basis)=coalesce((SELECT trust_level FROM audience_source_trust_policies p WHERE p.organisation_id=(SELECT organisation_id FROM basis) AND p.source_system=upper(coalesce(contacts.source_system,'AUDIENCE_IMPORT'))),0) AND excluded.profile_recorded_at>=contacts.profile_recorded_at)) THEN excluded.gender_code ELSE contacts.gender_code END,
+   profile_recorded_at=CASE WHEN (SELECT incoming_trust FROM basis)>coalesce((SELECT trust_level FROM audience_source_trust_policies p WHERE p.organisation_id=(SELECT organisation_id FROM basis) AND p.source_system=upper(coalesce(contacts.source_system,'AUDIENCE_IMPORT'))),0) OR ((SELECT incoming_trust FROM basis)=coalesce((SELECT trust_level FROM audience_source_trust_policies p WHERE p.organisation_id=(SELECT organisation_id FROM basis) AND p.source_system=upper(coalesce(contacts.source_system,'AUDIENCE_IMPORT'))),0) AND excluded.profile_recorded_at>=contacts.profile_recorded_at) THEN excluded.profile_recorded_at ELSE contacts.profile_recorded_at END,
+   source_system=CASE WHEN (SELECT incoming_trust FROM basis)>coalesce((SELECT trust_level FROM audience_source_trust_policies p WHERE p.organisation_id=(SELECT organisation_id FROM basis) AND p.source_system=upper(coalesce(contacts.source_system,'AUDIENCE_IMPORT'))),0) OR ((SELECT incoming_trust FROM basis)=coalesce((SELECT trust_level FROM audience_source_trust_policies p WHERE p.organisation_id=(SELECT organisation_id FROM basis) AND p.source_system=upper(coalesce(contacts.source_system,'AUDIENCE_IMPORT'))),0) AND excluded.profile_recorded_at>=contacts.profile_recorded_at) THEN excluded.source_system ELSE contacts.source_system END,
+   source_record_id=CASE WHEN (SELECT incoming_trust FROM basis)>coalesce((SELECT trust_level FROM audience_source_trust_policies p WHERE p.organisation_id=(SELECT organisation_id FROM basis) AND p.source_system=upper(coalesce(contacts.source_system,'AUDIENCE_IMPORT'))),0) OR ((SELECT incoming_trust FROM basis)=coalesce((SELECT trust_level FROM audience_source_trust_policies p WHERE p.organisation_id=(SELECT organisation_id FROM basis) AND p.source_system=upper(coalesce(contacts.source_system,'AUDIENCE_IMPORT'))),0) AND excluded.profile_recorded_at>=contacts.profile_recorded_at) THEN excluded.source_record_id ELSE contacts.source_record_id END,
+   updated_at=$2
  RETURNING msisdn_lookup_hmac
 )
 SELECT (SELECT count(*) FROM merged)-(SELECT count(*) FROM existing),(SELECT count(*) FROM existing)`
@@ -289,3 +334,35 @@ WITH inserted AS (
  RETURNING 1
 )
 SELECT count(*) FROM inserted`
+
+const insertProfileConflictsSQL = resolvedStagingCTE + `,
+conflicts AS (
+ INSERT INTO audience_profile_conflicts(audience_import_id,contact_id,masked_msisdn,field_name,existing_value,incoming_value,status,version,created_at)
+ SELECT $1::uuid,ct.id,r.masked_msisdn,v.field_name,v.existing_value,v.incoming_value,'PENDING',1,$2
+ FROM resolved r
+ JOIN contacts ct ON ct.msisdn_lookup_hmac=r.msisdn_lookup_hmac
+ CROSS JOIN LATERAL (VALUES
+   ('country_id',ct.country_id::text,r.country_id::text),
+   ('state_id',ct.state_id::text,r.state_id::text),
+   ('lga_id',ct.lga_id::text,r.lga_id::text),
+   ('reported_age',ct.reported_age::text,r.reported_age::text),
+   ('gender_code',ct.gender_code,r.gender_code)
+ ) AS v(field_name,existing_value,incoming_value)
+ WHERE v.existing_value IS NOT NULL AND v.incoming_value IS NOT NULL AND v.existing_value<>v.incoming_value
+ ON CONFLICT(audience_import_id,contact_id,field_name) DO NOTHING
+ RETURNING 1
+) SELECT count(*) FROM conflicts`
+
+const insertContactsOnlySQL = resolvedStagingCTE + `,
+basis AS MATERIALIZED (
+ SELECT coalesce(source_system,'AUDIENCE_IMPORT') AS source_system
+ FROM audience_imports WHERE id=$1::uuid
+), inserted AS (
+ INSERT INTO contacts(encrypted_msisdn,msisdn_lookup_hmac,masked_msisdn,country_id,state_id,lga_id,reported_age,age_recorded_at,age_source,age_verified,gender_code,status,source_system,source_record_id,profile_recorded_at,created_at,updated_at)
+ SELECT encrypted_msisdn,msisdn_lookup_hmac,masked_msisdn,country_id,state_id,lga_id,reported_age,age_recorded_at,
+        CASE WHEN reported_age IS NULL THEN NULL ELSE 'SELF_DECLARED_IMPORT' END,false,gender_code,'ACTIVE',
+        b.source_system,$1::text,r.profile_recorded_at,$2,$2
+ FROM resolved r CROSS JOIN basis b
+ ON CONFLICT(msisdn_lookup_hmac) DO NOTHING
+ RETURNING 1
+) SELECT count(*),0 FROM inserted`

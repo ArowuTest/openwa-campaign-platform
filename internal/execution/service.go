@@ -96,6 +96,17 @@ func (c *Coordinator) Forecast(ctx context.Context, id string) (ExecutionForecas
 	return BuildExecutionForecast(evidence, metrics), nil
 }
 func (c *Coordinator) Start(ctx context.Context, id, actor, reason string, expected int64) (campaign.Campaign, CapacityEvidence, error) {
+	entity, err := c.Campaigns.Get(ctx, strings.TrimSpace(id))
+	if err != nil {
+		return campaign.Campaign{}, CapacityEvidence{}, err
+	}
+	window, err := entity.EvaluateDispatchWindow(c.now())
+	if err != nil {
+		return campaign.Campaign{}, CapacityEvidence{}, err
+	}
+	if !window.Allowed {
+		return campaign.Campaign{}, CapacityEvidence{}, fmt.Errorf("campaign dispatch window blocked: %s", window.Reason)
+	}
 	ev, err := c.Plan(ctx, id)
 	if err != nil {
 		return campaign.Campaign{}, CapacityEvidence{}, err
@@ -103,7 +114,7 @@ func (c *Coordinator) Start(ctx context.Context, id, actor, reason string, expec
 	if ev.Decision != DecisionAdmit {
 		return campaign.Campaign{}, ev, fmt.Errorf("campaign admission decision is %s: %v", ev.Decision, ev.Reasons)
 	}
-	entity, err := c.Campaigns.Transition(ctx, id, campaign.TransitionInput{Action: campaign.ActionStartDispatch, ActorID: actor, Reason: reason, ExpectedVersion: expected})
+	entity, err = c.Campaigns.Transition(ctx, id, campaign.TransitionInput{Action: campaign.ActionStartDispatch, ActorID: actor, Reason: reason, ExpectedVersion: expected})
 	if err != nil {
 		return campaign.Campaign{}, ev, err
 	}
@@ -118,6 +129,17 @@ func (c *Coordinator) Pause(ctx context.Context, id, actor, reason string, expec
 	return entity, err
 }
 func (c *Coordinator) Resume(ctx context.Context, id, actor, reason string, expected int64) (campaign.Campaign, CapacityEvidence, error) {
+	entity, err := c.Campaigns.Get(ctx, strings.TrimSpace(id))
+	if err != nil {
+		return campaign.Campaign{}, CapacityEvidence{}, err
+	}
+	window, err := entity.EvaluateDispatchWindow(c.now())
+	if err != nil {
+		return campaign.Campaign{}, CapacityEvidence{}, err
+	}
+	if !window.Allowed {
+		return campaign.Campaign{}, CapacityEvidence{}, fmt.Errorf("campaign dispatch window blocked: %s", window.Reason)
+	}
 	ev, err := c.Plan(ctx, id)
 	if err != nil {
 		return campaign.Campaign{}, CapacityEvidence{}, err
@@ -125,7 +147,7 @@ func (c *Coordinator) Resume(ctx context.Context, id, actor, reason string, expe
 	if ev.Decision != DecisionAdmit {
 		return campaign.Campaign{}, ev, fmt.Errorf("campaign resume admission decision is %s: %v", ev.Decision, ev.Reasons)
 	}
-	entity, err := c.Campaigns.Transition(ctx, id, campaign.TransitionInput{Action: campaign.ActionResume, ActorID: actor, Reason: reason, ExpectedVersion: expected})
+	entity, err = c.Campaigns.Transition(ctx, id, campaign.TransitionInput{Action: campaign.ActionResume, ActorID: actor, Reason: reason, ExpectedVersion: expected})
 	if err == nil {
 		_ = c.Store.RecordEvent(ctx, id, "CAMPAIGN_RESUMED", actor, reason, map[string]any{"forecastCompletionAt": ev.ForecastCompletionAt}, c.now())
 	}

@@ -57,6 +57,26 @@ func (s *Service) ListByCampaign(ctx context.Context, campaignID string) ([]Vers
 	return s.repository.ListByCampaign(ctx, campaignID)
 }
 
+func (s *Service) Preview(ctx context.Context, identifier string, input RenderInput) (RenderResult, error) {
+	version, err := s.Get(ctx, identifier)
+	if err != nil {
+		return RenderResult{}, err
+	}
+	input.Mode = RenderPreview
+	return Render(version, input)
+}
+
+func (s *Service) RenderForDispatch(ctx context.Context, identifier string, values map[string]string) (RenderResult, error) {
+	version, err := s.Get(ctx, identifier)
+	if err != nil {
+		return RenderResult{}, err
+	}
+	if version.Status != StatusApproved {
+		return RenderResult{}, errors.New("only approved message versions may be rendered for dispatch")
+	}
+	return Render(version, RenderInput{Values: values, Mode: RenderDispatch})
+}
+
 func (s *Service) Approve(ctx context.Context, identifier, actorID, expectedContentHash string) (Version, error) {
 	if strings.TrimSpace(actorID) == "" || strings.TrimSpace(expectedContentHash) == "" {
 		return Version{}, errors.New("approver and expected content hash are required")

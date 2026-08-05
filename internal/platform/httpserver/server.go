@@ -212,6 +212,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/campaigns/{id}/message-versions", s.require("campaign.read", s.listMessageVersions))
 	mux.Handle("POST /api/v1/campaigns/{id}/message-versions", s.require("campaign.write", s.createMessageVersion))
 	mux.Handle("POST /api/v1/message-versions/{id}/approve", s.require("campaign.approve", s.approveMessageVersion))
+	mux.Handle("POST /api/v1/message-versions/{id}/preview", s.require("campaign.read", s.previewMessageVersion))
 	mux.Handle("POST /api/v1/campaigns/{id}/audience-snapshots", s.require("audience.write", s.createAudienceSnapshot))
 	mux.Handle("POST /api/v1/campaigns/{id}/audience-snapshots/materialise", s.require("audience.write", s.materialiseAudienceSnapshot))
 	mux.Handle("POST /api/v1/campaigns/{id}/audience-materialisations", s.require("audience.write", s.scheduleAudienceMaterialisation))
@@ -1840,6 +1841,37 @@ func (s *Server) createMessageVersion(w http.ResponseWriter, r *http.Request) {
 
 type approveMessageVersionRequest struct {
 	ExpectedContentHash string `json:"expectedContentHash"`
+}
+
+type previewMessageVersionRequest struct {
+	Values        map[string]string `json:"values"`
+	MaskSensitive *bool             `json:"maskSensitive,omitempty"`
+}
+
+func (s *Server) previewMessageVersion(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Messages == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "MESSAGE_SERVICE_UNAVAILABLE", "Message versioning is unavailable.", nil)
+		return
+	}
+	var input previewMessageVersionRequest
+	if err := httpx.DecodeJSON(w, r, 1<<20, &input); err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The preview request is invalid.", map[string]any{"detail": err.Error()})
+		return
+	}
+	maskSensitive := true
+	if input.MaskSensitive != nil {
+		maskSensitive = *input.MaskSensitive
+	}
+	result, err := s.deps.Messages.Preview(r.Context(), r.PathValue("id"), message.RenderInput{Values: input.Values, MaskSensitive: maskSensitive})
+	if errors.Is(err, message.ErrNotFound) {
+		httpx.WriteError(w, r, http.StatusNotFound, "MESSAGE_VERSION_NOT_FOUND", "The message version was not found.", nil)
+		return
+	}
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "MESSAGE_PREVIEW_INVALID", "The message preview could not be rendered.", map[string]any{"detail": err.Error(), "result": result})
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) approveMessageVersion(w http.ResponseWriter, r *http.Request) {

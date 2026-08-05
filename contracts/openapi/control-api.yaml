@@ -1303,6 +1303,30 @@ paths:
         '400': { description: Invalid request }
         '401': { description: Authentication required }
         '403': { description: Permission denied }
+  /message-versions/{id}/preview:
+    post:
+      operationId: previewMessageVersion
+      summary: Render a masked representative preview of a message version
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                values:
+                  type: object
+                  additionalProperties: { type: string }
+                maskSensitive: { type: boolean, default: true }
+      responses:
+        '200': { description: Preview rendered }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+        '404': { description: Message version not found }
+        '422': { description: Template cannot be rendered }
   /sender-nodes:
     get:
       operationId: listSenderNodes

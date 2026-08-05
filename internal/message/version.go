@@ -101,6 +101,9 @@ func NewDraft(input Input, now time.Time) (Version, error) {
 		return Version{}, err
 	}
 	v := Version{ID: identifier, CampaignID: strings.TrimSpace(input.CampaignID), Version: input.Version, Type: input.Type, Body: strings.TrimSpace(input.Body), Media: cloneMedia(input.Media), Links: append([]Link(nil), input.Links...), Variables: append([]Variable(nil), input.Variables...), IdempotencyKey: strings.TrimSpace(input.IdempotencyKey), Status: StatusDraft, CreatedBy: input.CreatedBy, CreatedAt: now.UTC()}
+	if err := ValidateTemplate(v); err != nil {
+		return Version{}, err
+	}
 	v.ContentHash = hash(v)
 	return v, nil
 }

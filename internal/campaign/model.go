@@ -59,6 +59,9 @@ type Campaign struct {
 	Status                      Status             `json:"status"`
 	RequestedStartAt            *time.Time         `json:"requestedStartAt,omitempty"`
 	CompletionDeadlineAt        *time.Time         `json:"completionDeadlineAt,omitempty"`
+	Timezone                    string             `json:"timezone"`
+	QuietHoursStart             string             `json:"quietHoursStart,omitempty"`
+	QuietHoursEnd               string             `json:"quietHoursEnd,omitempty"`
 	MaximumUniqueRecipients     int64              `json:"maximumUniqueRecipients"`
 	MaximumMessagesPerRecipient int                `json:"maximumMessagesPerRecipient"`
 	AudienceSnapshotID          string             `json:"audienceSnapshotId,omitempty"`
@@ -84,6 +87,9 @@ type CreateInput struct {
 	ConsentReviewID             string             `json:"consentReviewId"`
 	RequestedStartAt            *time.Time         `json:"requestedStartAt"`
 	CompletionDeadlineAt        *time.Time         `json:"completionDeadlineAt"`
+	Timezone                    string             `json:"timezone"`
+	QuietHoursStart             string             `json:"quietHoursStart"`
+	QuietHoursEnd               string             `json:"quietHoursEnd"`
 	MaximumUniqueRecipients     int64              `json:"maximumUniqueRecipients"`
 	MaximumMessagesPerRecipient int                `json:"maximumMessagesPerRecipient"`
 	SenderPool                  string             `json:"senderPool"`
@@ -129,6 +135,10 @@ func New(input CreateInput, now time.Time) (Campaign, error) {
 	if input.RequestedStartAt != nil && input.CompletionDeadlineAt != nil && !input.CompletionDeadlineAt.After(*input.RequestedStartAt) {
 		return Campaign{}, errors.New("completion deadline must be after the requested start time")
 	}
+	timezone, quietStart, quietEnd, err := validateDispatchWindow(input.Timezone, input.QuietHoursStart, input.QuietHoursEnd)
+	if err != nil {
+		return Campaign{}, err
+	}
 	identifier, err := id.New()
 	if err != nil {
 		return Campaign{}, err
@@ -142,6 +152,9 @@ func New(input CreateInput, now time.Time) (Campaign, error) {
 		Status:                      StatusDraft,
 		RequestedStartAt:            input.RequestedStartAt,
 		CompletionDeadlineAt:        input.CompletionDeadlineAt,
+		Timezone:                    timezone,
+		QuietHoursStart:             quietStart,
+		QuietHoursEnd:               quietEnd,
 		MaximumUniqueRecipients:     input.MaximumUniqueRecipients,
 		MaximumMessagesPerRecipient: input.MaximumMessagesPerRecipient,
 		SenderPool:                  strings.TrimSpace(input.SenderPool),
@@ -151,6 +164,76 @@ func New(input CreateInput, now time.Time) (Campaign, error) {
 		UpdatedAt:                   now.UTC(),
 		Version:                     1,
 	}, nil
+}
+
+func validateDispatchWindow(timezone, quietStart, quietEnd string) (string, string, string, error) {
+	timezone = strings.TrimSpace(timezone)
+	if timezone == "" {
+		timezone = "UTC"
+	}
+	if _, err := time.LoadLocation(timezone); err != nil {
+		return "", "", "", errors.New("campaign timezone must be a valid IANA timezone")
+	}
+	quietStart = strings.TrimSpace(quietStart)
+	quietEnd = strings.TrimSpace(quietEnd)
+	if (quietStart == "") != (quietEnd == "") {
+		return "", "", "", errors.New("quiet-hours start and end must be supplied together")
+	}
+	if quietStart != "" {
+		if _, err := time.Parse("15:04", quietStart); err != nil {
+			return "", "", "", errors.New("quiet-hours start must use HH:MM")
+		}
+		if _, err := time.Parse("15:04", quietEnd); err != nil {
+			return "", "", "", errors.New("quiet-hours end must use HH:MM")
+		}
+		if quietStart == quietEnd {
+			return "", "", "", errors.New("quiet-hours start and end cannot be equal")
+		}
+	}
+	return timezone, quietStart, quietEnd, nil
+}
+
+type DispatchWindowDecision struct {
+	Allowed   bool      `json:"allowed"`
+	Reason    string    `json:"reason,omitempty"`
+	LocalTime time.Time `json:"localTime"`
+}
+
+func (c Campaign) EvaluateDispatchWindow(now time.Time) (DispatchWindowDecision, error) {
+	timezone, quietStart, quietEnd, err := validateDispatchWindow(c.Timezone, c.QuietHoursStart, c.QuietHoursEnd)
+	if err != nil {
+		return DispatchWindowDecision{}, err
+	}
+	now = now.UTC()
+	location, _ := time.LoadLocation(timezone)
+	local := now.In(location)
+	decision := DispatchWindowDecision{Allowed: true, LocalTime: local}
+	if c.RequestedStartAt != nil && now.Before(c.RequestedStartAt.UTC()) {
+		decision.Allowed, decision.Reason = false, "CAMPAIGN_NOT_STARTED"
+		return decision, nil
+	}
+	if c.CompletionDeadlineAt != nil && !now.Before(c.CompletionDeadlineAt.UTC()) {
+		decision.Allowed, decision.Reason = false, "CAMPAIGN_DEADLINE_PASSED"
+		return decision, nil
+	}
+	if quietStart == "" {
+		return decision, nil
+	}
+	start, _ := time.Parse("15:04", quietStart)
+	end, _ := time.Parse("15:04", quietEnd)
+	minute := local.Hour()*60 + local.Minute()
+	startMinute := start.Hour()*60 + start.Minute()
+	endMinute := end.Hour()*60 + end.Minute()
+	quiet := false
+	if startMinute < endMinute {
+		quiet = minute >= startMinute && minute < endMinute
+	} else {
+		quiet = minute >= startMinute || minute < endMinute
+	}
+	if quiet {
+		decision.Allowed, decision.Reason = false, "CAMPAIGN_QUIET_HOURS"
+	}
+	return decision, nil
 }
 
 func (c Campaign) Transition(input TransitionInput, now time.Time) (Campaign, error) {
@@ -269,6 +352,9 @@ type MaterialAmendmentInput struct {
 	ChangeSchedule          bool               `json:"changeSchedule"`
 	RequestedStartAt        *time.Time         `json:"requestedStartAt"`
 	CompletionDeadlineAt    *time.Time         `json:"completionDeadlineAt"`
+	Timezone                string             `json:"timezone"`
+	QuietHoursStart         string             `json:"quietHoursStart"`
+	QuietHoursEnd           string             `json:"quietHoursEnd"`
 	ChangeAudience          bool               `json:"changeAudience"`
 	AudienceSnapshotID      string             `json:"audienceSnapshotId"`
 	AudienceSnapshotHash    string             `json:"-"`
@@ -317,7 +403,16 @@ func (c Campaign) AmendMaterial(input MaterialAmendmentInput, now time.Time) (Ca
 		if input.RequestedStartAt == nil || input.CompletionDeadlineAt == nil || !input.CompletionDeadlineAt.After(*input.RequestedStartAt) {
 			return Campaign{}, MaterialChangeEvent{}, errors.New("schedule amendment requires a start time and later completion deadline")
 		}
+		timezone := input.Timezone
+		if strings.TrimSpace(timezone) == "" {
+			timezone = c.Timezone
+		}
+		timezone, quietStart, quietEnd, err := validateDispatchWindow(timezone, input.QuietHoursStart, input.QuietHoursEnd)
+		if err != nil {
+			return Campaign{}, MaterialChangeEvent{}, err
+		}
 		c.RequestedStartAt, c.CompletionDeadlineAt = input.RequestedStartAt, input.CompletionDeadlineAt
+		c.Timezone, c.QuietHoursStart, c.QuietHoursEnd = timezone, quietStart, quietEnd
 		changed = append(changed, "SCHEDULE")
 	}
 	if input.ChangeTransport {

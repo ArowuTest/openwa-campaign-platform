@@ -3,12 +3,15 @@ package dispatch
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
 	"campaign-platform/internal/delivery"
+	"campaign-platform/internal/message"
 	"campaign-platform/internal/sender"
 	sharedcrypto "campaign-platform/internal/shared/crypto"
 )
@@ -35,15 +38,23 @@ func (l *PostgreSQLMaterialLoader) Load(ctx context.Context, recipient delivery.
 		now = l.Clock().UTC()
 	}
 	var encrypted []byte
-	var messageType, body, mediaObjectKey, senderPool string
+	var messageType, body, mediaObjectKey, senderPool, maskedMSISDN string
+	var campaignName, organisationName, country, state, lga, gender, language string
+	var reportedAge sql.NullInt64
+	var variablesJSON []byte
 	const query = `
-SELECT c.encrypted_msisdn,mv.message_type,coalesce(mv.body,''),coalesce(mv.media_object_key,''),coalesce(cp.sender_pool,'')
+SELECT c.encrypted_msisdn,c.masked_msisdn,mv.message_type,coalesce(mv.body,''),coalesce(mv.media_object_key,''),mv.variables,coalesce(cp.sender_pool,''),
+       cp.name,o.legal_name,coalesce(country.name,''),coalesce(state.name,''),coalesce(lga.name,''),c.reported_age,coalesce(c.gender_code,''),coalesce(c.preferred_language_code,'')
 FROM campaign_recipients cr
 JOIN contacts c ON c.id=cr.contact_id
-JOIN message_versions mv ON mv.id=cr.message_version_id
+JOIN message_versions mv ON mv.id=cr.message_version_id AND mv.status='APPROVED'
 JOIN campaigns cp ON cp.id=cr.campaign_id
+JOIN organisations o ON o.id=cp.organisation_id
+LEFT JOIN countries country ON country.id=c.country_id
+LEFT JOIN administrative_areas state ON state.id=c.state_id
+LEFT JOIN administrative_areas lga ON lga.id=c.lga_id
 WHERE cr.id=$1::uuid AND cr.campaign_id=$2::uuid AND cr.contact_id=$3::uuid AND cr.message_version_id=$4::uuid`
-	if err := l.DB.QueryRowContext(ctx, query, recipient.ID, recipient.CampaignID, recipient.ContactID, recipient.MessageVersionID).Scan(&encrypted, &messageType, &body, &mediaObjectKey, &senderPool); err != nil {
+	if err := l.DB.QueryRowContext(ctx, query, recipient.ID, recipient.CampaignID, recipient.ContactID, recipient.MessageVersionID).Scan(&encrypted, &maskedMSISDN, &messageType, &body, &mediaObjectKey, &variablesJSON, &senderPool, &campaignName, &organisationName, &country, &state, &lga, &reportedAge, &gender, &language); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Material{}, delivery.ErrRecipientNotFound
 		}
@@ -64,6 +75,32 @@ WHERE cr.id=$1::uuid AND cr.campaign_id=$2::uuid AND cr.contact_id=$3::uuid AND 
 	if err != nil {
 		return Material{}, PermanentMaterialError{Err: errors.New("decrypt recipient address")}
 	}
+	var variables []message.Variable
+	if len(variablesJSON) > 0 {
+		if err := json.Unmarshal(variablesJSON, &variables); err != nil {
+			return Material{}, PermanentMaterialError{Err: errors.New("approved message variables are invalid")}
+		}
+	}
+	values := map[string]string{
+		"campaign.name": campaignName, "organisation.name": organisationName,
+		"contact.msisdn_masked": maskedMSISDN, "contact.country": country, "contact.state": state,
+		"contact.lga": lga, "contact.gender": gender, "contact.preferred_language": language,
+	}
+	if reportedAge.Valid {
+		values["contact.reported_age"] = strconv.FormatInt(reportedAge.Int64, 10)
+	}
+	dynamicValues, err := loadDynamicMessageValues(ctx, l.DB, recipient.ContactID)
+	if err != nil {
+		return Material{}, fmt.Errorf("load message attributes: %w", err)
+	}
+	for key, value := range dynamicValues {
+		values[key] = value
+	}
+	rendered, err := message.Render(message.Version{Status: message.StatusApproved, Body: body, Variables: variables}, message.RenderInput{Mode: message.RenderDispatch, Values: values})
+	if err != nil {
+		return Material{}, PermanentMaterialError{Err: fmt.Errorf("render approved message: %w", err)}
+	}
+	body = rendered.Body
 	mappedType, err := gatewayMessageType(messageType)
 	if err != nil {
 		return Material{}, PermanentMaterialError{Err: err}
@@ -86,6 +123,31 @@ WHERE cr.id=$1::uuid AND cr.campaign_id=$2::uuid AND cr.contact_id=$3::uuid AND 
 		}
 	}
 	return Material{GatewayPoolID: gatewayPoolID, SessionID: sessionID, RecipientE164: e164, MessageType: mappedType, Body: body, MediaObjectURL: mediaURL, ClientReference: recipient.ID}, nil
+}
+
+func loadDynamicMessageValues(ctx context.Context, db *sql.DB, contactID string) (map[string]string, error) {
+	rows, err := db.QueryContext(ctx, `
+SELECT lower(ad.code),
+       coalesce(cav.value_text,cav.value_integer::text,cav.value_decimal::text,cav.value_boolean::text,cav.value_date::text,cav.value_json::text,'')
+FROM contact_attribute_values cav
+JOIN attribute_definitions ad ON ad.id=cav.attribute_definition_id
+WHERE cav.contact_id=$1::uuid
+  AND ad.active
+  AND cav.recorded_at=(SELECT max(latest.recorded_at) FROM contact_attribute_values latest WHERE latest.contact_id=cav.contact_id AND latest.attribute_definition_id=cav.attribute_definition_id)`, contactID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	values := map[string]string{}
+	for rows.Next() {
+		var code, value string
+		if err := rows.Scan(&code, &value); err != nil {
+			return nil, err
+		}
+		values["contact."+code] = value
+		values[code] = value
+	}
+	return values, rows.Err()
 }
 
 func gatewayMessageType(value string) (string, error) {
@@ -112,6 +174,8 @@ func (c *PostgreSQLFinalEligibility) Check(ctx context.Context, recipient delive
 	const query = `
 WITH basis AS (
   SELECT cr.contact_id, cp.organisation_id, cp.purpose_id, cp.status AS campaign_status,
+         cp.requested_start_at, cp.completion_deadline_at, coalesce(cp.campaign_timezone,'UTC') AS campaign_timezone,
+         cp.quiet_hours_start, cp.quiet_hours_end,
          ct.status AS contact_status, o.status AS organisation_status,
          rv.status AS review_status, rv.channel AS review_channel, rv.expires_at AS review_expires_at
   FROM campaign_recipients cr
@@ -135,6 +199,18 @@ SELECT CASE
   WHEN b.contact_status <> 'ACTIVE' THEN 'CONTACT_INACTIVE'
   WHEN b.organisation_status <> 'ACTIVE' THEN 'ORGANISATION_INACTIVE'
   WHEN b.campaign_status NOT IN ('SCHEDULED','DISPATCHING') THEN 'CAMPAIGN_NOT_DISPATCHABLE'
+  WHEN b.requested_start_at IS NOT NULL AND $2 < b.requested_start_at THEN 'CAMPAIGN_NOT_STARTED'
+  WHEN b.completion_deadline_at IS NOT NULL AND $2 >= b.completion_deadline_at THEN 'CAMPAIGN_DEADLINE_PASSED'
+  WHEN b.quiet_hours_start IS NOT NULL AND (
+    CASE
+      WHEN b.quiet_hours_start::time < b.quiet_hours_end::time THEN
+        ($2 AT TIME ZONE b.campaign_timezone)::time >= b.quiet_hours_start::time
+        AND ($2 AT TIME ZONE b.campaign_timezone)::time < b.quiet_hours_end::time
+      ELSE
+        ($2 AT TIME ZONE b.campaign_timezone)::time >= b.quiet_hours_start::time
+        OR ($2 AT TIME ZONE b.campaign_timezone)::time < b.quiet_hours_end::time
+    END
+  ) THEN 'CAMPAIGN_QUIET_HOURS'
   WHEN b.review_status <> 'APPROVED' OR b.review_expires_at <= $2 OR upper(b.review_channel) <> 'WHATSAPP' THEN 'CONSENT_REVIEW_INVALID'
   WHEN EXISTS (
     SELECT 1 FROM suppressions sp

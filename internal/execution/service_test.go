@@ -62,3 +62,25 @@ func TestCoordinatorRejectsInsufficientCapacity(t *testing.T) {
 func ptr(v time.Time) *time.Time { return &v }
 
 var _ = errors.New
+
+func TestCoordinatorStartRespectsDispatchWindow(t *testing.T) {
+	now := time.Date(2026, 8, 5, 10, 0, 0, 0, time.UTC)
+	start := now.Add(time.Hour)
+	c := campaign.Campaign{ID: "c", Status: campaign.StatusScheduled, RequestedStartAt: &start, CompletionDeadlineAt: ptr(now.Add(3 * time.Hour)), Timezone: "UTC", EligibleAudienceCount: 10, Version: 1, Transport: campaign.TransportSelection{RoutingMode: campaign.RoutingSenderPool, SenderPoolID: "p", CapacityEvidenceVersion: "v"}}
+	co := &Coordinator{Campaigns: &fakeCampaigns{v: c}, Store: &fakeStore{m: Metrics{Authorised: 10}, rate: 10, daily: 10}, Clock: func() time.Time { return now }}
+	_, _, err := co.Start(context.Background(), "c", "actor", "early start", 1)
+	if err == nil {
+		t.Fatal("campaign started before requested window")
+	}
+}
+
+func TestCoordinatorResumeRespectsQuietHours(t *testing.T) {
+	now := time.Date(2026, 8, 5, 22, 30, 0, 0, time.UTC)
+	start := now.Add(-time.Hour)
+	c := campaign.Campaign{ID: "c", Status: campaign.StatusPaused, RequestedStartAt: &start, CompletionDeadlineAt: ptr(now.Add(3 * time.Hour)), Timezone: "UTC", QuietHoursStart: "22:00", QuietHoursEnd: "07:00", EligibleAudienceCount: 10, Version: 1, Transport: campaign.TransportSelection{RoutingMode: campaign.RoutingSenderPool, SenderPoolID: "p", CapacityEvidenceVersion: "v"}}
+	co := &Coordinator{Campaigns: &fakeCampaigns{v: c}, Store: &fakeStore{m: Metrics{Authorised: 10}, rate: 10, daily: 10}, Clock: func() time.Time { return now }}
+	_, _, err := co.Resume(context.Background(), "c", "actor", "resume", 1)
+	if err == nil {
+		t.Fatal("campaign resumed during quiet hours")
+	}
+}

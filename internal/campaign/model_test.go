@@ -210,3 +210,47 @@ func TestMaterialAmendmentPersistsAppendOnlyEvent(t *testing.T) {
 		t.Fatalf("unexpected events %#v", items)
 	}
 }
+
+func TestCampaignDispatchWindowHonoursTimezoneQuietHoursAndDeadline(t *testing.T) {
+	start := time.Date(2026, 8, 5, 8, 0, 0, 0, time.UTC)
+	deadline := time.Date(2026, 8, 5, 20, 0, 0, 0, time.UTC)
+	entity, err := New(CreateInput{
+		OrganisationID: "org", Name: "window", PurposeID: "purpose", ConsentReviewID: "review",
+		RequestedStartAt: &start, CompletionDeadlineAt: &deadline, Timezone: "Africa/Lagos",
+		QuietHoursStart: "22:00", QuietHoursEnd: "07:00", MaximumUniqueRecipients: 10,
+		Transport: validTransport(), CreatedBy: "maker",
+	}, start.Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := entity.EvaluateDispatchWindow(start.Add(-time.Minute))
+	if err != nil || before.Allowed || before.Reason != "CAMPAIGN_NOT_STARTED" {
+		t.Fatalf("unexpected before-start decision %+v %v", before, err)
+	}
+	quiet, err := entity.EvaluateDispatchWindow(time.Date(2026, 8, 5, 22, 30, 0, 0, time.UTC)) // 23:30 Lagos
+	if err != nil || quiet.Allowed || quiet.Reason != "CAMPAIGN_DEADLINE_PASSED" {
+		t.Fatalf("deadline must take precedence %+v %v", quiet, err)
+	}
+	entity.CompletionDeadlineAt = ptrTime(time.Date(2026, 8, 6, 8, 0, 0, 0, time.UTC))
+	quiet, err = entity.EvaluateDispatchWindow(time.Date(2026, 8, 5, 22, 30, 0, 0, time.UTC))
+	if err != nil || quiet.Allowed || quiet.Reason != "CAMPAIGN_QUIET_HOURS" {
+		t.Fatalf("unexpected quiet decision %+v %v", quiet, err)
+	}
+	allowed, err := entity.EvaluateDispatchWindow(time.Date(2026, 8, 5, 10, 0, 0, 0, time.UTC))
+	if err != nil || !allowed.Allowed {
+		t.Fatalf("expected allowed window %+v %v", allowed, err)
+	}
+}
+
+func TestCampaignRejectsInvalidTimezoneAndPartialQuietHours(t *testing.T) {
+	_, err := New(CreateInput{OrganisationID: "org", Name: "bad", PurposeID: "purpose", ConsentReviewID: "review", Timezone: "Mars/Olympus", MaximumUniqueRecipients: 1, Transport: validTransport(), CreatedBy: "maker"}, time.Now())
+	if err == nil {
+		t.Fatal("invalid timezone accepted")
+	}
+	_, err = New(CreateInput{OrganisationID: "org", Name: "bad", PurposeID: "purpose", ConsentReviewID: "review", Timezone: "UTC", QuietHoursStart: "22:00", MaximumUniqueRecipients: 1, Transport: validTransport(), CreatedBy: "maker"}, time.Now())
+	if err == nil {
+		t.Fatal("partial quiet hours accepted")
+	}
+}
+
+func ptrTime(value time.Time) *time.Time { return &value }

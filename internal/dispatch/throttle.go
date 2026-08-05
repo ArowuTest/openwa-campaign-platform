@@ -3,9 +3,13 @@ package dispatch
 import (
 	"context"
 	"errors"
+	"hash/fnv"
 	"math"
+	"strings"
 	"sync"
 	"time"
+
+	"campaign-platform/internal/sender"
 )
 
 // ThrottleSignals are bounded operational inputs used to reduce send rate
@@ -22,10 +26,13 @@ type ThrottleSignals struct {
 }
 
 type ThrottleDecision struct {
-	MessagesPerMinute int           `json:"messagesPerMinute"`
-	MinimumInterval   time.Duration `json:"minimumInterval"`
-	ReductionPercent  int           `json:"reductionPercent"`
-	Reasons           []string      `json:"reasons"`
+	MessagesPerMinute int               `json:"messagesPerMinute"`
+	MinimumInterval   time.Duration     `json:"minimumInterval"`
+	MaximumInterval   time.Duration     `json:"maximumInterval"`
+	JitterMode        sender.JitterMode `json:"jitterMode"`
+	BurstSize         int               `json:"burstSize"`
+	ReductionPercent  int               `json:"reductionPercent"`
+	Reasons           []string          `json:"reasons"`
 }
 
 func EvaluateThrottle(in ThrottleSignals) (ThrottleDecision, error) {
@@ -68,6 +75,9 @@ func EvaluateThrottle(in ThrottleSignals) (ThrottleDecision, error) {
 	return ThrottleDecision{
 		MessagesPerMinute: rate,
 		MinimumInterval:   interval,
+		MaximumInterval:   interval,
+		JitterMode:        sender.JitterNone,
+		BurstSize:         1,
 		ReductionPercent:  100 - int(math.Round(float64(rate)*100/float64(in.ConfiguredMessagesPerMinute))),
 		Reasons:           reasons,
 	}, nil
@@ -81,14 +91,15 @@ type Throttle interface {
 // ordered session pipeline. Durable cross-process limits remain enforced by
 // sender ownership and queue admission in PostgreSQL.
 type MemoryThrottle struct {
-	mu       sync.Mutex
-	decision ThrottleDecision
-	nextByID map[string]time.Time
-	clock    func() time.Time
+	mu           sync.Mutex
+	decision     ThrottleDecision
+	nextByID     map[string]time.Time
+	sequenceByID map[string]uint64
+	clock        func() time.Time
 }
 
 func NewMemoryThrottle(decision ThrottleDecision) *MemoryThrottle {
-	return &MemoryThrottle{decision: decision, nextByID: map[string]time.Time{}}
+	return &MemoryThrottle{decision: decision, nextByID: map[string]time.Time{}, sequenceByID: map[string]uint64{}}
 }
 
 func (t *MemoryThrottle) Wait(ctx context.Context, key string) error {
@@ -104,7 +115,8 @@ func (t *MemoryThrottle) Wait(ctx context.Context, key string) error {
 	if next.Before(now) {
 		next = now
 	}
-	t.nextByID[key] = next.Add(t.decision.MinimumInterval)
+	interval := t.intervalFor(key)
+	t.nextByID[key] = next.Add(interval)
 	t.mu.Unlock()
 	if !next.After(now) {
 		return nil
@@ -117,6 +129,59 @@ func (t *MemoryThrottle) Wait(ctx context.Context, key string) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+// DecisionFromPacingPolicy binds the active governed policy to the runtime throttle.
+// Adaptive signals may reduce the configured rate, but never make the configured
+// minimum wait shorter. Message-type overrides are applied before adaptive reduction.
+func DecisionFromPacingPolicy(policy sender.PacingPolicy, messageType string, signals ThrottleSignals) (ThrottleDecision, error) {
+	configuredMin := time.Duration(policy.MinimumDelayMS) * time.Millisecond
+	configuredMax := time.Duration(policy.MaximumDelayMS) * time.Millisecond
+	messageType = strings.ToUpper(strings.TrimSpace(messageType))
+	for _, override := range policy.Overrides {
+		if override.MessageType == messageType {
+			configuredMin = time.Duration(override.MinimumDelayMS) * time.Millisecond
+			configuredMax = time.Duration(override.MaximumDelayMS) * time.Millisecond
+			break
+		}
+	}
+	signals.ConfiguredMessagesPerMinute = policy.MessagesPerMinute
+	decision, err := EvaluateThrottle(signals)
+	if err != nil {
+		return ThrottleDecision{}, err
+	}
+	if configuredMin > decision.MinimumInterval {
+		decision.MinimumInterval = configuredMin
+	}
+	if configuredMax < decision.MinimumInterval {
+		configuredMax = decision.MinimumInterval
+	}
+	decision.MaximumInterval = configuredMax
+	decision.JitterMode = policy.JitterMode
+	decision.BurstSize = policy.BurstSize
+	return decision, nil
+}
+
+func (t *MemoryThrottle) intervalFor(key string) time.Duration {
+	min := t.decision.MinimumInterval
+	max := t.decision.MaximumInterval
+	if max <= min || t.decision.JitterMode != sender.JitterUniform {
+		return min
+	}
+	seq := t.sequenceByID[key]
+	t.sequenceByID[key] = seq + 1
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(key))
+	var b [8]byte
+	for i := 0; i < 8; i++ {
+		b[i] = byte(seq >> (8 * i))
+	}
+	_, _ = h.Write(b[:])
+	span := uint64(max - min)
+	if span == 0 {
+		return min
+	}
+	return min + time.Duration(h.Sum64()%(span+1))
 }
 
 func clampInt(value, low, high int) int {

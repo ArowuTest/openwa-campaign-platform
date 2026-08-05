@@ -4,6 +4,8 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"campaign-platform/internal/sender"
 )
 
 func TestEvaluateThrottleReducesRateForCombinedPressure(t *testing.T) {
@@ -52,5 +54,26 @@ func TestMemoryThrottleHonoursCancellation(t *testing.T) {
 	cancel()
 	if err := throttle.Wait(ctx, "session-1"); err == nil {
 		t.Fatal("expected cancellation")
+	}
+}
+
+func TestDecisionFromPacingPolicyHonoursAdminWaitAndMediaOverride(t *testing.T) {
+	policy := sender.PacingPolicy{MinimumDelayMS: 3000, MaximumDelayMS: 8000, JitterMode: sender.JitterUniform, MessagesPerMinute: 100, MaxInFlight: 1, HourlyAllowance: 500, DailyAllowance: 4000, MaxActiveCampaigns: 2, BurstSize: 1, Overrides: []sender.MessageTypeOverride{{MessageType: "VIDEO", MinimumDelayMS: 10000, MaximumDelayMS: 20000}}}
+	decision, err := DecisionFromPacingPolicy(policy, "video", ThrottleSignals{SenderHealthScore: 100, GatewayHealthScore: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decision.MinimumInterval != 10*time.Second || decision.MaximumInterval != 20*time.Second {
+		t.Fatalf("unexpected governed wait %#v", decision)
+	}
+}
+
+func TestMemoryThrottleUniformJitterStaysWithinPolicy(t *testing.T) {
+	throttle := NewMemoryThrottle(ThrottleDecision{MinimumInterval: 3 * time.Second, MaximumInterval: 8 * time.Second, JitterMode: sender.JitterUniform})
+	for i := 0; i < 20; i++ {
+		d := throttle.intervalFor("session-1")
+		if d < 3*time.Second || d > 8*time.Second {
+			t.Fatalf("interval outside bounds: %s", d)
+		}
 	}
 }

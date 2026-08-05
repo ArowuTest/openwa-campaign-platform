@@ -1,5 +1,5 @@
 # Build checkpoint
 
-Current version: **0.8.15**
+Current version: **0.8.18**
 
-The current checkpoint extends the messaging operational core with governed sender quarantine, health assessment, and evidence-backed delivery-exception reconciliation. It remains a pre-production workspace checkpoint and does not claim live OpenWA or WhatsApp validation.
+The current workspace checkpoint adds governed hierarchical sender pacing and immutable multi-pool OpenWA routing for large campaigns. It remains pre-production: live PostgreSQL execution, Hostinger deployment, and genuine `whatsapp-web.js` and Baileys session validation are not yet certified.

@@ -71,3 +71,10 @@ Durable asynchronous audience materialisation now supports bounded pages, fenced
 - Health-aware allocation evidence and operator recommendations are exposed.
 - Unknown/contradictory delivery exceptions support MFA-protected evidence-backed resolution.
 - Append-only resolution evidence is stored in PostgreSQL.
+
+## 0.8.16 messaging operational-core update
+
+- Deterministic bounded campaign dispatch shards are implemented with fenced leases and restart-safe progress refresh.
+- Missing durable dispatch jobs are reconstructed from published PostgreSQL outbox evidence using original deduplication keys.
+- Health/capacity-aware sender allocation, adaptive throttling and execution forecasting are present.
+- Migration `0049_campaign_dispatch_shards.sql` is included but still requires live PostgreSQL execution evidence.

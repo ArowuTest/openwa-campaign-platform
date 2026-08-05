@@ -313,6 +313,10 @@ type CampaignConfig struct {
 	OutboxClaimBatch               int
 	DispatchQueueBackpressureLimit int
 	DispatchQueueBackpressureRetry time.Duration
+	DispatchShardTargetSize        int
+	DispatchShardClaimBatch        int
+	DispatchQueueRepairBatch       int
+	DispatchQueueRepairInterval    time.Duration
 	OutboxLease                    time.Duration
 	OutboxPollInterval             time.Duration
 	OperationTimeout               time.Duration
@@ -355,6 +359,15 @@ func LoadCampaign() (CampaignConfig, error) {
 	if cfg.DispatchQueueBackpressureLimit, err = integer("DISPATCH_QUEUE_BACKPRESSURE_LIMIT", 100000); err != nil {
 		return CampaignConfig{}, err
 	}
+	if cfg.DispatchShardTargetSize, err = integer("DISPATCH_SHARD_TARGET_SIZE", 10000); err != nil {
+		return CampaignConfig{}, err
+	}
+	if cfg.DispatchShardClaimBatch, err = integer("DISPATCH_SHARD_CLAIM_BATCH", 20); err != nil {
+		return CampaignConfig{}, err
+	}
+	if cfg.DispatchQueueRepairBatch, err = integer("DISPATCH_QUEUE_REPAIR_BATCH", 1000); err != nil {
+		return CampaignConfig{}, err
+	}
 	if cfg.GatewayMaxResponse, err = int64Value("GATEWAY_MAX_RESPONSE_BYTES", 1<<20); err != nil {
 		return CampaignConfig{}, err
 	}
@@ -386,6 +399,9 @@ func LoadCampaign() (CampaignConfig, error) {
 		return CampaignConfig{}, err
 	}
 	if cfg.DispatchQueueBackpressureRetry, err = duration("DISPATCH_QUEUE_BACKPRESSURE_RETRY", 5*time.Second); err != nil {
+		return CampaignConfig{}, err
+	}
+	if cfg.DispatchQueueRepairInterval, err = duration("DISPATCH_QUEUE_REPAIR_INTERVAL", 30*time.Second); err != nil {
 		return CampaignConfig{}, err
 	}
 	if cfg.OperationTimeout, err = duration("WORKER_OPERATION_TIMEOUT", 10*time.Second); err != nil {
@@ -440,6 +456,12 @@ func (c CampaignConfig) Validate() error {
 	}
 	if c.JobConcurrency < 1 || c.JobConcurrency > 256 || c.JobClaimBatch < 1 || c.JobClaimBatch > c.JobConcurrency {
 		return errors.New("campaign job concurrency or claim batch is invalid")
+	}
+	if c.DispatchShardTargetSize < 100 || c.DispatchShardTargetSize > 100000 || c.DispatchShardClaimBatch < 1 || c.DispatchShardClaimBatch > 100 {
+		return errors.New("dispatch shard bounds are invalid")
+	}
+	if c.DispatchQueueRepairBatch < 1 || c.DispatchQueueRepairBatch > 10000 || c.DispatchQueueRepairInterval < time.Second || c.DispatchQueueRepairInterval > time.Hour {
+		return errors.New("dispatch queue repair bounds are invalid")
 	}
 	if c.OutboxConcurrency < 1 || c.OutboxConcurrency > 128 || c.OutboxClaimBatch < 1 || c.OutboxClaimBatch > c.OutboxConcurrency {
 		return errors.New("outbox concurrency or claim batch is invalid")

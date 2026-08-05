@@ -108,6 +108,9 @@ func main() {
 	executionStore := &execution.PostgreSQLStore{DB: db}
 	executionCoordinator := &execution.Coordinator{Campaigns: campaignService, Store: executionStore, SafetyMarginPercent: 15}
 	executionRunner := &execution.Runner{Repository: executionStore, Coordinator: executionCoordinator, Owner: cfg.WorkerID + ":execution", Lease: cfg.JobLease, PollInterval: cfg.JobPollInterval, Batch: 20}
+	shardRunner := &execution.ShardRunner{Repository: &execution.PostgreSQLShardRepository{DB: db}, Owner: cfg.WorkerID + ":shards", TargetSize: cfg.DispatchShardTargetSize, DiscoveryBatch: 10, ClaimBatch: cfg.DispatchShardClaimBatch, Lease: cfg.JobLease, PollInterval: cfg.JobPollInterval}
+
+	queueRepairRunner := &dispatch.QueueRepairRunner{Repository: &dispatch.PostgreSQLQueueRepairRepository{DB: db}, Batch: cfg.DispatchQueueRepairBatch, PollInterval: cfg.DispatchQueueRepairInterval}
 
 	jobRunner := &jobs.Runner{
 		Repository: jobRepository, Owner: cfg.WorkerID + ":dispatch",
@@ -119,7 +122,7 @@ func main() {
 	}
 
 	health := workerruntime.NewHealth("campaign-worker", db, func() int64 {
-		return jobRunner.Active() + outboxRunner.Active() + executionRunner.Active()
+		return jobRunner.Active() + outboxRunner.Active() + executionRunner.Active() + shardRunner.Active() + queueRepairRunner.Active()
 	})
 	healthServer := &http.Server{
 		Addr: cfg.HealthAddr, Handler: health.Handler(),
@@ -135,16 +138,20 @@ func main() {
 		}
 	}()
 
-	runnerErrors := make(chan error, 3)
+	runnerErrors := make(chan error, 5)
 	go func() { runnerErrors <- outboxRunner.Run(rootCtx) }()
 	go func() { runnerErrors <- jobRunner.Run(rootCtx) }()
 	go func() { runnerErrors <- executionRunner.Run(rootCtx) }()
+	go func() { runnerErrors <- shardRunner.Run(rootCtx) }()
+	go func() { runnerErrors <- queueRepairRunner.Run(rootCtx) }()
 	health.SetReady(true)
 	logger.Info("campaign worker started",
 		"workerId", cfg.WorkerID,
 		"dispatchConcurrency", cfg.JobConcurrency,
 		"outboxConcurrency", cfg.OutboxConcurrency,
 		"executionScheduler", true,
+		"dispatchSharding", true,
+		"queueRepair", true,
 		"mediaDelivery", "signed-short-lived-url")
 
 	var runErr error
@@ -167,7 +174,7 @@ func main() {
 	if err := healthServer.Shutdown(shutdownCtx); err != nil {
 		logger.Error("campaign worker health shutdown failed", "error", err)
 	}
-	for runnersStopped < 3 {
+	for runnersStopped < 5 {
 		select {
 		case err := <-runnerErrors:
 			runnersStopped++

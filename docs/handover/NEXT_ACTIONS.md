@@ -73,3 +73,10 @@ Proceed with the messaging and dispatch core: bounded dispatch shards, queue bac
 3. Complete scheduled unknown-outcome reconciliation windows and final-unknown policy.
 4. Add campaign backlog forecasting and deadline breach alerts.
 5. Complete dependency-resolved OpenWA gateway builds and live session validation.
+
+## After 0.8.16
+
+1. Complete automatic provider-status requery and contradiction escalation for unknown outcomes.
+2. Finish dependency-resolved OpenWA gateway build and live session lifecycle validation.
+3. Add production-scale shard, queue-repair and dispatch endurance evidence against PostgreSQL.
+4. Continue reporting and operations APIs after messaging operational-core closure.

@@ -104,7 +104,7 @@ func buildMemoryRuntime(cfg config.Config, protector *sharedcrypto.MSISDNProtect
 	policyStore := consent.NewMemoryOptOutPolicyStore(consent.GovernedOptOutPolicy{ID: "bootstrap-opt-out-policy", Keywords: cfg.OptOutKeywords, Status: consent.OptOutPolicyActive, EffectiveFrom: nowPolicy.Add(-time.Second), Version: 1, CreatedBy: consent.DefaultGatewayServiceActorID, Reason: "bootstrap governed opt-out policy", CreatedAt: nowPolicy, UpdatedAt: nowPolicy})
 	optOutPolicies := &consent.OptOutPolicyAdministration{Store: policyStore}
 	optOutProcessor := &consent.OptOutProcessor{Deliveries: deliveryEvents, Ledger: consentLedger, Policies: optOutPolicies, ActorID: consent.DefaultGatewayServiceActorID, Inbox: inboundReplies}
-	campaigns := campaign.NewService(campaign.NewMemoryRepository()).WithOrganisationReader(orgs).WithOrganisationPolicies(organisationPolicies).WithCommercialApprovals(commercialService)
+	campaigns := campaign.NewService(campaign.NewMemoryRepository()).WithOrganisationReader(orgs).WithOrganisationPolicies(organisationPolicies).WithCommercialApprovals(commercialService).WithConsentReviews(reviews)
 	messages := message.NewService(message.NewMemoryRepository())
 	snapshots := segment.NewService(segment.NewMemoryRepository())
 	metrics := delivery.NewMetricsService(delivery.NewMemoryMetricsRepository())
@@ -200,7 +200,7 @@ func buildPostgreSQLRuntime(ctx context.Context, cfg config.Config, protector *s
 		return fail(fmt.Errorf("initialise governed opt-out policy: %w", activeErr))
 	}
 	optOutProcessor := &consent.OptOutProcessor{Deliveries: deliveryEvents, Ledger: consentLedger, Policies: optOutPolicies, ActorID: consent.DefaultGatewayServiceActorID, Inbox: inboundReplies}
-	campaigns := campaign.NewService(&postgresrepo.CampaignRepository{DB: db}).WithOrganisationReader(orgs).WithOrganisationPolicies(organisationPolicies).WithCommercialApprovals(commercialService)
+	campaigns := campaign.NewService(&postgresrepo.CampaignRepository{DB: db}).WithOrganisationReader(orgs).WithOrganisationPolicies(organisationPolicies).WithCommercialApprovals(commercialService).WithConsentReviews(reviews)
 	messages := message.NewService(&message.PostgreSQLRepository{DB: db})
 	snapshotStore := &segment.PostgreSQLStore{DB: db}
 	snapshots := segment.NewService(snapshotStore)

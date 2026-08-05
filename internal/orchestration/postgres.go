@@ -31,6 +31,17 @@ func (SQLFinalEligibilityChecker) Check(context.Context, string, string, string,
 
 func (SQLFinalEligibilityChecker) CheckTx(ctx context.Context, tx *sql.Tx, contactID, organisationID, purposeID, channel string, asOf time.Time) (EligibilityDecision, error) {
 	const query = `
+WITH latest_grant AS (
+  SELECT g.status, g.expires_at
+  FROM consent_grants g
+  WHERE g.contact_id = $1::uuid
+    AND g.organisation_id = $2::uuid
+    AND g.purpose_id = $3
+    AND upper(g.channel) = upper($4)
+    AND g.effective_from <= $5
+  ORDER BY g.effective_from DESC, g.created_at DESC, g.id DESC
+  LIMIT 1
+)
 SELECT CASE
   WHEN c.status <> 'ACTIVE' THEN 'CONTACT_INACTIVE'
   WHEN EXISTS (
@@ -42,44 +53,22 @@ SELECT CASE
       AND (
         s.scope = 'GLOBAL'
         OR (s.scope = 'ORGANISATION' AND s.organisation_id = $2::uuid)
-        OR (s.scope = 'PURPOSE' AND s.purpose_id = $3::uuid)
+        OR (s.scope = 'PURPOSE' AND s.purpose_id = $3)
         OR (s.scope = 'CHANNEL' AND upper(s.channel) = upper($4))
         OR (s.scope = 'TEMPORARY'
             AND (s.organisation_id IS NULL OR s.organisation_id = $2::uuid)
-            AND (s.purpose_id IS NULL OR s.purpose_id = $3::uuid)
+            AND (s.purpose_id IS NULL OR s.purpose_id = $3)
             AND (s.channel IS NULL OR upper(s.channel) = upper($4)))
       )
   ) THEN 'SUPPRESSED'
-  WHEN EXISTS (
-    SELECT 1 FROM consent_grants g
-    WHERE g.contact_id = c.id
-      AND g.organisation_id = $2::uuid
-      AND g.purpose_id = $3::uuid
-      AND upper(g.channel) = upper($4)
-      AND g.status = 'WITHDRAWN'
-      AND g.granted_at <= $5
-  ) THEN 'CONSENT_WITHDRAWN'
-  WHEN EXISTS (
-    SELECT 1 FROM consent_grants g
-    WHERE g.contact_id = c.id
-      AND g.organisation_id = $2::uuid
-      AND g.purpose_id = $3::uuid
-      AND upper(g.channel) = upper($4)
-      AND g.status = 'ACTIVE'
-      AND g.granted_at <= $5
-      AND g.expires_at IS NOT NULL
-      AND g.expires_at <= $5
-  ) THEN 'CONSENT_EXPIRED'
-  WHEN NOT EXISTS (
-    SELECT 1 FROM consent_grants g
-    WHERE g.contact_id = c.id
-      AND g.organisation_id = $2::uuid
-      AND g.purpose_id = $3::uuid
-      AND upper(g.channel) = upper($4)
-      AND g.status = 'ACTIVE'
-      AND g.granted_at <= $5
-      AND (g.expires_at IS NULL OR g.expires_at > $5)
-  ) THEN 'NO_ACTIVE_CONSENT'
+  WHEN NOT EXISTS (SELECT 1 FROM latest_grant) THEN 'NO_ACTIVE_CONSENT'
+  WHEN (SELECT status FROM latest_grant) = 'WITHDRAWN' THEN 'CONSENT_WITHDRAWN'
+  WHEN (SELECT status FROM latest_grant) = 'REVOKED' THEN 'CONSENT_REVOKED'
+  WHEN (SELECT status FROM latest_grant) = 'EXPIRED'
+    OR ((SELECT status FROM latest_grant) = 'ACTIVE'
+        AND (SELECT expires_at FROM latest_grant) IS NOT NULL
+        AND (SELECT expires_at FROM latest_grant) <= $5) THEN 'CONSENT_EXPIRED'
+  WHEN (SELECT status FROM latest_grant) <> 'ACTIVE' THEN 'NO_ACTIVE_CONSENT'
   ELSE ''
 END AS exclusion_reason
 FROM contacts c
@@ -134,12 +123,17 @@ func (s *PostgreSQLStore) authoriseOnce(ctx context.Context, cmd Command, checke
 	defer tx.Rollback()
 
 	var maximum int64
-	var status, snapshotID, messageVersionID, organisationID, purposeID string
+	var status, snapshotID, messageVersionID, organisationID, purposeID, organisationStatus, reviewStatus, reviewChannel string
+	var reviewExpiresAt time.Time
 	const campaignQuery = `
-SELECT maximum_unique_recipients, status, coalesce(audience_snapshot_id::text,''),
-       coalesce(approved_message_version_id::text,''), organisation_id::text, purpose_id::text
-FROM campaigns WHERE id=$1::uuid FOR UPDATE`
-	if err := tx.QueryRowContext(ctx, campaignQuery, cmd.CampaignID).Scan(&maximum, &status, &snapshotID, &messageVersionID, &organisationID, &purposeID); err != nil {
+SELECT c.maximum_unique_recipients, c.status, coalesce(c.audience_snapshot_id::text,''),
+       coalesce(c.approved_message_version_id::text,''), c.organisation_id::text, c.purpose_id::text,
+       o.status, cr.status, cr.channel, cr.expires_at
+FROM campaigns c
+JOIN organisations o ON o.id = c.organisation_id
+JOIN consent_reviews cr ON cr.id = c.consent_review_id
+WHERE c.id=$1::uuid FOR UPDATE OF c`
+	if err := tx.QueryRowContext(ctx, campaignQuery, cmd.CampaignID).Scan(&maximum, &status, &snapshotID, &messageVersionID, &organisationID, &purposeID, &organisationStatus, &reviewStatus, &reviewChannel, &reviewExpiresAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Result{}, errors.New("campaign not found")
 		}
@@ -147,6 +141,12 @@ FROM campaigns WHERE id=$1::uuid FOR UPDATE`
 	}
 	if status != "SCHEDULED" && status != "DISPATCHING" {
 		return Result{}, fmt.Errorf("campaign status %s cannot release recipients", status)
+	}
+	if organisationStatus != "ACTIVE" {
+		return Result{}, errors.New("campaign organisation is not active")
+	}
+	if reviewStatus != "APPROVED" || !reviewExpiresAt.After(cmd.AsOf.UTC()) || !strings.EqualFold(reviewChannel, cmd.Channel) {
+		return Result{}, errors.New("campaign consent review is no longer valid for release")
 	}
 	if snapshotID != cmd.SnapshotID || messageVersionID != cmd.MessageVersionID || organisationID != cmd.OrganisationID || purposeID != cmd.PurposeID {
 		return Result{}, ErrReleaseConflict

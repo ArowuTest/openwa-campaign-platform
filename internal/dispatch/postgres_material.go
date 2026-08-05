@@ -110,42 +110,67 @@ func (c *PostgreSQLFinalEligibility) Check(ctx context.Context, recipient delive
 		return EligibilityDecision{}, errors.New("database is required")
 	}
 	const query = `
-SELECT ct.status='ACTIVE'
- AND cp.status IN ('SCHEDULED','DISPATCHING')
- AND EXISTS (
-   SELECT 1 FROM consent_grants cg
-   WHERE cg.contact_id=cr.contact_id AND cg.organisation_id=cp.organisation_id
-     AND cg.purpose_id=cp.purpose_id AND upper(cg.channel)='WHATSAPP'
-     AND cg.status='ACTIVE' AND cg.granted_at<=$2
-     AND (cg.expires_at IS NULL OR cg.expires_at>$2)
- )
- AND NOT EXISTS (
-   SELECT 1 FROM suppressions sp
-   WHERE sp.contact_id=cr.contact_id AND sp.active AND sp.effective_at<=$2
-     AND (sp.expires_at IS NULL OR sp.expires_at>$2)
-     AND (sp.scope='GLOBAL'
-       OR (sp.scope='ORGANISATION' AND sp.organisation_id=cp.organisation_id)
-       OR (sp.scope='PURPOSE' AND sp.purpose_id=cp.purpose_id)
-       OR (sp.scope='CHANNEL' AND upper(sp.channel)='WHATSAPP')
-       OR (sp.scope='TEMPORARY'
-          AND (sp.organisation_id IS NULL OR sp.organisation_id=cp.organisation_id)
-          AND (sp.purpose_id IS NULL OR sp.purpose_id=cp.purpose_id)
-          AND (sp.channel IS NULL OR upper(sp.channel)='WHATSAPP')))
- ) AS eligible
-FROM campaign_recipients cr
-JOIN contacts ct ON ct.id=cr.contact_id
-JOIN campaigns cp ON cp.id=cr.campaign_id
-WHERE cr.id=$1::uuid`
-	var eligible bool
-	err := c.DB.QueryRowContext(ctx, query, recipient.ID, asOf.UTC()).Scan(&eligible)
+WITH basis AS (
+  SELECT cr.contact_id, cp.organisation_id, cp.purpose_id, cp.status AS campaign_status,
+         ct.status AS contact_status, o.status AS organisation_status,
+         rv.status AS review_status, rv.channel AS review_channel, rv.expires_at AS review_expires_at
+  FROM campaign_recipients cr
+  JOIN contacts ct ON ct.id=cr.contact_id
+  JOIN campaigns cp ON cp.id=cr.campaign_id
+  JOIN organisations o ON o.id=cp.organisation_id
+  JOIN consent_reviews rv ON rv.id=cp.consent_review_id
+  WHERE cr.id=$1::uuid
+), latest_grant AS (
+  SELECT cg.status, cg.expires_at
+  FROM consent_grants cg, basis b
+  WHERE cg.contact_id=b.contact_id
+    AND cg.organisation_id=b.organisation_id
+    AND cg.purpose_id=b.purpose_id
+    AND upper(cg.channel)='WHATSAPP'
+    AND cg.effective_from <= $2
+  ORDER BY cg.effective_from DESC, cg.created_at DESC, cg.id DESC
+  LIMIT 1
+)
+SELECT CASE
+  WHEN b.contact_status <> 'ACTIVE' THEN 'CONTACT_INACTIVE'
+  WHEN b.organisation_status <> 'ACTIVE' THEN 'ORGANISATION_INACTIVE'
+  WHEN b.campaign_status NOT IN ('SCHEDULED','DISPATCHING') THEN 'CAMPAIGN_NOT_DISPATCHABLE'
+  WHEN b.review_status <> 'APPROVED' OR b.review_expires_at <= $2 OR upper(b.review_channel) <> 'WHATSAPP' THEN 'CONSENT_REVIEW_INVALID'
+  WHEN EXISTS (
+    SELECT 1 FROM suppressions sp
+    WHERE sp.contact_id=b.contact_id AND sp.active AND sp.effective_at<=$2
+      AND (sp.expires_at IS NULL OR sp.expires_at>$2)
+      AND (sp.scope='GLOBAL'
+        OR (sp.scope='ORGANISATION' AND sp.organisation_id=b.organisation_id)
+        OR (sp.scope='PURPOSE' AND sp.purpose_id=b.purpose_id)
+        OR (sp.scope='CHANNEL' AND upper(sp.channel)='WHATSAPP')
+        OR (sp.scope='TEMPORARY'
+           AND (sp.organisation_id IS NULL OR sp.organisation_id=b.organisation_id)
+           AND (sp.purpose_id IS NULL OR sp.purpose_id=b.purpose_id)
+           AND (sp.channel IS NULL OR upper(sp.channel)='WHATSAPP')))
+  ) THEN 'SUPPRESSED'
+  WHEN NOT EXISTS (SELECT 1 FROM latest_grant) THEN 'NO_ACTIVE_CONSENT'
+  WHEN (SELECT status FROM latest_grant)='WITHDRAWN' THEN 'CONSENT_WITHDRAWN'
+  WHEN (SELECT status FROM latest_grant)='REVOKED' THEN 'CONSENT_REVOKED'
+  WHEN (SELECT status FROM latest_grant)='EXPIRED'
+    OR ((SELECT status FROM latest_grant)='ACTIVE'
+        AND (SELECT expires_at FROM latest_grant) IS NOT NULL
+        AND (SELECT expires_at FROM latest_grant) <= $2) THEN 'CONSENT_EXPIRED'
+  WHEN (SELECT status FROM latest_grant) <> 'ACTIVE' THEN 'NO_ACTIVE_CONSENT'
+  ELSE ''
+END AS exclusion_reason
+FROM basis b`
+	var reason string
+	err := c.DB.QueryRowContext(ctx, query, recipient.ID, asOf.UTC()).Scan(&reason)
 	if errors.Is(err, sql.ErrNoRows) {
 		return EligibilityDecision{Eligible: false, Reason: "RECIPIENT_NOT_FOUND"}, nil
 	}
 	if err != nil {
 		return EligibilityDecision{}, err
 	}
-	if !eligible {
-		return EligibilityDecision{Eligible: false, Reason: "INELIGIBLE_FINAL_CHECK"}, nil
+	reason = strings.TrimSpace(reason)
+	if reason != "" {
+		return EligibilityDecision{Eligible: false, Reason: reason}, nil
 	}
 	return EligibilityDecision{Eligible: true}, nil
 }

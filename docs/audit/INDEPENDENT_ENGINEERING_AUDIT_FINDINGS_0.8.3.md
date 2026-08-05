@@ -41,3 +41,10 @@ This first audit pass reviewed repository recoverability, build coverage, organi
 - Status: Closed in 0.8.6
 - Finding: free-text internal notes do not fully satisfy organisation-specific permitted/prohibited purposes, retention and report-branding requirements.
 - Remediation: effective-dated maker-checker organisation policy versions now govern allowed/prohibited purposes, retention periods and report-branding metadata; campaign creation enforces the active purpose policy.
+
+### AUD-006 — Consent precedence and live review revalidation were inconsistent
+
+- Severity: High
+- Status: Closed in 0.8.8
+- Finding: final eligibility treated any historical withdrawal as permanently blocking, even after a later valid re-consent, and campaign progression did not consistently revalidate consent-review expiry and channel scope.
+- Remediation: latest-effective-grant precedence is now deterministic; suppression remains dominant; campaign approval, release and final dispatch revalidate live organisation and consent-review evidence with precise exclusion reasons.

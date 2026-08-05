@@ -34,6 +34,9 @@ type Service struct {
 	commercial interface {
 		ValidateCampaignApproval(context.Context, string, string, int64) (string, error)
 	}
+	consentReviews interface {
+		ValidateCampaignReview(context.Context, string, string, string, time.Time) error
+	}
 	clock func() time.Time
 }
 
@@ -60,6 +63,20 @@ func (s *Service) WithOrganisationPolicies(policies interface {
 }) *Service {
 	s.policies = policies
 	return s
+}
+
+func (s *Service) WithConsentReviews(reader interface {
+	ValidateCampaignReview(context.Context, string, string, string, time.Time) error
+}) *Service {
+	s.consentReviews = reader
+	return s
+}
+
+func (s *Service) validateConsentReview(ctx context.Context, entity Campaign) error {
+	if s.consentReviews == nil {
+		return nil
+	}
+	return s.consentReviews.ValidateCampaignReview(ctx, entity.ConsentReviewID, entity.OrganisationID, entity.Transport.Channel, s.clock().UTC())
 }
 
 func (s *Service) requireActiveOrganisation(ctx context.Context, organisationID string) error {
@@ -105,6 +122,12 @@ func (s *Service) Transition(ctx context.Context, identifier string, input Trans
 	}
 	if input.Action != ActionPause && input.Action != ActionCancel && input.Action != ActionComplete {
 		if err := s.requireActiveOrganisation(ctx, entity.OrganisationID); err != nil {
+			return Campaign{}, err
+		}
+	}
+	switch input.Action {
+	case ActionApproveConsent, ActionRequestFinalApproval, ActionApproveFinal, ActionStartDispatch, ActionResume:
+		if err := s.validateConsentReview(ctx, entity); err != nil {
 			return Campaign{}, err
 		}
 	}

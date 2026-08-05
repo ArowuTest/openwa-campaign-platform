@@ -2782,9 +2782,14 @@
     "evidence": [
       "internal/consent/optout_policy.go",
       "internal/persistence/postgres/optout_policy.go",
-      "database/migrations/0024_governed_opt_out_policy.sql"
+      "database/migrations/0024_governed_opt_out_policy.sql",
+      "internal/consent/eligibility.go",
+      "internal/consent/eligibility_test.go",
+      "internal/orchestration/postgres.go",
+      "internal/dispatch/postgres_material.go",
+      "database/migrations/0040_consent_precedence_and_dispatch_guards.sql"
     ],
-    "notes": "STOP commands are versioned, effective-dated, maker-checker governed and retained with immutable PostgreSQL history; suppression precedence remains enforced at final dispatch."
+    "notes": "STOP commands are versioned, effective-dated, maker-checker governed and retained with immutable PostgreSQL history; suppression precedence remains enforced at final dispatch. Version 0.8.8 adds deterministic latest-effective-grant precedence and revalidates live consent-review evidence at release and dispatch."
   },
   {
     "id": "ADM-009",
@@ -3806,9 +3811,13 @@
     "status": "PARTIAL",
     "evidence": [
       "internal/consent/optout.go",
-      "internal/orchestration/postgres.go"
+      "internal/orchestration/postgres.go",
+      "internal/consent/eligibility.go",
+      "internal/consent/eligibility_test.go",
+      "internal/dispatch/postgres_material.go",
+      "database/migrations/0040_consent_precedence_and_dispatch_guards.sql"
     ],
-    "notes": "Post-snapshot opt-outs are excluded by the final live suppression check with a specific SUPPRESSED reason. Campaign-report presentation remains outstanding."
+    "notes": "Post-snapshot opt-outs are excluded by the final live suppression check with a specific SUPPRESSED reason. Campaign-report presentation remains outstanding. Version 0.8.8 adds deterministic latest-effective-grant precedence and revalidates live consent-review evidence at release and dispatch."
   },
   {
     "id": "AC-014",

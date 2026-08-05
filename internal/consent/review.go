@@ -299,3 +299,29 @@ func (r *MemoryRepository) Get(_ context.Context, identifier string) (Review, er
 	}
 	return entity, nil
 }
+
+// ValidateCampaignReview rechecks the live consent-review evidence at every
+// material campaign boundary. Approval at an earlier stage is not sufficient
+// after expiry, suspension or an organisation mismatch.
+func (s *Service) ValidateCampaignReview(ctx context.Context, reviewID, organisationID, channel string, asOf time.Time) error {
+	if s == nil || s.repository == nil {
+		return errors.New("consent review repository is required")
+	}
+	review, err := s.repository.Get(ctx, strings.TrimSpace(reviewID))
+	if err != nil {
+		return err
+	}
+	if review.OrganisationID != strings.TrimSpace(organisationID) {
+		return errors.New("consent review does not belong to campaign organisation")
+	}
+	if review.Status != StatusApproved {
+		return errors.New("consent review is not approved")
+	}
+	if review.ExpiresAt == nil || !review.ExpiresAt.After(asOf.UTC()) {
+		return errors.New("consent review is expired")
+	}
+	if review.Channel != strings.ToUpper(strings.TrimSpace(channel)) {
+		return errors.New("consent review does not authorise campaign channel")
+	}
+	return nil
+}

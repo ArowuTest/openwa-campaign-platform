@@ -12,10 +12,11 @@ type MemoryShardRepository struct {
 	mu            sync.Mutex
 	Shards        map[string]DispatchShard
 	DiscoverCount int
+	Reallocations map[string][]ShardReallocation
 }
 
 func NewMemoryShardRepository() *MemoryShardRepository {
-	return &MemoryShardRepository{Shards: map[string]DispatchShard{}}
+	return &MemoryShardRepository{Shards: map[string]DispatchShard{}, Reallocations: map[string][]ShardReallocation{}}
 }
 func (r *MemoryShardRepository) Discover(context.Context, int, time.Time, int) (int, error) {
 	r.mu.Lock()

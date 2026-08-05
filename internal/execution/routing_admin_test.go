@@ -51,3 +51,19 @@ func TestRoutingAdministrationCreatesReservationsForEveryPool(t *testing.T) {
 		}
 	}
 }
+
+func TestRoutingPlanPoolReportIncludesApprovedCapacity(t *testing.T) {
+	store := NewMemoryRoutingPlanStore()
+	plan := RoutingPlan{ID: "rp-report", CampaignID: "c-report", Version: 1, Routes: []PoolRoute{{SenderPoolID: "p1", GatewayPoolID: "g1", Provider: "OPENWA", Engine: "BAILEYS", AllocationWeight: 1, MaximumRecipients: 100, ReservedMessagesPerMinute: 10, ReservedHourlyUnits: 100, ReservedDailyUnits: 100}}, RoutingPolicyVersion: "r1", CapacityEvidenceVersion: "c1", PacingPolicyVersion: "p1", FallbackMode: "NONE", ApprovedBy: "actor", ApprovedAt: time.Now()}
+	if _, err := store.Create(context.Background(), plan, nil); err != nil {
+		t.Fatal(err)
+	}
+	svc := &RoutingAdministration{Store: store}
+	items, err := svc.PoolReport(context.Background(), plan.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].Engine != "BAILEYS" || items[0].ReservedMessagesPerMinute != 10 {
+		t.Fatalf("unexpected report: %+v", items)
+	}
+}

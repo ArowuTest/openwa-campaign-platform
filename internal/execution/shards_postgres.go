@@ -59,7 +59,22 @@ FOR UPDATE SKIP LOCKED LIMIT $1`, limit)
 )
 UPDATE campaign_recipients cr SET dispatch_shard_id=i.id
 FROM ranked r JOIN inserted i ON i.ordinal=r.ordinal
-WHERE cr.id=r.id AND cr.dispatch_shard_id IS NULL`, campaignID, targetSize, now.UTC())
+WHERE cr.id=r.id AND cr.dispatch_shard_id IS NULL;
+
+WITH latest_plan AS (
+ SELECT rp.id FROM campaign_routing_plans rp WHERE rp.campaign_id=$1::uuid ORDER BY rp.plan_version DESC,rp.approved_at DESC LIMIT 1
+), slots AS (
+ SELECT l.id AS routing_plan_id,p.sender_pool_id,row_number() OVER (ORDER BY p.sender_pool_id,gs)::bigint-1 AS slot,
+        sum(p.allocation_weight) OVER ()::bigint AS total_slots
+ FROM latest_plan l JOIN campaign_routing_plan_pools p ON p.routing_plan_id=l.id
+ CROSS JOIN LATERAL generate_series(1,p.allocation_weight) gs
+), chosen AS (
+ SELECT s.id AS shard_id,sl.routing_plan_id,sl.sender_pool_id
+ FROM campaign_dispatch_shards s JOIN slots sl ON sl.slot=(s.ordinal::bigint % sl.total_slots)
+ WHERE s.campaign_id=$1::uuid AND s.routing_plan_id IS NULL
+)
+UPDATE campaign_dispatch_shards s SET routing_plan_id=c.routing_plan_id,assigned_sender_pool_id=c.sender_pool_id,updated_at=$3
+FROM chosen c WHERE s.id=c.shard_id`, campaignID, targetSize, now.UTC())
 		if err != nil {
 			return 0, fmt.Errorf("create shards for campaign %s: %w", campaignID, err)
 		}
@@ -92,7 +107,7 @@ func (r *PostgreSQLShardRepository) Claim(ctx context.Context, owner string, now
 UPDATE campaign_dispatch_shards s SET status='RUNNING',lease_owner=$3,lease_expires_at=$4,
  lease_version=s.lease_version+1,started_at=coalesce(s.started_at,$1),updated_at=$1
 FROM candidates c WHERE s.id=c.id
-RETURNING s.id::text,s.campaign_id::text,s.ordinal,s.target_size,s.recipient_count,s.terminal_count,s.failed_count,s.unknown_count,s.status,s.last_recipient_id::text,s.lease_owner,s.lease_version,s.lease_expires_at,s.started_at,s.completed_at,s.created_at,s.updated_at`, now.UTC(), limit, owner, now.UTC().Add(lease))
+RETURNING s.id::text,s.campaign_id::text,s.ordinal,s.target_size,s.recipient_count,s.terminal_count,s.failed_count,s.unknown_count,s.status,s.last_recipient_id::text,s.routing_plan_id::text,s.assigned_sender_pool_id::text,s.lease_owner,s.lease_version,s.lease_expires_at,s.started_at,s.completed_at,s.created_at,s.updated_at`, now.UTC(), limit, owner, now.UTC().Add(lease))
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +154,7 @@ func (r *PostgreSQLShardRepository) Refresh(ctx context.Context, shard DispatchS
  completed_at=CASE WHEN c.total>0 AND c.terminal=c.total THEN $4 ELSE NULL END,
  lease_owner=NULL,lease_expires_at=NULL,updated_at=$4
  FROM counts c WHERE s.id=$1::uuid AND s.status='RUNNING' AND s.lease_owner=$2 AND s.lease_version=$3 AND s.lease_expires_at>$4
- RETURNING s.id::text,s.campaign_id::text,s.ordinal,s.target_size,s.recipient_count,s.terminal_count,s.failed_count,s.unknown_count,s.status,s.last_recipient_id::text,s.lease_owner,s.lease_version,s.lease_expires_at,s.started_at,s.completed_at,s.created_at,s.updated_at
+ RETURNING s.id::text,s.campaign_id::text,s.ordinal,s.target_size,s.recipient_count,s.terminal_count,s.failed_count,s.unknown_count,s.status,s.last_recipient_id::text,s.routing_plan_id::text,s.assigned_sender_pool_id::text,s.lease_owner,s.lease_version,s.lease_expires_at,s.started_at,s.completed_at,s.created_at,s.updated_at
 ) SELECT * FROM updated`, shard.ID, shard.LeaseOwner, shard.LeaseVersion, now.UTC())
 	out, err := scanShard(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -153,15 +168,21 @@ type shardScanner interface{ Scan(...any) error }
 func scanShard(row shardScanner) (DispatchShard, error) {
 	var s DispatchShard
 	var status string
-	var last, owner sql.NullString
+	var last, routingPlan, senderPool, owner sql.NullString
 	var lease, started, completed sql.NullTime
-	err := row.Scan(&s.ID, &s.CampaignID, &s.Ordinal, &s.TargetSize, &s.RecipientCount, &s.TerminalCount, &s.FailedCount, &s.UnknownCount, &status, &last, &owner, &s.LeaseVersion, &lease, &started, &completed, &s.CreatedAt, &s.UpdatedAt)
+	err := row.Scan(&s.ID, &s.CampaignID, &s.Ordinal, &s.TargetSize, &s.RecipientCount, &s.TerminalCount, &s.FailedCount, &s.UnknownCount, &status, &last, &routingPlan, &senderPool, &owner, &s.LeaseVersion, &lease, &started, &completed, &s.CreatedAt, &s.UpdatedAt)
 	if err != nil {
 		return DispatchShard{}, err
 	}
 	s.Status = ShardStatus(status)
 	if last.Valid {
 		s.LastRecipientID = last.String
+	}
+	if routingPlan.Valid {
+		s.RoutingPlanID = routingPlan.String
+	}
+	if senderPool.Valid {
+		s.AssignedSenderPoolID = senderPool.String
 	}
 	if owner.Valid {
 		s.LeaseOwner = owner.String

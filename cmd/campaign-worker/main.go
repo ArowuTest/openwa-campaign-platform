@@ -16,12 +16,14 @@ import (
 	"campaign-platform/internal/dispatch"
 	"campaign-platform/internal/execution"
 	"campaign-platform/internal/jobs"
+	"campaign-platform/internal/message"
 	"campaign-platform/internal/outbox"
 	"campaign-platform/internal/persistence/database"
 	postgresrepo "campaign-platform/internal/persistence/postgres"
 	"campaign-platform/internal/sender"
 	sharedcrypto "campaign-platform/internal/shared/crypto"
 	"campaign-platform/internal/storage"
+	"campaign-platform/internal/testmessage"
 	workerconfig "campaign-platform/internal/worker/config"
 	workerruntime "campaign-platform/internal/worker/runtime"
 )
@@ -96,6 +98,8 @@ func main() {
 			ExpectContinueTimeout: time.Second,
 		},
 	}
+	testMessageRepository := &testmessage.PostgreSQLRepository{DB: db}
+	testMessageService := message.NewService(&message.PostgreSQLRepository{DB: db})
 	dispatchHandler := &dispatch.Handler{
 		Ledger:      ledger,
 		Materials:   materials,
@@ -106,6 +110,19 @@ func main() {
 			Client: gatewayClient, MaximumResponseBytes: cfg.GatewayMaxResponse,
 		},
 	}
+	testMessageRunner := &testmessage.Runner{
+		Repository: testMessageRepository,
+		Processor: &testmessage.Processor{
+			Repository: testMessageRepository,
+			Protector:  protector,
+			Messages:   testMessageService,
+			Pacing:     &dispatch.PostgreSQLPacingController{DB: db, Policies: pacingPolicies},
+			Gateway:    &dispatch.HTTPGateway{BaseURL: cfg.GatewayURL, CommandSecret: cfg.GatewayCommandSecret, Client: gatewayClient, MaximumResponseBytes: cfg.GatewayMaxResponse},
+			Media:      dispatch.SignedObjectResolver{Signer: storage.URLSigner{BaseURL: cfg.MediaDownloadBaseURL, Secret: []byte(cfg.MediaDownloadSecret)}},
+		},
+		Owner: cfg.WorkerID + ":test-message", Lease: cfg.JobLease, PollInterval: cfg.JobPollInterval, Batch: 20,
+	}
+
 	campaignService := campaign.NewService(&postgresrepo.CampaignRepository{DB: db})
 	executionStore := &execution.PostgreSQLStore{DB: db}
 	routingPlans := &execution.RoutingAdministration{Store: &execution.PostgreSQLRoutingPlanStore{DB: db}, Campaigns: campaignService}
@@ -125,7 +142,7 @@ func main() {
 	}
 
 	health := workerruntime.NewHealth("campaign-worker", db, func() int64 {
-		return jobRunner.Active() + outboxRunner.Active() + executionRunner.Active() + shardRunner.Active() + queueRepairRunner.Active()
+		return jobRunner.Active() + outboxRunner.Active() + executionRunner.Active() + shardRunner.Active() + queueRepairRunner.Active() + testMessageRunner.Active()
 	})
 	healthServer := &http.Server{
 		Addr: cfg.HealthAddr, Handler: health.Handler(),
@@ -141,12 +158,13 @@ func main() {
 		}
 	}()
 
-	runnerErrors := make(chan error, 5)
+	runnerErrors := make(chan error, 6)
 	go func() { runnerErrors <- outboxRunner.Run(rootCtx) }()
 	go func() { runnerErrors <- jobRunner.Run(rootCtx) }()
 	go func() { runnerErrors <- executionRunner.Run(rootCtx) }()
 	go func() { runnerErrors <- shardRunner.Run(rootCtx) }()
 	go func() { runnerErrors <- queueRepairRunner.Run(rootCtx) }()
+	go func() { runnerErrors <- testMessageRunner.Run(rootCtx) }()
 	health.SetReady(true)
 	logger.Info("campaign worker started",
 		"workerId", cfg.WorkerID,
@@ -155,6 +173,7 @@ func main() {
 		"executionScheduler", true,
 		"dispatchSharding", true,
 		"queueRepair", true,
+		"controlledTestMessages", true,
 		"mediaDelivery", "signed-short-lived-url")
 
 	var runErr error
@@ -177,7 +196,7 @@ func main() {
 	if err := healthServer.Shutdown(shutdownCtx); err != nil {
 		logger.Error("campaign worker health shutdown failed", "error", err)
 	}
-	for runnersStopped < 5 {
+	for runnersStopped < 6 {
 		select {
 		case err := <-runnerErrors:
 			runnersStopped++

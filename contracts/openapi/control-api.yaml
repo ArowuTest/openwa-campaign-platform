@@ -810,6 +810,15 @@ paths:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
         '200': { description: Capacity reservation list }
+  /routing-plans/{id}/pool-report:
+    get:
+      operationId: getRoutingPlanPoolReport
+      summary: Report planned capacity and canonical delivery outcomes by approved sender pool
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Pool-level execution report }
+        '404': { description: Routing plan not found }
   /routing-plans/{id}/release:
     post:
       operationId: releaseRoutingPlanReservations
@@ -818,6 +827,36 @@ paths:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
         '204': { description: Reservations released }
+  /dispatch-shards/{id}/reallocate:
+    post:
+      operationId: reallocateDispatchShard
+      summary: Reallocate a pending unsubmitted dispatch shard to another approved sender pool
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [targetSenderPoolId, reason, evidenceReference]
+              properties:
+                targetSenderPoolId: { type: string, format: uuid }
+                reason: { type: string, minLength: 8 }
+                evidenceReference: { type: string, minLength: 1 }
+      responses:
+        '200': { description: Shard reallocated with immutable evidence }
+        '403': { description: Recent MFA step-up required }
+        '409': { description: Shard already contains submitted, terminal or leased work }
+        '422': { description: Movement is not permitted by the approved routing plan }
+  /dispatch-shards/{id}/reallocations:
+    get:
+      operationId: listDispatchShardReallocations
+      summary: List immutable pool-reallocation evidence for a dispatch shard
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Reallocation history }
   /campaigns/{id}/execution-plan:
     get:
       summary: Evaluate measured sender capacity and forecast campaign completion
@@ -1378,6 +1417,70 @@ paths:
         '400': { description: Invalid request }
         '401': { description: Authentication required }
         '403': { description: Permission denied }
+  /admin/test-recipients:
+    get:
+      operationId: listTestRecipients
+      summary: List governed approved test recipients
+      responses:
+        '200': { description: Test recipient list }
+    post:
+      operationId: createTestRecipient
+      summary: Register a draft encrypted test recipient
+      responses:
+        '201': { description: Draft test recipient created }
+        '409': { description: Test MSISDN is already registered }
+  /admin/test-recipients/{id}/submit:
+    post:
+      operationId: submitTestRecipient
+      summary: Submit a test recipient for independent approval
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Recipient submitted }
+  /admin/test-recipients/{id}/decision:
+    post:
+      operationId: decideTestRecipient
+      summary: Independently approve or reject a test recipient
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Recipient decision recorded }
+        '403': { description: Recent MFA step-up required }
+  /admin/test-recipients/{id}/revoke:
+    post:
+      operationId: revokeTestRecipient
+      summary: Revoke an approved test recipient
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Recipient revoked }
+        '403': { description: Recent MFA step-up required }
+  /campaigns/{id}/test-messages:
+    get:
+      operationId: listTestMessages
+      summary: List controlled test messages for a campaign
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Test message list }
+    post:
+      operationId: scheduleTestMessage
+      summary: Schedule an idempotent test message to an approved test recipient
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '202': { description: Test message scheduled }
+        '403': { description: Recent MFA step-up required }
+        '422': { description: Recipient, message, route or variables are invalid }
+  /test-messages/{id}:
+    get:
+      operationId: getTestMessage
+      summary: Read one controlled test-message result
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Test message }
+        '404': { description: Test message not found }
   /message-versions/{id}/preview:
     post:
       operationId: previewMessageVersion

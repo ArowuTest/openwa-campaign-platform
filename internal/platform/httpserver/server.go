@@ -40,6 +40,7 @@ import (
 	"campaign-platform/internal/shared/httpx"
 	"campaign-platform/internal/shared/id"
 	"campaign-platform/internal/storage"
+	"campaign-platform/internal/testmessage"
 )
 
 type ReadinessCheck struct {
@@ -70,6 +71,7 @@ type Dependencies struct {
 	SecureCookies            bool
 	MSISDNProtector          *sharedcrypto.MSISDNProtector
 	Messages                 *message.Service
+	TestMessages             *testmessage.Service
 	Snapshots                *segment.Service
 	SegmentDefinitions       *segment.DefinitionService
 	AudienceMaterialisations *materialisation.MaterialisationService
@@ -79,6 +81,7 @@ type Dependencies struct {
 	DeliveryMetrics          *delivery.MetricsService
 	Execution                *execution.Coordinator
 	RoutingPlans             *execution.RoutingAdministration
+	ShardReallocations       *execution.ReallocationAdministration
 	JobOperations            *jobs.AdministrationService
 	Operations               *operations.Service
 	AudienceImports          *importer.ImportService
@@ -215,6 +218,14 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/campaigns/{id}/message-versions", s.require("campaign.write", s.createMessageVersion))
 	mux.Handle("POST /api/v1/message-versions/{id}/approve", s.require("campaign.approve", s.approveMessageVersion))
 	mux.Handle("POST /api/v1/message-versions/{id}/preview", s.require("campaign.read", s.previewMessageVersion))
+	mux.Handle("GET /api/v1/admin/test-recipients", s.require("sender.read", s.listTestRecipients))
+	mux.Handle("POST /api/v1/admin/test-recipients", s.require("sender.write", s.createTestRecipient))
+	mux.Handle("POST /api/v1/admin/test-recipients/{id}/submit", s.require("sender.write", s.submitTestRecipient))
+	mux.Handle("POST /api/v1/admin/test-recipients/{id}/decision", s.require("sender.approve", s.decideTestRecipient))
+	mux.Handle("POST /api/v1/admin/test-recipients/{id}/revoke", s.require("sender.approve", s.revokeTestRecipient))
+	mux.Handle("GET /api/v1/campaigns/{id}/test-messages", s.require("campaign.read", s.listTestMessages))
+	mux.Handle("POST /api/v1/campaigns/{id}/test-messages", s.require("campaign.write", s.scheduleTestMessage))
+	mux.Handle("GET /api/v1/test-messages/{id}", s.require("campaign.read", s.getTestMessage))
 	mux.Handle("POST /api/v1/campaigns/{id}/audience-snapshots", s.require("audience.write", s.createAudienceSnapshot))
 	mux.Handle("POST /api/v1/campaigns/{id}/audience-snapshots/materialise", s.require("audience.write", s.materialiseAudienceSnapshot))
 	mux.Handle("POST /api/v1/campaigns/{id}/audience-materialisations", s.require("audience.write", s.scheduleAudienceMaterialisation))
@@ -228,7 +239,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/campaigns/{id}/routing-plans", s.require("campaign.approve", s.createCampaignRoutingPlan))
 	mux.Handle("GET /api/v1/routing-plans/{id}", s.require("campaign.read", s.getCampaignRoutingPlan))
 	mux.Handle("GET /api/v1/routing-plans/{id}/reservations", s.require("campaign.read", s.listRoutingPlanReservations))
+	mux.Handle("GET /api/v1/routing-plans/{id}/pool-report", s.require("campaign.read", s.getRoutingPlanPoolReport))
 	mux.Handle("POST /api/v1/routing-plans/{id}/release", s.require("campaign.operate", s.releaseRoutingPlanReservations))
+	mux.Handle("POST /api/v1/dispatch-shards/{id}/reallocate", s.require("campaign.operate", s.reallocateDispatchShard))
+	mux.Handle("GET /api/v1/dispatch-shards/{id}/reallocations", s.require("campaign.read", s.listDispatchShardReallocations))
 	mux.Handle("GET /api/v1/campaigns/{id}/execution-forecast", s.require("campaign.read", s.getCampaignExecutionForecast))
 	mux.Handle("GET /api/v1/operations/dashboard", s.require("operations.read", s.operationsDashboard))
 	mux.Handle("GET /api/v1/operations/incidents", s.require("operations.read", s.listOperationsIncidents))
@@ -1860,6 +1874,162 @@ type previewMessageVersionRequest struct {
 	MaskSensitive *bool             `json:"maskSensitive,omitempty"`
 }
 
+func (s *Server) listTestRecipients(w http.ResponseWriter, r *http.Request) {
+	if s.deps.TestMessages == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "TEST_MESSAGE_UNAVAILABLE", "Test-message operations are not configured.", nil)
+		return
+	}
+	items, err := s.deps.TestMessages.ListRecipients(r.Context())
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+func (s *Server) createTestRecipient(w http.ResponseWriter, r *http.Request) {
+	if s.deps.TestMessages == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "TEST_MESSAGE_UNAVAILABLE", "Test-message operations are not configured.", nil)
+		return
+	}
+	principal, _ := identity.PrincipalFromContext(r.Context())
+	var input struct {
+		Label  string `json:"label"`
+		MSISDN string `json:"msisdn"`
+		Reason string `json:"reason"`
+	}
+	if err := httpx.DecodeJSON(w, r, 1<<20, &input); err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The test recipient request is invalid.", nil)
+		return
+	}
+	v, err := s.deps.TestMessages.CreateRecipient(r.Context(), input.Label, input.MSISDN, principal.User.ID, input.Reason)
+	if errors.Is(err, testmessage.ErrConflict) {
+		httpx.WriteError(w, r, http.StatusConflict, "TEST_RECIPIENT_EXISTS", "That test MSISDN is already registered.", nil)
+		return
+	}
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "TEST_RECIPIENT_INVALID", "The test recipient could not be created.", nil)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusCreated, v)
+}
+func (s *Server) submitTestRecipient(w http.ResponseWriter, r *http.Request) {
+	s.changeTestRecipient(w, r, "submit")
+}
+func (s *Server) decideTestRecipient(w http.ResponseWriter, r *http.Request) {
+	s.changeTestRecipient(w, r, "decision")
+}
+func (s *Server) revokeTestRecipient(w http.ResponseWriter, r *http.Request) {
+	s.changeTestRecipient(w, r, "revoke")
+}
+func (s *Server) changeTestRecipient(w http.ResponseWriter, r *http.Request, action string) {
+	if s.deps.TestMessages == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "TEST_MESSAGE_UNAVAILABLE", "Test-message operations are not configured.", nil)
+		return
+	}
+	principal, _ := identity.PrincipalFromContext(r.Context())
+	if action != "submit" && !identity.StepUpSatisfied(principal.Session, time.Now().UTC(), 10*time.Minute) {
+		httpx.WriteError(w, r, http.StatusForbidden, "MFA_STEP_UP_REQUIRED", "Recent MFA verification is required.", nil)
+		return
+	}
+	var input struct {
+		ExpectedVersion int64  `json:"expectedVersion"`
+		Reason          string `json:"reason"`
+		Approve         bool   `json:"approve"`
+	}
+	if err := httpx.DecodeJSON(w, r, 1<<20, &input); err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The test recipient decision is invalid.", nil)
+		return
+	}
+	var v testmessage.Recipient
+	var err error
+	switch action {
+	case "submit":
+		v, err = s.deps.TestMessages.SubmitRecipient(r.Context(), r.PathValue("id"), principal.User.ID, input.Reason, input.ExpectedVersion)
+	case "decision":
+		v, err = s.deps.TestMessages.DecideRecipient(r.Context(), r.PathValue("id"), principal.User.ID, input.Reason, input.ExpectedVersion, input.Approve)
+	default:
+		v, err = s.deps.TestMessages.RevokeRecipient(r.Context(), r.PathValue("id"), principal.User.ID, input.Reason, input.ExpectedVersion)
+	}
+	if errors.Is(err, testmessage.ErrConflict) {
+		httpx.WriteError(w, r, http.StatusConflict, "TEST_RECIPIENT_CONFLICT", "The test recipient changed; reload and retry.", nil)
+		return
+	}
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "TEST_RECIPIENT_TRANSITION_INVALID", "The requested transition is not allowed.", nil)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, v)
+}
+func (s *Server) scheduleTestMessage(w http.ResponseWriter, r *http.Request) {
+	if s.deps.TestMessages == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "TEST_MESSAGE_UNAVAILABLE", "Test-message operations are not configured.", nil)
+		return
+	}
+	principal, _ := identity.PrincipalFromContext(r.Context())
+	if !identity.StepUpSatisfied(principal.Session, time.Now().UTC(), 10*time.Minute) {
+		httpx.WriteError(w, r, http.StatusForbidden, "MFA_STEP_UP_REQUIRED", "Recent MFA verification is required.", nil)
+		return
+	}
+	var input struct {
+		MessageVersionID string            `json:"messageVersionId"`
+		TestRecipientID  string            `json:"testRecipientId"`
+		GatewayPoolID    string            `json:"gatewayPoolId"`
+		SenderPoolID     string            `json:"senderPoolId"`
+		Provider         string            `json:"provider"`
+		Engine           string            `json:"engine"`
+		SenderSessionID  string            `json:"senderSessionId"`
+		VariableValues   map[string]string `json:"variableValues"`
+		Reason           string            `json:"reason"`
+		IdempotencyKey   string            `json:"idempotencyKey"`
+	}
+	if err := httpx.DecodeJSON(w, r, 1<<20, &input); err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The test-message request is invalid.", nil)
+		return
+	}
+	v, err := s.deps.TestMessages.Schedule(r.Context(), r.PathValue("id"), input.MessageVersionID, input.TestRecipientID, input.GatewayPoolID, input.SenderPoolID, input.Provider, input.Engine, input.SenderSessionID, principal.User.ID, input.Reason, input.IdempotencyKey, input.VariableValues)
+	if errors.Is(err, testmessage.ErrRecipientNotActive) {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "TEST_RECIPIENT_NOT_APPROVED", "Only approved active test recipients may receive test messages.", nil)
+		return
+	}
+	if errors.Is(err, testmessage.ErrConflict) {
+		httpx.WriteError(w, r, http.StatusConflict, "TEST_MESSAGE_IDEMPOTENCY_CONFLICT", "The idempotency key was reused with different test-send details.", nil)
+		return
+	}
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "TEST_MESSAGE_INVALID", "The test message could not be scheduled.", map[string]any{"detail": err.Error()})
+		return
+	}
+	httpx.WriteJSON(w, http.StatusAccepted, v)
+}
+func (s *Server) listTestMessages(w http.ResponseWriter, r *http.Request) {
+	if s.deps.TestMessages == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "TEST_MESSAGE_UNAVAILABLE", "Test-message operations are not configured.", nil)
+		return
+	}
+	items, err := s.deps.TestMessages.ListSends(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+}
+func (s *Server) getTestMessage(w http.ResponseWriter, r *http.Request) {
+	if s.deps.TestMessages == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "TEST_MESSAGE_UNAVAILABLE", "Test-message operations are not configured.", nil)
+		return
+	}
+	v, err := s.deps.TestMessages.GetSend(r.Context(), r.PathValue("id"))
+	if errors.Is(err, testmessage.ErrNotFound) {
+		httpx.WriteError(w, r, http.StatusNotFound, "TEST_MESSAGE_NOT_FOUND", "The test message was not found.", nil)
+		return
+	}
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, v)
+}
+
 func (s *Server) previewMessageVersion(w http.ResponseWriter, r *http.Request) {
 	if s.deps.Messages == nil {
 		httpx.WriteError(w, r, http.StatusServiceUnavailable, "MESSAGE_SERVICE_UNAVAILABLE", "Message versioning is unavailable.", nil)
@@ -2253,6 +2423,54 @@ func (s *Server) getCampaignExecutionPlan(w http.ResponseWriter, r *http.Request
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, value)
+}
+
+func (s *Server) reallocateDispatchShard(w http.ResponseWriter, r *http.Request) {
+	if s.deps.ShardReallocations == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "SHARD_REALLOCATION_UNAVAILABLE", "Dispatch-shard reallocation is not configured.", nil)
+		return
+	}
+	principal, _ := identity.PrincipalFromContext(r.Context())
+	if !identity.StepUpSatisfied(principal.Session, time.Now().UTC(), 10*time.Minute) {
+		httpx.WriteError(w, r, http.StatusForbidden, "MFA_STEP_UP_REQUIRED", "Recent MFA verification is required.", nil)
+		return
+	}
+	var input struct {
+		TargetSenderPoolID string `json:"targetSenderPoolId"`
+		Reason             string `json:"reason"`
+		EvidenceReference  string `json:"evidenceReference"`
+	}
+	if err := httpx.DecodeJSON(w, r, 1<<20, &input); err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The reallocation request is invalid.", nil)
+		return
+	}
+	value, err := s.deps.ShardReallocations.Reallocate(r.Context(), r.PathValue("id"), input.TargetSenderPoolID, principal.User.ID, input.Reason, input.EvidenceReference)
+	if errors.Is(err, execution.ErrReallocationUnsafe) {
+		httpx.WriteError(w, r, http.StatusConflict, "SHARD_REALLOCATION_UNSAFE", "The shard contains submitted, terminal or actively leased work and cannot be reallocated.", nil)
+		return
+	}
+	if errors.Is(err, execution.ErrReallocationInvalid) || errors.Is(err, execution.ErrReallocationConflict) {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "SHARD_REALLOCATION_INVALID", "The requested pool movement is not permitted by the approved routing plan.", nil)
+		return
+	}
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, value)
+}
+
+func (s *Server) listDispatchShardReallocations(w http.ResponseWriter, r *http.Request) {
+	if s.deps.ShardReallocations == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "SHARD_REALLOCATION_UNAVAILABLE", "Dispatch-shard reallocation is not configured.", nil)
+		return
+	}
+	values, err := s.deps.ShardReallocations.List(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": values})
 }
 
 func (s *Server) getCampaignExecutionForecast(w http.ResponseWriter, r *http.Request) {
@@ -2784,6 +3002,24 @@ func (s *Server) listRoutingPlanReservations(w http.ResponseWriter, r *http.Requ
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": values})
 }
+
+func (s *Server) getRoutingPlanPoolReport(w http.ResponseWriter, r *http.Request) {
+	if s.deps.RoutingPlans == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "ROUTING_PLAN_UNAVAILABLE", "Campaign routing-plan administration is not configured.", nil)
+		return
+	}
+	values, err := s.deps.RoutingPlans.PoolReport(r.Context(), r.PathValue("id"))
+	if errors.Is(err, execution.ErrRoutingPlanNotFound) {
+		httpx.WriteError(w, r, http.StatusNotFound, "ROUTING_PLAN_NOT_FOUND", "The routing plan was not found.", nil)
+		return
+	}
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": values})
+}
+
 func (s *Server) releaseRoutingPlanReservations(w http.ResponseWriter, r *http.Request) {
 	if s.deps.RoutingPlans == nil {
 		httpx.WriteError(w, r, http.StatusServiceUnavailable, "ROUTING_PLAN_UNAVAILABLE", "Campaign routing-plan administration is not configured.", nil)

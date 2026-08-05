@@ -6,10 +6,10 @@ Total requirements: **398**
 
 | Status | Count |
 |---|---:|
-| IMPLEMENTED_TESTED | 63 |
+| IMPLEMENTED_TESTED | 64 |
 | PARTIAL | 34 |
 | BLOCKED_EXTERNAL | 0 |
-| NOT_STARTED | 301 |
+| NOT_STARTED | 300 |
 
 | ID | Priority | Status | Requirement | Evidence / notes |
 |---|---|---|---|---|
@@ -173,7 +173,7 @@ Total requirements: **398**
 | CAM-006 | Must | NOT_STARTED | Store media in object storage with checksum, type, size and scan status. |  |
 | CAM-007 | Must | NOT_STARTED | Support approved personalisation variables with typed values and fallback. |  |
 | CAM-008 | Must | NOT_STARTED | Preview message using representative test records with masked data. |  |
-| CAM-009 | Must | NOT_STARTED | Send controlled test messages only to approved test numbers. |  |
+| CAM-009 | Must | IMPLEMENTED_TESTED | Send controlled test messages only to approved test numbers. | `internal/testmessage/model.go`, `internal/testmessage/memory.go`, `internal/testmessage/postgres.go`, `internal/testmessage/runner.go`, `internal/testmessage/service_test.go`, `internal/platform/httpserver/server.go`, `cmd/campaign-worker/main.go`, `database/migrations/0056_controlled_test_messages.sql` — Only maker-checker approved test MSISDNs may receive test sends. Test sends freeze the message content hash, explicit OpenWA engine, gateway pool and session; use idempotent provider commands; apply governed pacing; and retain accepted, failed or unknown outcomes. |
 | CAM-010 | Must | NOT_STARTED | Version message text, media, variables and links. |  |
 | CAM-011 | Must | NOT_STARTED | Hash the approved message version and include it in campaign release. |  |
 | CAM-012 | Must | IMPLEMENTED_TESTED | Require reapproval after material message, media, link, audience, sender or schedule change. | `internal/campaign/model.go`, `internal/campaign/model_test.go`, `internal/campaign/service.go`, `internal/persistence/postgres/campaign.go`, `internal/platform/httpserver/server.go`, `database/migrations/0041_campaign_material_change_invalidation.sql`, `contracts/openapi/control-api.yaml` — Material audience, message, entitlement, transport and schedule changes are explicit, MFA-protected, optimistically versioned, recorded append-only and automatically regress the campaign to the required approval stage. |
@@ -207,7 +207,7 @@ Total requirements: **398**
 | SND-001 | Must | NOT_STARTED | Maintain an inventory of genuine sender MSISDNs and WhatsApp account metadata. |  |
 | SND-002 | Must | NOT_STARTED | Store sender MSISDN encrypted and display masked by default. |  |
 | SND-003 | Must | NOT_STARTED | Record ownership, registration country, profile/display name, recovery information reference and lifecycle status. |  |
-| SND-004 | Must | IMPLEMENTED_TESTED | Support logical sender pools that map to one or more actual sender accounts. | `internal/sender/governance.go`, `internal/sender/allocator.go`, `internal/execution/routing_plan.go`, `internal/execution/routing_admin.go`, `internal/execution/routing_admin_test.go`, `internal/execution/routing_postgres.go`, `database/migrations/0052_sender_pacing_and_multi_pool_routing.sql` — Logical sender pools map to governed concrete sessions. Version 0.8.19 adds immutable multi-pool campaign routing plans, deterministic shard/pool allocation evidence and atomic pool-capacity reservations. |
+| SND-004 | Must | IMPLEMENTED_TESTED | Support logical sender pools that map to one or more actual sender accounts. | `internal/sender/governance.go`, `internal/sender/allocator.go`, `internal/execution/routing_plan.go`, `internal/execution/routing_admin.go`, `internal/execution/routing_admin_test.go`, `internal/execution/routing_postgres.go`, `database/migrations/0052_sender_pacing_and_multi_pool_routing.sql`, `internal/execution/reallocation.go`, `internal/execution/reallocation_postgres.go`, `internal/execution/reallocation_test.go`, `database/migrations/0055_campaign_shard_reallocation.sql` — Logical sender pools map to governed concrete sessions. Multi-pool campaign plans deterministically bind shards to approved pools, and only pending unsubmitted shards may be reallocated when the frozen source/target rules permit it; immutable evidence and pool-level outcome reporting are retained. |
 | SND-005 | Must | NOT_STARTED | Clearly disclose that logical sender is not an alphanumeric WhatsApp sender ID. |  |
 | SND-006 | Must | IMPLEMENTED_TESTED | Support ready, connecting, disconnected, paused, draining, restricted, retired and quarantined sender states. | `internal/sender/governance.go`, `internal/sender/governance_test.go`, `internal/sender/memory_governance.go`, `internal/sender/postgres_governance.go`, `internal/sender/allocator.go`, `internal/platform/httpserver/sender_governance.go`, `database/migrations/0047_sender_session_quarantine.sql` — Governed sender lifecycle includes quarantine; quarantined/restricted/retired sessions are excluded from allocation and runtime heartbeats cannot silently re-enable them. |
 | SND-007 | Must | NOT_STARTED | Allow each session to have exactly one active worker lease. |  |

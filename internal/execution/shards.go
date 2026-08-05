@@ -21,23 +21,25 @@ const (
 var ErrShardLeaseConflict = errors.New("campaign dispatch shard lease conflict")
 
 type DispatchShard struct {
-	ID              string      `json:"id"`
-	CampaignID      string      `json:"campaignId"`
-	Ordinal         int         `json:"ordinal"`
-	TargetSize      int         `json:"targetSize"`
-	RecipientCount  int64       `json:"recipientCount"`
-	TerminalCount   int64       `json:"terminalCount"`
-	FailedCount     int64       `json:"failedCount"`
-	UnknownCount    int64       `json:"unknownCount"`
-	Status          ShardStatus `json:"status"`
-	LastRecipientID string      `json:"lastRecipientId,omitempty"`
-	LeaseOwner      string      `json:"leaseOwner,omitempty"`
-	LeaseVersion    int64       `json:"leaseVersion"`
-	LeaseExpiresAt  *time.Time  `json:"leaseExpiresAt,omitempty"`
-	StartedAt       *time.Time  `json:"startedAt,omitempty"`
-	CompletedAt     *time.Time  `json:"completedAt,omitempty"`
-	CreatedAt       time.Time   `json:"createdAt"`
-	UpdatedAt       time.Time   `json:"updatedAt"`
+	ID                   string      `json:"id"`
+	CampaignID           string      `json:"campaignId"`
+	Ordinal              int         `json:"ordinal"`
+	TargetSize           int         `json:"targetSize"`
+	RecipientCount       int64       `json:"recipientCount"`
+	TerminalCount        int64       `json:"terminalCount"`
+	FailedCount          int64       `json:"failedCount"`
+	UnknownCount         int64       `json:"unknownCount"`
+	Status               ShardStatus `json:"status"`
+	LastRecipientID      string      `json:"lastRecipientId,omitempty"`
+	RoutingPlanID        string      `json:"routingPlanId,omitempty"`
+	AssignedSenderPoolID string      `json:"assignedSenderPoolId,omitempty"`
+	LeaseOwner           string      `json:"leaseOwner,omitempty"`
+	LeaseVersion         int64       `json:"leaseVersion"`
+	LeaseExpiresAt       *time.Time  `json:"leaseExpiresAt,omitempty"`
+	StartedAt            *time.Time  `json:"startedAt,omitempty"`
+	CompletedAt          *time.Time  `json:"completedAt,omitempty"`
+	CreatedAt            time.Time   `json:"createdAt"`
+	UpdatedAt            time.Time   `json:"updatedAt"`
 }
 
 type ShardRepository interface {

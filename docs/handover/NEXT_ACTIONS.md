@@ -80,3 +80,12 @@ Proceed with the messaging and dispatch core: bounded dispatch shards, queue bac
 2. Finish dependency-resolved OpenWA gateway build and live session lifecycle validation.
 3. Add production-scale shard, queue-repair and dispatch endurance evidence against PostgreSQL.
 4. Continue reporting and operations APIs after messaging operational-core closure.
+
+
+## After 0.8.20
+
+1. Complete automatic provider-status requery for unknown outcomes without risking cross-session duplicates.
+2. Add pool-reservation consumption telemetry and deadline-breach alerts by routing plan.
+3. Complete organisation-facing campaign and financial report composition using pool/session evidence.
+4. Build and typecheck both retained OpenWA engine deployments with pinned Node dependencies.
+5. Execute migrations through 0056 against live PostgreSQL and test controlled sends with genuine approved test numbers.

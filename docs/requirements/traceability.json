@@ -1663,9 +1663,18 @@
     "requirement": "Send controlled test messages only to approved test numbers.",
     "priority": "Must",
     "acceptance": "Production cohort is never used for test send.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/testmessage/model.go",
+      "internal/testmessage/memory.go",
+      "internal/testmessage/postgres.go",
+      "internal/testmessage/runner.go",
+      "internal/testmessage/service_test.go",
+      "internal/platform/httpserver/server.go",
+      "cmd/campaign-worker/main.go",
+      "database/migrations/0056_controlled_test_messages.sql"
+    ],
+    "notes": "Only maker-checker approved test MSISDNs may receive test sends. Test sends freeze the message content hash, explicit OpenWA engine, gateway pool and session; use idempotent provider commands; apply governed pacing; and retain accepted, failed or unknown outcomes."
   },
   {
     "id": "CAM-010",
@@ -2004,9 +2013,13 @@
       "internal/execution/routing_admin.go",
       "internal/execution/routing_admin_test.go",
       "internal/execution/routing_postgres.go",
-      "database/migrations/0052_sender_pacing_and_multi_pool_routing.sql"
+      "database/migrations/0052_sender_pacing_and_multi_pool_routing.sql",
+      "internal/execution/reallocation.go",
+      "internal/execution/reallocation_postgres.go",
+      "internal/execution/reallocation_test.go",
+      "database/migrations/0055_campaign_shard_reallocation.sql"
     ],
-    "notes": "Logical sender pools map to governed concrete sessions. Version 0.8.19 adds immutable multi-pool campaign routing plans, deterministic shard/pool allocation evidence and atomic pool-capacity reservations."
+    "notes": "Logical sender pools map to governed concrete sessions. Multi-pool campaign plans deterministically bind shards to approved pools, and only pending unsubmitted shards may be reallocated when the frozen source/target rules permit it; immutable evidence and pool-level outcome reporting are retained."
   },
   {
     "id": "SND-005",

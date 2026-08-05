@@ -143,3 +143,42 @@ func (s *PostgreSQLRoutingPlanStore) ReleaseReservations(ctx context.Context, pl
 	}
 	return nil
 }
+
+func (s *PostgreSQLRoutingPlanStore) PoolExecutionReport(ctx context.Context, planID string) ([]PoolExecutionReport, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT p.routing_plan_id::text,p.sender_pool_id::text,p.gateway_pool_id::text,p.provider,p.engine,
+ p.maximum_recipients,p.reserved_messages_per_minute,p.reserved_hourly_units,p.reserved_daily_units,
+ count(DISTINCT sh.id)::bigint,count(cr.id)::bigint,
+ count(cr.id) FILTER (WHERE cr.status IN ('AUTHORISED','QUEUED','CLAIMED'))::bigint,
+ count(cr.id) FILTER (WHERE cr.status IN ('SUBMITTING','GATEWAY_ACCEPTED'))::bigint,
+ count(cr.id) FILTER (WHERE cr.status='SENT')::bigint,
+ count(cr.id) FILTER (WHERE cr.status='DELIVERED')::bigint,
+ count(cr.id) FILTER (WHERE cr.status='READ')::bigint,
+ count(cr.id) FILTER (WHERE cr.status IN ('FAILED_RETRYABLE','FAILED_PERMANENT'))::bigint,
+ count(cr.id) FILTER (WHERE cr.status='UNKNOWN')::bigint,
+ count(cr.id) FILTER (WHERE cr.status IN ('GATEWAY_ACCEPTED','SENT','DELIVERED','READ','FAILED_PERMANENT','UNKNOWN','SUPPRESSED_BEFORE_SEND','CANCELLED'))::bigint
+FROM campaign_routing_plan_pools p
+LEFT JOIN campaign_dispatch_shards sh ON sh.routing_plan_id=p.routing_plan_id AND sh.assigned_sender_pool_id=p.sender_pool_id
+LEFT JOIN campaign_recipients cr ON cr.dispatch_shard_id=sh.id
+WHERE p.routing_plan_id=$1::uuid
+GROUP BY p.routing_plan_id,p.sender_pool_id,p.gateway_pool_id,p.provider,p.engine,p.maximum_recipients,p.reserved_messages_per_minute,p.reserved_hourly_units,p.reserved_daily_units
+ORDER BY p.sender_pool_id`, planID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []PoolExecutionReport{}
+	for rows.Next() {
+		var v PoolExecutionReport
+		if err := rows.Scan(&v.RoutingPlanID, &v.SenderPoolID, &v.GatewayPoolID, &v.Provider, &v.Engine, &v.MaximumRecipients, &v.ReservedMessagesPerMinute, &v.ReservedHourlyUnits, &v.ReservedDailyUnits, &v.ShardCount, &v.RecipientCount, &v.QueuedCount, &v.SubmittedCount, &v.SentCount, &v.DeliveredCount, &v.ReadCount, &v.FailedCount, &v.UnknownCount, &v.TerminalCount); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		return nil, ErrRoutingPlanNotFound
+	}
+	return out, nil
+}

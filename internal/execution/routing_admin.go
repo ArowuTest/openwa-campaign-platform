@@ -39,6 +39,7 @@ type RoutingPlanStore interface {
 	Reservations(context.Context, string) ([]CapacityReservation, error)
 	ActivateReservations(context.Context, string, time.Time) error
 	ReleaseReservations(context.Context, string, string, time.Time) error
+	PoolExecutionReport(context.Context, string) ([]PoolExecutionReport, error)
 }
 
 type CampaignReader interface {
@@ -104,9 +105,37 @@ func (s *RoutingAdministration) Reservations(ctx context.Context, planID string)
 func (s *RoutingAdministration) Activate(ctx context.Context, planID string) error {
 	return s.Store.ActivateReservations(ctx, planID, s.now())
 }
+func (s *RoutingAdministration) PoolReport(ctx context.Context, planID string) ([]PoolExecutionReport, error) {
+	if s == nil || s.Store == nil || strings.TrimSpace(planID) == "" {
+		return nil, ErrRoutingPlanInvalid
+	}
+	return s.Store.PoolExecutionReport(ctx, strings.TrimSpace(planID))
+}
 func (s *RoutingAdministration) Release(ctx context.Context, planID, actor string) error {
 	if strings.TrimSpace(actor) == "" {
 		return ErrRoutingPlanInvalid
 	}
 	return s.Store.ReleaseReservations(ctx, planID, actor, s.now())
+}
+
+type PoolExecutionReport struct {
+	RoutingPlanID             string `json:"routingPlanId"`
+	SenderPoolID              string `json:"senderPoolId"`
+	GatewayPoolID             string `json:"gatewayPoolId"`
+	Provider                  string `json:"provider"`
+	Engine                    string `json:"engine"`
+	MaximumRecipients         int64  `json:"maximumRecipients"`
+	ReservedMessagesPerMinute int    `json:"reservedMessagesPerMinute"`
+	ReservedHourlyUnits       int64  `json:"reservedHourlyUnits"`
+	ReservedDailyUnits        int64  `json:"reservedDailyUnits"`
+	ShardCount                int64  `json:"shardCount"`
+	RecipientCount            int64  `json:"recipientCount"`
+	QueuedCount               int64  `json:"queuedCount"`
+	SubmittedCount            int64  `json:"submittedCount"`
+	SentCount                 int64  `json:"sentCount"`
+	DeliveredCount            int64  `json:"deliveredCount"`
+	ReadCount                 int64  `json:"readCount"`
+	FailedCount               int64  `json:"failedCount"`
+	UnknownCount              int64  `json:"unknownCount"`
+	TerminalCount             int64  `json:"terminalCount"`
 }

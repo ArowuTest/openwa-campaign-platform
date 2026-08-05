@@ -88,3 +88,17 @@ func (s *MemoryRoutingPlanStore) ReleaseReservations(_ context.Context, id, acto
 	s.reservations[id] = r
 	return nil
 }
+
+func (s *MemoryRoutingPlanStore) PoolExecutionReport(_ context.Context, id string) ([]PoolExecutionReport, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p, ok := s.plans[id]
+	if !ok {
+		return nil, ErrRoutingPlanNotFound
+	}
+	out := make([]PoolExecutionReport, 0, len(p.Routes))
+	for _, r := range p.Routes {
+		out = append(out, PoolExecutionReport{RoutingPlanID: id, SenderPoolID: r.SenderPoolID, GatewayPoolID: r.GatewayPoolID, Provider: r.Provider, Engine: r.Engine, MaximumRecipients: r.MaximumRecipients, ReservedMessagesPerMinute: r.ReservedMessagesPerMinute, ReservedHourlyUnits: r.ReservedHourlyUnits, ReservedDailyUnits: r.ReservedDailyUnits})
+	}
+	return out, nil
+}

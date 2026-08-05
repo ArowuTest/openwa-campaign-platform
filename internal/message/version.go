@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -82,11 +83,26 @@ func NewDraft(input Input, now time.Time) (Version, error) {
 	if err := ValidateIdempotencyKey(input.IdempotencyKey); err != nil {
 		return Version{}, err
 	}
-	if input.Type == TypeText && strings.TrimSpace(input.Body) == "" {
+	if input.Type != TypeText && input.Type != TypeImageCaption && input.Type != TypeVideo && input.Type != TypeDocument {
+		return Version{}, errors.New("unsupported message type")
+	}
+	body := strings.TrimSpace(input.Body)
+	if input.Type == TypeText && body == "" {
 		return Version{}, errors.New("text body is required")
+	}
+	if len([]byte(body)) > 65536 {
+		return Version{}, errors.New("message body exceeds 64 KiB")
+	}
+	for _, character := range body {
+		if character < 0x20 && character != '\n' && character != '\r' && character != '\t' {
+			return Version{}, errors.New("message body contains prohibited control characters")
+		}
 	}
 	if input.Type != TypeText && (input.Media == nil || input.Media.ObjectKey == "") {
 		return Version{}, errors.New("media reference is required")
+	}
+	if err := validateVariables(input.Variables); err != nil {
+		return Version{}, err
 	}
 	if input.Media != nil {
 		if input.Media.SHA256 == "" || input.Media.Size < 0 || input.Media.ScanStatus != "CLEAN" {
@@ -136,6 +152,35 @@ func ValidateIdempotencyKey(value string) error {
 			continue
 		}
 		return errors.New("idempotency key contains unsafe characters")
+	}
+	return nil
+}
+
+func validateVariables(variables []Variable) error {
+	if len(variables) > 64 {
+		return errors.New("message declares more than 64 variables")
+	}
+	allowed := map[string]bool{"TEXT": true, "INTEGER": true, "DECIMAL": true, "BOOLEAN": true, "DATE": true, "MSISDN": true, "EMAIL": true, "PERSONAL": true, "SENSITIVE": true}
+	seen := map[string]struct{}{}
+	for _, variable := range variables {
+		name := strings.TrimSpace(variable.Name)
+		if !regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9_.-]{0,63}$`).MatchString(name) {
+			return errors.New("message variable name is invalid")
+		}
+		if _, exists := seen[name]; exists {
+			return errors.New("duplicate message variable: " + name)
+		}
+		seen[name] = struct{}{}
+		dataType := strings.ToUpper(strings.TrimSpace(variable.DataType))
+		if dataType == "" {
+			dataType = "TEXT"
+		}
+		if !allowed[dataType] {
+			return errors.New("unsupported message variable data type: " + dataType)
+		}
+		if len([]byte(variable.Fallback)) > 1024 {
+			return errors.New("message variable fallback exceeds 1024 bytes")
+		}
 	}
 	return nil
 }

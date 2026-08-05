@@ -28,3 +28,26 @@ func TestMessageRejectsUnsafeLink(t *testing.T) {
 		t.Fatal("unsafe link accepted")
 	}
 }
+
+func TestNewDraftRejectsInvalidVariableDefinitions(t *testing.T) {
+	base := Input{CampaignID: "campaign", Version: 1, Type: TypeText, Body: "Hello {{first_name}}", CreatedBy: "maker", IdempotencyKey: "message-variable-validation"}
+	base.Variables = []Variable{{Name: "first_name", DataType: "TEXT"}, {Name: "first_name", DataType: "TEXT"}}
+	if _, err := NewDraft(base, time.Now()); err == nil {
+		t.Fatal("duplicate variable accepted")
+	}
+	base.Variables = []Variable{{Name: "first_name", DataType: "EXECUTABLE"}}
+	if _, err := NewDraft(base, time.Now()); err == nil {
+		t.Fatal("unsupported variable type accepted")
+	}
+	base.Variables = []Variable{{Name: "first name", DataType: "TEXT"}}
+	if _, err := NewDraft(base, time.Now()); err == nil {
+		t.Fatal("invalid variable name accepted")
+	}
+}
+
+func TestNewDraftRejectsUndeclaredPlaceholders(t *testing.T) {
+	_, err := NewDraft(Input{CampaignID: "campaign", Version: 1, Type: TypeText, Body: "Hello {{first_name}}", CreatedBy: "maker", IdempotencyKey: "message-undeclared-variable"}, time.Now())
+	if err == nil {
+		t.Fatal("undeclared placeholder accepted")
+	}
+}

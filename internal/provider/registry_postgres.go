@@ -1,0 +1,99 @@
+package provider
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"strings"
+	"time"
+)
+
+type PostgreSQLStore struct{ DB *sql.DB }
+
+func (s *PostgreSQLStore) List(ctx context.Context) ([]Definition, error) {
+	rows, err := s.DB.QueryContext(ctx, providerSelect+` ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Definition{}
+	for rows.Next() {
+		d, err := scanDefinition(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+func (s *PostgreSQLStore) Get(ctx context.Context, id string) (Definition, error) {
+	d, err := scanDefinition(s.DB.QueryRowContext(ctx, providerSelect+` WHERE id=$1::uuid`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Definition{}, ErrNotFound
+	}
+	return d, err
+}
+func (s *PostgreSQLStore) Active(ctx context.Context, p string, c Channel, e string, at time.Time) (Definition, error) {
+	d, err := scanDefinition(s.DB.QueryRowContext(ctx, providerSelect+` WHERE provider=$1 AND channel=$2 AND engine=$3 AND status='ACTIVE' AND effective_from<=$4 AND (effective_to IS NULL OR effective_to>$4) ORDER BY effective_from DESC LIMIT 1`, strings.ToUpper(strings.TrimSpace(p)), c, strings.ToUpper(strings.TrimSpace(e)), at.UTC()))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Definition{}, ErrNotFound
+	}
+	return d, err
+}
+func (s *PostgreSQLStore) Create(ctx context.Context, d Definition) (Definition, error) {
+	_, err := s.DB.ExecContext(ctx, `INSERT INTO provider_capability_definitions(id,provider,channel,engine,adapter_version,minimum_gateway_version,capabilities,maximum_attachment_bytes,status,effective_from,effective_to,version,created_by,reason,created_at,updated_at) VALUES($1::uuid,$2,$3,$4,$5,NULLIF($6,''),$7,$8,$9,$10,$11,$12,$13::uuid,$14,$15,$16)`, d.ID, d.Provider, d.Channel, d.Engine, d.AdapterVersion, d.MinimumGatewayVersion, capabilityStrings(d.Capabilities), d.MaximumAttachmentBytes, d.Status, d.EffectiveFrom, d.EffectiveTo, d.Version, d.CreatedBy, d.Reason, d.CreatedAt, d.UpdatedAt)
+	return d, err
+}
+func (s *PostgreSQLStore) CompareAndSwap(ctx context.Context, d Definition, expected int64) (Definition, error) {
+	tx, err := s.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		return d, err
+	}
+	defer tx.Rollback()
+	if d.Status == StatusActive {
+		_, err = tx.ExecContext(ctx, `UPDATE provider_capability_definitions SET status='RETIRED',effective_to=$1,version=version+1,updated_at=$2 WHERE id<>$3::uuid AND provider=$4 AND channel=$5 AND engine=$6 AND status='ACTIVE' AND effective_from<$7 AND (effective_to IS NULL OR effective_to>$8)`, d.EffectiveFrom, d.UpdatedAt, d.ID, d.Provider, d.Channel, d.Engine, coalesceEnd(d.EffectiveTo), d.EffectiveFrom)
+		if err != nil {
+			return d, err
+		}
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE provider_capability_definitions SET provider=$3,channel=$4,engine=$5,adapter_version=$6,minimum_gateway_version=NULLIF($7,''),capabilities=$8,maximum_attachment_bytes=$9,status=$10,effective_from=$11,effective_to=$12,version=$13,submitted_by=NULLIF($14,'')::uuid,approved_by=NULLIF($15,'')::uuid,reason=$16,updated_at=$17 WHERE id=$1::uuid AND version=$2`, d.ID, expected, d.Provider, d.Channel, d.Engine, d.AdapterVersion, d.MinimumGatewayVersion, capabilityStrings(d.Capabilities), d.MaximumAttachmentBytes, d.Status, d.EffectiveFrom, d.EffectiveTo, d.Version, d.SubmittedBy, d.ApprovedBy, d.Reason, d.UpdatedAt)
+	if err != nil {
+		return d, err
+	}
+	n, _ := res.RowsAffected()
+	if n != 1 {
+		return d, ErrConflict
+	}
+	if err = tx.Commit(); err != nil {
+		return d, err
+	}
+	return d, nil
+}
+
+const providerSelect = `SELECT id::text,provider,channel,engine,adapter_version,coalesce(minimum_gateway_version,''),capabilities,maximum_attachment_bytes,status,effective_from,effective_to,version,created_by::text,coalesce(submitted_by::text,''),coalesce(approved_by::text,''),reason,created_at,updated_at FROM provider_capability_definitions`
+
+type scanner interface{ Scan(...any) error }
+
+func scanDefinition(s scanner) (Definition, error) {
+	var d Definition
+	var caps []string
+	err := s.Scan(&d.ID, &d.Provider, &d.Channel, &d.Engine, &d.AdapterVersion, &d.MinimumGatewayVersion, &caps, &d.MaximumAttachmentBytes, &d.Status, &d.EffectiveFrom, &d.EffectiveTo, &d.Version, &d.CreatedBy, &d.SubmittedBy, &d.ApprovedBy, &d.Reason, &d.CreatedAt, &d.UpdatedAt)
+	d.Capabilities = make([]Capability, len(caps))
+	for i, v := range caps {
+		d.Capabilities[i] = Capability(v)
+	}
+	return d, err
+}
+func capabilityStrings(in []Capability) []string {
+	out := make([]string, len(in))
+	for i, v := range in {
+		out[i] = string(v)
+	}
+	return out
+}
+func coalesceEnd(v *time.Time) time.Time {
+	if v != nil {
+		return v.UTC()
+	}
+	return time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
+}

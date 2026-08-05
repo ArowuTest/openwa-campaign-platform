@@ -2,6 +2,7 @@ package orchestration
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -44,5 +45,17 @@ func TestReleaseRejectsEntitlementOverflowWithoutPartialWrites(t *testing.T) {
 	}
 	if len(store.Recipients(context.Background(), "c")) != 0 || len(store.Outbox(context.Background())) != 0 {
 		t.Fatal("partial release persisted")
+	}
+}
+
+func TestShardForUsesEntitlementDerivedShardCount(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		shard := shardFor(fmt.Sprintf("contact-%d", i), 50_000, 10_000)
+		if shard < 0 || shard >= 5 {
+			t.Fatalf("shard=%d", shard)
+		}
+	}
+	if shardFor("contact", 100, 10_000) != 0 {
+		t.Fatal("small campaign must use one shard")
 	}
 }

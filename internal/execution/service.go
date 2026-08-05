@@ -33,35 +33,35 @@ func (c *Coordinator) now() time.Time {
 	}
 	return time.Now().UTC()
 }
-func (c *Coordinator) Plan(ctx context.Context, id string) (CapacityEvidence, error) {
+func (c *Coordinator) assess(ctx context.Context, id string, record bool) (CapacityEvidence, Metrics, error) {
 	if c == nil || c.Campaigns == nil || c.Store == nil {
-		return CapacityEvidence{}, errors.New("execution coordinator dependencies are required")
+		return CapacityEvidence{}, Metrics{}, errors.New("execution coordinator dependencies are required")
 	}
 	entity, err := c.Campaigns.Get(ctx, strings.TrimSpace(id))
 	if err != nil {
-		return CapacityEvidence{}, err
+		return CapacityEvidence{}, Metrics{}, err
 	}
 	if entity.Status != campaign.StatusScheduled && entity.Status != campaign.StatusDispatching && entity.Status != campaign.StatusPaused {
-		return CapacityEvidence{}, fmt.Errorf("campaign status %s cannot be assessed for execution", entity.Status)
+		return CapacityEvidence{}, Metrics{}, fmt.Errorf("campaign status %s cannot be assessed for execution", entity.Status)
 	}
 	if entity.CompletionDeadlineAt == nil {
-		return CapacityEvidence{}, errors.New("campaign completion deadline is required")
+		return CapacityEvidence{}, Metrics{}, errors.New("campaign completion deadline is required")
 	}
 	poolID := entity.Transport.SenderPoolID
 	if entity.Transport.RoutingMode == campaign.RoutingSpecificSession {
 		poolID = entity.Transport.GatewayPoolID
 	}
 	if poolID == "" {
-		return CapacityEvidence{}, errors.New("campaign transport lacks a capacity pool reference")
+		return CapacityEvidence{}, Metrics{}, errors.New("campaign transport lacks a capacity pool reference")
 	}
 	now := c.now()
 	rate, daily, err := c.Store.Capacity(ctx, poolID, now)
 	if err != nil {
-		return CapacityEvidence{}, fmt.Errorf("load measured capacity: %w", err)
+		return CapacityEvidence{}, Metrics{}, fmt.Errorf("load measured capacity: %w", err)
 	}
 	metrics, err := c.Store.Metrics(ctx, entity.ID)
 	if err != nil {
-		return CapacityEvidence{}, fmt.Errorf("load campaign metrics: %w", err)
+		return CapacityEvidence{}, Metrics{}, fmt.Errorf("load campaign metrics: %w", err)
 	}
 	remaining := metrics.Authorised + metrics.Queued
 	if remaining == 0 && entity.Status == campaign.StatusScheduled {
@@ -73,12 +73,27 @@ func (c *Coordinator) Plan(ctx context.Context, id string) (CapacityEvidence, er
 	}
 	evidence, err := EvaluateAdmission(AdmissionInput{CampaignID: entity.ID, PoolID: poolID, EvidenceVersion: entity.Transport.CapacityEvidenceVersion, RemainingRecipients: remaining, AvailableMessagesPerMinute: rate, AvailableDailyCapacity: daily, SafetyMarginPercent: c.SafetyMarginPercent, StartAt: start, DeadlineAt: *entity.CompletionDeadlineAt, Now: now})
 	if err != nil {
-		return CapacityEvidence{}, err
+		return CapacityEvidence{}, Metrics{}, err
 	}
-	if err = c.Store.RecordAdmission(ctx, evidence); err != nil {
-		return CapacityEvidence{}, fmt.Errorf("record capacity assessment: %w", err)
+	if record {
+		if err = c.Store.RecordAdmission(ctx, evidence); err != nil {
+			return CapacityEvidence{}, Metrics{}, fmt.Errorf("record capacity assessment: %w", err)
+		}
 	}
-	return evidence, nil
+	return evidence, metrics, nil
+}
+
+func (c *Coordinator) Plan(ctx context.Context, id string) (CapacityEvidence, error) {
+	evidence, _, err := c.assess(ctx, id, true)
+	return evidence, err
+}
+
+func (c *Coordinator) Forecast(ctx context.Context, id string) (ExecutionForecast, error) {
+	evidence, metrics, err := c.assess(ctx, id, false)
+	if err != nil {
+		return ExecutionForecast{}, err
+	}
+	return BuildExecutionForecast(evidence, metrics), nil
 }
 func (c *Coordinator) Start(ctx context.Context, id, actor, reason string, expected int64) (campaign.Campaign, CapacityEvidence, error) {
 	ev, err := c.Plan(ctx, id)

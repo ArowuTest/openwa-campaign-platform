@@ -22,3 +22,35 @@ func TestCompletionUsesMutuallyExclusiveTerminalCounts(t *testing.T) {
 		t.Fatalf("%+v %v", a, err)
 	}
 }
+
+func TestExecutionForecastClassifiesDeadlineAndUnknownRisk(t *testing.T) {
+	now := time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)
+	completion := now.Add(70 * time.Minute)
+	forecast := BuildExecutionForecast(CapacityEvidence{
+		CampaignID: "campaign-1", RemainingRecipients: 6000,
+		EffectiveMessagesPerMinute: 90, AvailableDailyCapacity: 10000,
+		ForecastCompletionAt: &completion, DeadlineAt: now.Add(time.Hour),
+		Decision: DecisionReject, Reasons: []string{"DEADLINE_CAPACITY_SHORTFALL"}, EvaluatedAt: now,
+	}, Metrics{Unknown: 2, Failed: 1})
+	if forecast.Risk != ForecastRiskHigh {
+		t.Fatalf("risk=%s", forecast.Risk)
+	}
+	if forecast.DeadlineSlackMinutes != -10 {
+		t.Fatalf("slack=%d", forecast.DeadlineSlackMinutes)
+	}
+	if len(forecast.Bottlenecks) != 3 {
+		t.Fatalf("bottlenecks=%v", forecast.Bottlenecks)
+	}
+}
+
+func TestExecutionForecastBlocksWithoutThroughput(t *testing.T) {
+	now := time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)
+	forecast := BuildExecutionForecast(CapacityEvidence{
+		CampaignID: "campaign-1", RemainingRecipients: 100,
+		AvailableDailyCapacity: 1000, DeadlineAt: now.Add(time.Hour),
+		Decision: DecisionHold, Reasons: []string{"NO_EFFECTIVE_THROUGHPUT"}, EvaluatedAt: now,
+	}, Metrics{})
+	if forecast.Risk != ForecastRiskBlocked {
+		t.Fatalf("risk=%s", forecast.Risk)
+	}
+}

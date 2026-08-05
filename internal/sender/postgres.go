@@ -29,14 +29,19 @@ WHERE ss.logical_sender_pool=$2
   AND sn.last_heartbeat_at>$4
   AND sl.expires_at>$3
   AND coalesce(ss.safe_messages_per_minute,0)>0
-  AND coalesce(ss.safe_daily_capacity,0)>0
+  AND coalesce(ss.safe_daily_capacity,0)>coalesce(ss.sent_today,0)
   AND (
     SELECT count(*)
     FROM campaign_recipients active
     WHERE active.assigned_session_id=ss.id
       AND active.status IN ('CLAIMED','SUBMITTING')
   ) < ss.in_flight_limit
-ORDER BY md5(ss.id::text || $1), ss.id
+ORDER BY
+  CASE WHEN ss.status='READY' THEN 0 ELSE 1 END,
+  (coalesce(ss.sent_today,0)::numeric / nullif(ss.safe_daily_capacity,0)) ASC,
+  ((SELECT count(*) FROM campaign_recipients active2 WHERE active2.assigned_session_id=ss.id AND active2.status IN ('CLAIMED','SUBMITTING'))::numeric / nullif(ss.in_flight_limit,0)) ASC,
+  ss.last_success_at DESC NULLS LAST,
+  md5(ss.id::text || $1), ss.id
 LIMIT 1
 FOR UPDATE OF ss SKIP LOCKED`
 

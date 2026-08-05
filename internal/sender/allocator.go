@@ -28,12 +28,19 @@ const (
 )
 
 type Session struct {
-	ID             string
-	Pool           string
-	Status         Status
-	LeaseExpiresAt time.Time
-	NodeReady      bool
-	NodeDraining   bool
+	ID                    string
+	Pool                  string
+	Status                Status
+	LeaseExpiresAt        time.Time
+	NodeReady             bool
+	NodeDraining          bool
+	SafeMessagesPerMinute int
+	SafeDailyCapacity     int64
+	SentToday             int64
+	InFlight              int
+	InFlightLimit         int
+	RecentFailureRate     float64
+	LastSuccessfulAt      time.Time
 }
 
 type Allocator interface {
@@ -71,22 +78,56 @@ func (a *MemoryAllocator) Assign(_ context.Context, recipientID, pool string, no
 		if value.Status != StatusReady && value.Status != StatusBusy {
 			continue
 		}
+		if value.SafeMessagesPerMinute < 0 || value.SafeDailyCapacity < 0 {
+			continue
+		}
+		if value.SafeDailyCapacity > 0 && value.SafeDailyCapacity <= value.SentToday {
+			continue
+		}
+		if value.InFlightLimit > 0 && value.InFlight >= value.InFlightLimit {
+			continue
+		}
 		candidates = append(candidates, value)
 	}
 	if len(candidates) == 0 {
 		return "", ErrNoHealthySession
 	}
 	sort.Slice(candidates, func(i, j int) bool {
-		left := assignmentScore(recipientID, candidates[i].ID)
-		right := assignmentScore(recipientID, candidates[j].ID)
-		if left == right {
-			return candidates[i].ID < candidates[j].ID
+		left, right := candidates[i], candidates[j]
+		if left.Status != right.Status {
+			return left.Status == StatusReady
 		}
-		return left < right
+		leftDaily, rightDaily := utilisationRatio(left.SentToday, left.SafeDailyCapacity), utilisationRatio(right.SentToday, right.SafeDailyCapacity)
+		if leftDaily != rightDaily {
+			return leftDaily < rightDaily
+		}
+		leftFlight, rightFlight := utilisationRatio(int64(left.InFlight), int64(left.InFlightLimit)), utilisationRatio(int64(right.InFlight), int64(right.InFlightLimit))
+		if leftFlight != rightFlight {
+			return leftFlight < rightFlight
+		}
+		if left.RecentFailureRate != right.RecentFailureRate {
+			return left.RecentFailureRate < right.RecentFailureRate
+		}
+		if !left.LastSuccessfulAt.Equal(right.LastSuccessfulAt) {
+			return left.LastSuccessfulAt.After(right.LastSuccessfulAt)
+		}
+		leftScore := assignmentScore(recipientID, left.ID)
+		rightScore := assignmentScore(recipientID, right.ID)
+		if leftScore == rightScore {
+			return left.ID < right.ID
+		}
+		return leftScore < rightScore
 	})
 	a.assignments[recipientID] = candidates[0].ID
 	return candidates[0].ID, nil
 }
+func utilisationRatio(used, capacity int64) float64 {
+	if capacity <= 0 {
+		return 1
+	}
+	return float64(used) / float64(capacity)
+}
+
 func assignmentScore(recipientID, sessionID string) string {
 	sum := sha256.Sum256([]byte(recipientID + "\x1f" + sessionID))
 	return string(sum[:])

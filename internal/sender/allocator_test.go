@@ -66,3 +66,29 @@ func TestPostgresAllocationQueryEnforcesLeaseHealthAndInflightBounds(t *testing.
 		}
 	}
 }
+
+func TestAssignmentPrefersHealthAndAvailableCapacity(t *testing.T) {
+	now := time.Now().UTC()
+	allocator := NewMemoryAllocator(
+		Session{ID: "busy-high", Pool: "pool", Status: StatusBusy, NodeReady: true, LeaseExpiresAt: now.Add(time.Hour), SafeMessagesPerMinute: 100, SafeDailyCapacity: 1000, SentToday: 900, InFlight: 8, InFlightLimit: 10, RecentFailureRate: 0.2, LastSuccessfulAt: now.Add(-time.Minute)},
+		Session{ID: "ready-low", Pool: "pool", Status: StatusReady, NodeReady: true, LeaseExpiresAt: now.Add(time.Hour), SafeMessagesPerMinute: 100, SafeDailyCapacity: 1000, SentToday: 100, InFlight: 1, InFlightLimit: 10, RecentFailureRate: 0.01, LastSuccessfulAt: now},
+	)
+	assigned, err := allocator.Assign(context.Background(), "recipient-health", "pool", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if assigned != "ready-low" {
+		t.Fatalf("assigned=%s", assigned)
+	}
+}
+
+func TestAssignmentExcludesExhaustedAndInflightLimitedSessions(t *testing.T) {
+	now := time.Now().UTC()
+	allocator := NewMemoryAllocator(
+		Session{ID: "daily-exhausted", Pool: "pool", Status: StatusReady, NodeReady: true, LeaseExpiresAt: now.Add(time.Hour), SafeMessagesPerMinute: 100, SafeDailyCapacity: 1000, SentToday: 1000},
+		Session{ID: "inflight-exhausted", Pool: "pool", Status: StatusReady, NodeReady: true, LeaseExpiresAt: now.Add(time.Hour), SafeMessagesPerMinute: 100, SafeDailyCapacity: 1000, InFlight: 10, InFlightLimit: 10},
+	)
+	if _, err := allocator.Assign(context.Background(), "recipient-full", "pool", now); err != ErrNoHealthySession {
+		t.Fatalf("err=%v", err)
+	}
+}

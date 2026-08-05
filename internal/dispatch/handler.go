@@ -100,6 +100,7 @@ type Handler struct {
 	Materials   MaterialLoader
 	Eligibility FinalEligibility
 	Gateway     Gateway
+	Throttle    Throttle
 	Clock       func() time.Time
 }
 
@@ -144,6 +145,11 @@ func (h *Handler) Handle(ctx context.Context, job jobs.Job) error {
 	attemptKey := fmt.Sprintf("%s:%d", job.ID, job.AttemptCount)
 	if _, _, err = h.Ledger.ApplyEvent(ctx, recipient.ID, delivery.Event{DeduplicationKey: "submitting:" + attemptKey, Type: delivery.EventSubmitting, OccurredAt: now}); err != nil {
 		return err
+	}
+	if h.Throttle != nil {
+		if err := h.Throttle.Wait(ctx, material.SessionID); err != nil {
+			return jobs.RetryableError{Code: "THROTTLE_WAIT_INTERRUPTED", Err: err}
+		}
 	}
 	result, sendErr := h.Gateway.Send(ctx, GatewayRequest{IdempotencyKey: recipient.IdempotencyKey, GatewayPoolID: material.GatewayPoolID, SessionID: material.SessionID, RecipientE164: material.RecipientE164, MessageType: material.MessageType, Body: material.Body, MediaURL: material.MediaObjectURL, ClientReference: material.ClientReference})
 	if sendErr != nil {

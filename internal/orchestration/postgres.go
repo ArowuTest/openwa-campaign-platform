@@ -272,7 +272,7 @@ ON CONFLICT (campaign_id,contact_id,message_version_id) DO NOTHING`, item.Recipi
 		}
 		payload, err := json.Marshal(map[string]any{
 			"campaignRecipientId": item.RecipientID, "campaignId": cmd.CampaignID,
-			"snapshotId": cmd.SnapshotID, "shard": shardFor(item.ContactID, cmd.ShardSize),
+			"snapshotId": cmd.SnapshotID, "shard": shardFor(item.ContactID, cmd.MaximumUniqueRecipients, cmd.ShardSize),
 			"eligibilityEvidenceHash": item.EligibilityEvidenceHash,
 		})
 		if err != nil {

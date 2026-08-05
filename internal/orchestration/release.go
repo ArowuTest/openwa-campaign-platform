@@ -177,7 +177,7 @@ func (s *MemoryStore) Authorise(ctx context.Context, cmd Command, checker Eligib
 		if err != nil {
 			return Result{}, err
 		}
-		payload, _ := json.Marshal(map[string]any{"campaignRecipientId": recipientID, "campaignId": cmd.CampaignID, "snapshotId": cmd.SnapshotID, "shard": shardFor(m.ContactID, cmd.ShardSize), "eligibilityEvidenceHash": m.EligibilityEvidenceHash})
+		payload, _ := json.Marshal(map[string]any{"campaignRecipientId": recipientID, "campaignId": cmd.CampaignID, "snapshotId": cmd.SnapshotID, "shard": shardFor(m.ContactID, cmd.MaximumUniqueRecipients, cmd.ShardSize), "eligibilityEvidenceHash": m.EligibilityEvidenceHash})
 		out := Outbox{ID: outboxID, DedupKey: "dispatch:" + key, EventType: "CAMPAIGN_RECIPIENT_AUTHORISED", AggregateID: recipientID, Payload: payload, CreatedAt: now}
 		s.recipients[recipientID] = recipient
 		s.byNatural[natural] = recipientID
@@ -224,13 +224,20 @@ func validateCommand(c Command) error {
 	}
 	return nil
 }
-func shardFor(contactID string, size int) int {
-	if size <= 0 {
-		size = 10000
+func shardFor(contactID string, maximumRecipients int64, targetShardSize int) int {
+	if targetShardSize <= 0 {
+		targetShardSize = 10000
+	}
+	shardCount := int((maximumRecipients + int64(targetShardSize) - 1) / int64(targetShardSize))
+	if shardCount < 1 {
+		shardCount = 1
 	}
 	sum := sha256.Sum256([]byte(contactID))
-	value := int(sum[0])<<8 | int(sum[1])
-	return value % size
+	value := int(sum[0])<<24 | int(sum[1])<<16 | int(sum[2])<<8 | int(sum[3])
+	if value < 0 {
+		value = -value
+	}
+	return value % shardCount
 }
 func HashEvidence(values ...string) string {
 	sum := sha256.Sum256([]byte(strings.Join(values, "\x1f")))

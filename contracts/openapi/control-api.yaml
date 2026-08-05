@@ -754,6 +754,18 @@ paths:
       responses:
         '200': { description: Capacity evidence and admission decision }
         '422': { $ref: '#/components/responses/ValidationError' }
+  /campaigns/{id}/execution-forecast:
+    get:
+      summary: Forecast campaign completion risk using current measured capacity and outcomes
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        '200': { description: Current execution forecast, bottlenecks and recommended action }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
   /campaigns/{id}/execution/{action}:
     post:
       summary: Start, pause, resume, cancel or complete a governed campaign execution

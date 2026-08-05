@@ -221,6 +221,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/campaigns/{id}/release", s.require("campaign.operate", s.releaseCampaignAudience))
 	mux.Handle("GET /api/v1/campaigns/{id}/metrics", s.require("campaign.read", s.getCampaignMetrics))
 	mux.Handle("GET /api/v1/campaigns/{id}/execution-plan", s.require("campaign.read", s.getCampaignExecutionPlan))
+	mux.Handle("GET /api/v1/campaigns/{id}/execution-forecast", s.require("campaign.read", s.getCampaignExecutionForecast))
 	mux.Handle("GET /api/v1/operations/dashboard", s.require("operations.read", s.operationsDashboard))
 	mux.Handle("GET /api/v1/operations/incidents", s.require("operations.read", s.listOperationsIncidents))
 	mux.Handle("GET /api/v1/operations/audit-events", s.require("audit.read", s.searchAuditEvents))
@@ -2205,6 +2206,23 @@ func (s *Server) getCampaignExecutionPlan(w http.ResponseWriter, r *http.Request
 	}
 	if err != nil {
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "EXECUTION_PLAN_REJECTED", "The campaign execution plan could not be produced.", map[string]any{"detail": err.Error()})
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, value)
+}
+
+func (s *Server) getCampaignExecutionForecast(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Execution == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "EXECUTION_SERVICE_UNAVAILABLE", "Campaign execution forecasting is unavailable.", nil)
+		return
+	}
+	value, err := s.deps.Execution.Forecast(r.Context(), r.PathValue("id"))
+	if errors.Is(err, campaign.ErrNotFound) {
+		httpx.WriteError(w, r, http.StatusNotFound, "CAMPAIGN_NOT_FOUND", "The campaign was not found.", nil)
+		return
+	}
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "EXECUTION_FORECAST_REJECTED", "The campaign execution forecast could not be produced.", map[string]any{"detail": err.Error()})
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, value)

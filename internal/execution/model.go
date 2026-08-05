@@ -98,6 +98,64 @@ func EvaluateAdmission(in AdmissionInput) (CapacityEvidence, error) {
 	return ev, nil
 }
 
+type ForecastRisk string
+
+const (
+	ForecastRiskLow      ForecastRisk = "LOW"
+	ForecastRiskElevated ForecastRisk = "ELEVATED"
+	ForecastRiskHigh     ForecastRisk = "HIGH"
+	ForecastRiskBlocked  ForecastRisk = "BLOCKED"
+)
+
+type ExecutionForecast struct {
+	CampaignID                 string       `json:"campaignId"`
+	RemainingRecipients        int64        `json:"remainingRecipients"`
+	EffectiveMessagesPerMinute float64      `json:"effectiveMessagesPerMinute"`
+	ProjectedCompletionAt      *time.Time   `json:"projectedCompletionAt,omitempty"`
+	DeadlineAt                 time.Time    `json:"deadlineAt"`
+	DeadlineSlackMinutes       int64        `json:"deadlineSlackMinutes"`
+	AvailableDailyCapacity     int64        `json:"availableDailyCapacity"`
+	DailyCapacitySufficient    bool         `json:"dailyCapacitySufficient"`
+	Failed                     int64        `json:"failed"`
+	Unknown                    int64        `json:"unknown"`
+	Risk                       ForecastRisk `json:"risk"`
+	Bottlenecks                []string     `json:"bottlenecks"`
+	RecommendedAction          string       `json:"recommendedAction"`
+	EvaluatedAt                time.Time    `json:"evaluatedAt"`
+}
+
+func BuildExecutionForecast(e CapacityEvidence, metrics Metrics) ExecutionForecast {
+	out := ExecutionForecast{
+		CampaignID: e.CampaignID, RemainingRecipients: e.RemainingRecipients,
+		EffectiveMessagesPerMinute: e.EffectiveMessagesPerMinute,
+		ProjectedCompletionAt:      e.ForecastCompletionAt, DeadlineAt: e.DeadlineAt,
+		AvailableDailyCapacity:  e.AvailableDailyCapacity,
+		DailyCapacitySufficient: e.AvailableDailyCapacity >= e.RemainingRecipients,
+		Failed:                  metrics.Failed, Unknown: metrics.Unknown, Risk: ForecastRiskLow,
+		Bottlenecks: append([]string(nil), e.Reasons...), EvaluatedAt: e.EvaluatedAt,
+	}
+	if e.ForecastCompletionAt != nil {
+		out.DeadlineSlackMinutes = int64(e.DeadlineAt.Sub(*e.ForecastCompletionAt).Minutes())
+	}
+	switch {
+	case e.Decision == DecisionHold || e.EffectiveMessagesPerMinute <= 0:
+		out.Risk, out.RecommendedAction = ForecastRiskBlocked, "Restore healthy sender capacity before dispatching."
+	case e.Decision == DecisionReject || out.DeadlineSlackMinutes < 0 || !out.DailyCapacitySufficient:
+		out.Risk, out.RecommendedAction = ForecastRiskHigh, "Increase approved capacity or move the completion deadline before continuing."
+	case out.DeadlineSlackMinutes < 30 || metrics.Unknown > 0:
+		out.Risk, out.RecommendedAction = ForecastRiskElevated, "Monitor sender health and reconciliation closely; prepare to pause if risk increases."
+	default:
+		out.RecommendedAction = "Continue under the approved route and monitor actual throughput."
+	}
+	if metrics.Unknown > 0 {
+		out.Bottlenecks = append(out.Bottlenecks, "UNKNOWN_OUTCOMES_REQUIRE_RECONCILIATION")
+	}
+	if metrics.Failed > 0 {
+		out.Bottlenecks = append(out.Bottlenecks, "TERMINAL_FAILURES_PRESENT")
+	}
+	return out
+}
+
 type CompletionState string
 
 const (

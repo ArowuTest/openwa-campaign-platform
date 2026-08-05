@@ -132,7 +132,7 @@ func (r *PostgreSQLMergeRepository) mergeOnce(ctx context.Context, importID stri
 	if _, err := tx.ExecContext(ctx, `INSERT INTO audience_import_merge_results(audience_import_id,inserted_contacts,updated_contacts,consent_grants,source_links,profile_history,conflicts,completed_at) VALUES($1::uuid,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(audience_import_id) DO NOTHING`, importID, result.InsertedContacts, result.UpdatedContacts, result.ConsentGrants, result.SourceLinks, result.ProfileHistory, result.Conflicts, now.UTC()); err != nil {
 		return MergeResult{}, fmt.Errorf("store import merge result: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE audience_imports SET status=CASE WHEN invalid_rows>0 THEN 'COMPLETED_WITH_EXCEPTIONS' ELSE 'COMPLETED' END,inserted_contacts=$2,updated_contacts=$3,completed_at=$4,failure_reason=NULL,updated_at=$4,version=version+1 WHERE id=$1::uuid AND status='IMPORTING'`, importID, result.InsertedContacts, result.UpdatedContacts, now.UTC()); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE audience_imports SET status=CASE WHEN invalid_rows>0 THEN 'COMPLETED_WITH_EXCEPTIONS' ELSE 'COMPLETED' END,inserted_contacts=$2,updated_contacts=$3,completed_at=$4,failure_reason=NULL,merge_lease_owner=NULL,merge_lease_expires_at=NULL,merge_next_attempt_at=NULL,merge_last_error=NULL,updated_at=$4,version=version+1 WHERE id=$1::uuid AND status='IMPORTING'`, importID, result.InsertedContacts, result.UpdatedContacts, now.UTC()); err != nil {
 		return MergeResult{}, fmt.Errorf("complete audience import: %w", err)
 	}
 	if err := tx.Commit(); err != nil {

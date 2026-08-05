@@ -40,6 +40,11 @@ type AudienceConfig struct {
 	MaterialisationClaimBatch    int
 	MaterialisationLeaseDuration time.Duration
 	MaterialisationPollInterval  time.Duration
+	MergeConcurrency             int
+	MergeClaimBatch              int
+	MergeLeaseDuration           time.Duration
+	MergePollInterval            time.Duration
+	MergeFailureBackoff          time.Duration
 	StageBatchSize               int
 	MaxRows                      int
 	MaxIssues                    int
@@ -70,6 +75,12 @@ func LoadAudience() (AudienceConfig, error) {
 		return AudienceConfig{}, err
 	}
 	if cfg.ClaimBatch, err = integer("AUDIENCE_WORKER_CLAIM_BATCH", 2); err != nil {
+		return AudienceConfig{}, err
+	}
+	if cfg.MergeConcurrency, err = integer("AUDIENCE_MERGE_CONCURRENCY", 2); err != nil {
+		return AudienceConfig{}, err
+	}
+	if cfg.MergeClaimBatch, err = integer("AUDIENCE_MERGE_CLAIM_BATCH", 2); err != nil {
 		return AudienceConfig{}, err
 	}
 	if cfg.MaterialisationBatchSize, err = integer("AUDIENCE_MATERIALISATION_BATCH_SIZE", 5000); err != nil {
@@ -106,6 +117,15 @@ func LoadAudience() (AudienceConfig, error) {
 		return AudienceConfig{}, err
 	}
 	if cfg.ValidationLeaseDuration, err = duration("AUDIENCE_VALIDATION_LEASE_DURATION", 2*time.Minute); err != nil {
+		return AudienceConfig{}, err
+	}
+	if cfg.MergeLeaseDuration, err = duration("AUDIENCE_MERGE_LEASE_DURATION", 2*time.Minute); err != nil {
+		return AudienceConfig{}, err
+	}
+	if cfg.MergePollInterval, err = duration("AUDIENCE_MERGE_POLL_INTERVAL", time.Second); err != nil {
+		return AudienceConfig{}, err
+	}
+	if cfg.MergeFailureBackoff, err = duration("AUDIENCE_MERGE_FAILURE_BACKOFF", 30*time.Second); err != nil {
 		return AudienceConfig{}, err
 	}
 	if cfg.MaterialisationLeaseDuration, err = duration("AUDIENCE_MATERIALISATION_LEASE_DURATION", 2*time.Minute); err != nil {

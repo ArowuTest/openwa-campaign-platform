@@ -1,3 +1,7 @@
+
+## 0.8.17 audience import merge runtime
+
+Approved audience imports are now automatically claimed and merged by the audience worker with PostgreSQL leases and fencing. Validation, canonical merge, conflict evidence and asynchronous materialisation now all have durable worker paths. Live PostgreSQL execution and production-scale performance remain external gates.
 # Current status
 
 Version `0.8.13` is the latest operational-core checkpoint on branch `work/operational-core-audience-iii`.

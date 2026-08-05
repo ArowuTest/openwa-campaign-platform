@@ -104,6 +104,22 @@ func main() {
 		os.Exit(1)
 	}
 	cohortExecution := cohort.NewExecutionService(cohort.NewCompiler(registry), &cohort.PostgreSQLQueryRepository{DB: db})
+
+	mergeRepository := &importer.PostgreSQLMergeRepository{DB: db}
+	mergeWorker := &importer.MergeWorker{
+		Repository:     mergeRepository,
+		Merger:         &importer.MergeService{Repository: mergeRepository},
+		WorkerID:       cfg.WorkerID + "-merge",
+		Concurrency:    cfg.MergeConcurrency,
+		ClaimBatch:     cfg.MergeClaimBatch,
+		LeaseDuration:  cfg.MergeLeaseDuration,
+		PollInterval:   cfg.MergePollInterval,
+		FailureBackoff: cfg.MergeFailureBackoff,
+		OnError: func(work importer.MergeWork, err error) {
+			logger.Error("audience merge work failed", "importId", work.ImportID, "error", err)
+		},
+	}
+
 	materialisationWorker := &materialisation.MaterialisationWorker{
 		Repository:    &materialisation.PostgreSQLRepository{DB: db},
 		Cohorts:       cohortExecution,
@@ -118,7 +134,7 @@ func main() {
 		},
 	}
 
-	health := workerruntime.NewHealth("audience-worker", db, func() int64 { return worker.Active() + materialisationWorker.Active() })
+	health := workerruntime.NewHealth("audience-worker", db, func() int64 { return worker.Active() + materialisationWorker.Active() + mergeWorker.Active() })
 	healthServer := &http.Server{
 		Addr: cfg.HealthAddr, Handler: health.Handler(),
 		ReadHeaderTimeout: 3 * time.Second, ReadTimeout: 5 * time.Second,
@@ -138,13 +154,15 @@ func main() {
 		name string
 		err  error
 	}
-	workerErrors := make(chan workerResult, 2)
+	workerErrors := make(chan workerResult, 3)
 	go func() { workerErrors <- workerResult{name: "validation", err: worker.Run(rootCtx)} }()
 	go func() { workerErrors <- workerResult{name: "materialisation", err: materialisationWorker.Run(rootCtx)} }()
+	go func() { workerErrors <- workerResult{name: "merge", err: mergeWorker.Run(rootCtx)} }()
 	logger.Info("audience workers started",
 		"workerId", cfg.WorkerID, "validationConcurrency", cfg.Concurrency,
 		"validationClaimBatch", cfg.ClaimBatch, "validationLeaseDuration", cfg.ValidationLeaseDuration.String(),
-		"materialisationBatchSize", cfg.MaterialisationBatchSize, "materialisationClaimBatch", cfg.MaterialisationClaimBatch)
+		"materialisationBatchSize", cfg.MaterialisationBatchSize, "materialisationClaimBatch", cfg.MaterialisationClaimBatch,
+		"mergeConcurrency", cfg.MergeConcurrency, "mergeClaimBatch", cfg.MergeClaimBatch)
 
 	var runErr error
 	stoppedWorkers := 0
@@ -167,7 +185,7 @@ func main() {
 	if err := healthServer.Shutdown(shutdownCtx); err != nil {
 		logger.Error("audience worker health shutdown failed", "error", err)
 	}
-	for stoppedWorkers < 2 {
+	for stoppedWorkers < 3 {
 		select {
 		case result := <-workerErrors:
 			stoppedWorkers++
@@ -175,7 +193,7 @@ func main() {
 				runErr = result.err
 			}
 		case <-shutdownCtx.Done():
-			logger.Error("audience worker shutdown timed out", "validationActive", worker.Active(), "materialisationActive", materialisationWorker.Active())
+			logger.Error("audience worker shutdown timed out", "validationActive", worker.Active(), "materialisationActive", materialisationWorker.Active(), "mergeActive", mergeWorker.Active())
 			os.Exit(1)
 		}
 	}
@@ -183,5 +201,5 @@ func main() {
 		logger.Error("audience worker stopped with error", "error", runErr)
 		os.Exit(1)
 	}
-	logger.Info("audience workers stopped", "validationActive", worker.Active(), "materialisationActive", materialisationWorker.Active())
+	logger.Info("audience workers stopped", "validationActive", worker.Active(), "materialisationActive", materialisationWorker.Active(), "mergeActive", mergeWorker.Active())
 }

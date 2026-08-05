@@ -57,3 +57,21 @@ func TestOrganisationPolicyRejectsOverlappingPurposes(t *testing.T) {
 		t.Fatalf("expected invalid, got %v", err)
 	}
 }
+
+func TestOrganisationPolicyValidatesFrequencyCaps(t *testing.T) {
+	admin := &PolicyAdministration{Store: NewMemoryPolicyStore()}
+	_, err := admin.CreateDraft(context.Background(), Policy{
+		OrganisationID: "org", ContactRetentionDays: 30, CampaignRetentionDays: 90,
+		FrequencyCaps: []FrequencyCap{{PurposeID: "events", Channel: "whatsapp", MaxMessages: 3, WindowHours: 168}},
+	}, "maker", "valid frequency policy")
+	if err != nil {
+		t.Fatalf("valid cap rejected: %v", err)
+	}
+	_, err = admin.CreateDraft(context.Background(), Policy{
+		OrganisationID: "org", ContactRetentionDays: 30, CampaignRetentionDays: 90,
+		FrequencyCaps: []FrequencyCap{{Channel: "WHATSAPP", MaxMessages: 0, WindowHours: 24}},
+	}, "maker", "invalid frequency policy")
+	if !errors.Is(err, ErrPolicyInvalid) {
+		t.Fatalf("expected invalid cap, got %v", err)
+	}
+}

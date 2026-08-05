@@ -596,12 +596,13 @@
     "acceptance": "Generated report uses approved configuration version.",
     "status": "IMPLEMENTED_TESTED",
     "evidence": [
+      "database/migrations/0038_organisation_policy_governance.sql",
+      "database/migrations/0042_organisation_frequency_cap_policy.sql",
       "internal/organisation/policy.go",
       "internal/organisation/policy_test.go",
-      "internal/persistence/postgres/organisation_policy.go",
-      "database/migrations/0038_organisation_policy_governance.sql"
+      "internal/persistence/postgres/organisation_policy.go"
     ],
-    "notes": "Effective-dated organisation policy versions govern contact/campaign retention periods and report branding metadata."
+    "notes": "Effective-dated organisation policy versions govern contact/campaign retention periods and report branding metadata. The same policy aggregate now carries governed purpose/channel frequency caps."
   },
   {
     "id": "CRV-001",
@@ -1402,9 +1403,18 @@
     "requirement": "Apply suppression, contact status and frequency caps to final eligibility.",
     "priority": "Must",
     "acceptance": "Count waterfall reconciles.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/organisation/policy.go",
+      "internal/organisation/policy_test.go",
+      "internal/audience/cohort/compiler.go",
+      "internal/audience/cohort/compiler_test.go",
+      "internal/orchestration/postgres.go",
+      "internal/dispatch/postgres_material.go",
+      "internal/persistence/postgres/organisation_policy.go",
+      "database/migrations/0042_organisation_frequency_cap_policy.sql"
+    ],
+    "notes": "Cohort compilation applies active suppression, contact status and governed frequency caps before snapshot materialisation."
   },
   {
     "id": "SEG-009",
@@ -2809,9 +2819,18 @@
     "requirement": "Configure frequency caps by organisation/purpose/channel.",
     "priority": "Must",
     "acceptance": "Eligibility reflects cap.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/organisation/policy.go",
+      "internal/organisation/policy_test.go",
+      "internal/audience/cohort/compiler.go",
+      "internal/audience/cohort/compiler_test.go",
+      "internal/orchestration/postgres.go",
+      "internal/dispatch/postgres_material.go",
+      "internal/persistence/postgres/organisation_policy.go",
+      "database/migrations/0042_organisation_frequency_cap_policy.sql"
+    ],
+    "notes": "Effective-dated, maker-checker organisation policies configure purpose/channel frequency caps with bounded message and time windows."
   },
   {
     "id": "ADM-010",
@@ -3749,9 +3768,18 @@
     "requirement": "The final eligible count applies organisation/purpose/channel consent, expiry, suppression and frequency caps.",
     "priority": "Must",
     "acceptance": "See acceptance criteria and linked tests.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/organisation/policy.go",
+      "internal/organisation/policy_test.go",
+      "internal/audience/cohort/compiler.go",
+      "internal/audience/cohort/compiler_test.go",
+      "internal/orchestration/postgres.go",
+      "internal/dispatch/postgres_material.go",
+      "internal/persistence/postgres/organisation_policy.go",
+      "database/migrations/0042_organisation_frequency_cap_policy.sql"
+    ],
+    "notes": "Final release and final dispatch eligibility re-evaluate consent, suppression and governed frequency caps and return FREQUENCY_CAPPED when exceeded."
   },
   {
     "id": "AC-006",

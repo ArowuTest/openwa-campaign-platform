@@ -94,6 +94,28 @@ WHERE c.status = 'ACTIVE'
         ))
       )
   )
+  AND NOT EXISTS (
+    SELECT 1
+    FROM organisation_policy_versions op
+    CROSS JOIN LATERAL jsonb_to_recordset(op.frequency_caps)
+      AS fc("purposeId" text, "channel" text, "maxMessages" integer, "windowHours" integer)
+    WHERE op.organisation_id = ` + organisationPlaceholder + `::uuid
+      AND op.status = 'ACTIVE'
+      AND op.effective_from <= ` + asOfPlaceholder + `
+      AND (op.effective_to IS NULL OR op.effective_to > ` + asOfPlaceholder + `)
+      AND (coalesce(fc."purposeId", '') = '' OR fc."purposeId" = ` + purposePlaceholder + `)
+      AND upper(fc."channel") = upper(` + channelPlaceholder + `)
+      AND (
+        SELECT count(*)
+        FROM campaign_recipients recent
+        JOIN campaigns recent_campaign ON recent_campaign.id = recent.campaign_id
+        WHERE recent.contact_id = c.id
+          AND recent_campaign.organisation_id = ` + organisationPlaceholder + `::uuid
+          AND recent_campaign.purpose_id = ` + purposePlaceholder + `
+          AND recent.status NOT IN ('CANCELLED','SUPPRESSED_BEFORE_SEND')
+          AND recent.authorised_at > ` + asOfPlaceholder + ` - make_interval(hours => fc."windowHours")
+      ) >= fc."maxMessages"
+  )
   AND (` + segmentSQL + `)`
 
 	return CompiledQuery{SQL: sql, Args: builder.args}, nil

@@ -1213,6 +1213,16 @@ components:
         prohibitedPurposeIds:
           type: array
           items: { type: string }
+        frequencyCaps:
+          type: array
+          items:
+            type: object
+            required: [channel, maxMessages, windowHours]
+            properties:
+              purposeId: { type: string, maxLength: 128 }
+              channel: { type: string, maxLength: 32, example: WHATSAPP }
+              maxMessages: { type: integer, minimum: 1, maximum: 10000 }
+              windowHours: { type: integer, minimum: 1, maximum: 8760 }
         contactRetentionDays: { type: integer, minimum: 1, maximum: 3650 }
         campaignRetentionDays: { type: integer, minimum: 30, maximum: 3650 }
         reportBrandName: { type: string, maxLength: 160 }

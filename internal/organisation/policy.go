@@ -29,25 +29,33 @@ const (
 	PolicyRetired  PolicyStatus = "RETIRED"
 )
 
+type FrequencyCap struct {
+	PurposeID   string `json:"purposeId,omitempty"`
+	Channel     string `json:"channel"`
+	MaxMessages int    `json:"maxMessages"`
+	WindowHours int    `json:"windowHours"`
+}
+
 type Policy struct {
-	ID                    string       `json:"id"`
-	OrganisationID        string       `json:"organisationId"`
-	AllowedPurposeIDs     []string     `json:"allowedPurposeIds"`
-	ProhibitedPurposeIDs  []string     `json:"prohibitedPurposeIds"`
-	ContactRetentionDays  int          `json:"contactRetentionDays"`
-	CampaignRetentionDays int          `json:"campaignRetentionDays"`
-	ReportBrandName       string       `json:"reportBrandName,omitempty"`
-	ReportFooter          string       `json:"reportFooter,omitempty"`
-	Status                PolicyStatus `json:"status"`
-	EffectiveFrom         time.Time    `json:"effectiveFrom"`
-	EffectiveTo           *time.Time   `json:"effectiveTo,omitempty"`
-	Version               int64        `json:"version"`
-	CreatedBy             string       `json:"createdBy"`
-	SubmittedBy           string       `json:"submittedBy,omitempty"`
-	ApprovedBy            string       `json:"approvedBy,omitempty"`
-	Reason                string       `json:"reason"`
-	CreatedAt             time.Time    `json:"createdAt"`
-	UpdatedAt             time.Time    `json:"updatedAt"`
+	ID                    string         `json:"id"`
+	OrganisationID        string         `json:"organisationId"`
+	AllowedPurposeIDs     []string       `json:"allowedPurposeIds"`
+	ProhibitedPurposeIDs  []string       `json:"prohibitedPurposeIds"`
+	FrequencyCaps         []FrequencyCap `json:"frequencyCaps,omitempty"`
+	ContactRetentionDays  int            `json:"contactRetentionDays"`
+	CampaignRetentionDays int            `json:"campaignRetentionDays"`
+	ReportBrandName       string         `json:"reportBrandName,omitempty"`
+	ReportFooter          string         `json:"reportFooter,omitempty"`
+	Status                PolicyStatus   `json:"status"`
+	EffectiveFrom         time.Time      `json:"effectiveFrom"`
+	EffectiveTo           *time.Time     `json:"effectiveTo,omitempty"`
+	Version               int64          `json:"version"`
+	CreatedBy             string         `json:"createdBy"`
+	SubmittedBy           string         `json:"submittedBy,omitempty"`
+	ApprovedBy            string         `json:"approvedBy,omitempty"`
+	Reason                string         `json:"reason"`
+	CreatedAt             time.Time      `json:"createdAt"`
+	UpdatedAt             time.Time      `json:"updatedAt"`
 }
 
 type PolicyStore interface {
@@ -90,6 +98,33 @@ func canonicalPurposeIDs(values []string) ([]string, error) {
 	sort.Strings(out)
 	return out, nil
 }
+
+func canonicalFrequencyCaps(values []FrequencyCap) ([]FrequencyCap, error) {
+	seen := map[string]struct{}{}
+	out := make([]FrequencyCap, 0, len(values))
+	for _, raw := range values {
+		cap := raw
+		cap.PurposeID = strings.TrimSpace(cap.PurposeID)
+		cap.Channel = strings.ToUpper(strings.TrimSpace(cap.Channel))
+		if cap.Channel == "" || len(cap.Channel) > 32 || cap.MaxMessages < 1 || cap.MaxMessages > 10000 || cap.WindowHours < 1 || cap.WindowHours > 8760 {
+			return nil, ErrPolicyInvalid
+		}
+		key := cap.PurposeID + "\x1f" + cap.Channel
+		if _, ok := seen[key]; ok {
+			return nil, ErrPolicyInvalid
+		}
+		seen[key] = struct{}{}
+		out = append(out, cap)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].PurposeID == out[j].PurposeID {
+			return out[i].Channel < out[j].Channel
+		}
+		return out[i].PurposeID < out[j].PurposeID
+	})
+	return out, nil
+}
+
 func validatePolicy(p Policy) error {
 	allowed, err := canonicalPurposeIDs(p.AllowedPurposeIDs)
 	if err != nil {
@@ -114,6 +149,9 @@ func validatePolicy(p Policy) error {
 	if len(strings.TrimSpace(p.ReportBrandName)) > 160 || len(strings.TrimSpace(p.ReportFooter)) > 500 {
 		return ErrPolicyInvalid
 	}
+	if _, err := canonicalFrequencyCaps(p.FrequencyCaps); err != nil {
+		return err
+	}
 	return nil
 }
 func (s *PolicyAdministration) CreateDraft(ctx context.Context, p Policy, actor, reason string) (Policy, error) {
@@ -131,6 +169,11 @@ func (s *PolicyAdministration) CreateDraft(ctx context.Context, p Policy, actor,
 	}
 	p.AllowedPurposeIDs, _ = canonicalPurposeIDs(p.AllowedPurposeIDs)
 	p.ProhibitedPurposeIDs, _ = canonicalPurposeIDs(p.ProhibitedPurposeIDs)
+	var capErr error
+	p.FrequencyCaps, capErr = canonicalFrequencyCaps(p.FrequencyCaps)
+	if capErr != nil {
+		return Policy{}, capErr
+	}
 	if err := validatePolicy(p); err != nil {
 		return Policy{}, err
 	}

@@ -55,3 +55,10 @@ This first audit pass reviewed repository recoverability, build coverage, organi
 - Status: Closed in 0.8.9
 - Finding: approved campaigns had no governed amendment workflow for replacement audience, message, entitlement, transport or schedule evidence. Repository updates also did not persist all material schedule and entitlement fields, so a change could not be evidenced or forced through reapproval consistently.
 - Remediation: explicit MFA-protected material amendments now validate authoritative immutable evidence, use optimistic concurrency, regress the campaign to the correct approval stage, clear downstream approvals, persist all changed fields transactionally and record append-only change events.
+
+### AUD-008 — Required frequency caps were not configurable or enforced
+
+**Severity:** High
+**Status:** Closed in 0.8.10
+
+The SRS requires organisation/purpose/channel frequency caps in both cohort and final eligibility. The prior implementation had no governed cap definition and did not exclude recently contacted recipients. Version 0.8.10 extends effective-dated organisation policy with bounded rolling-window caps and enforces them during cohort compilation, recipient release and final dispatch with the explicit `FREQUENCY_CAPPED` reason.

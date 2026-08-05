@@ -149,6 +149,28 @@ SELECT CASE
            AND (sp.purpose_id IS NULL OR sp.purpose_id=b.purpose_id)
            AND (sp.channel IS NULL OR upper(sp.channel)='WHATSAPP')))
   ) THEN 'SUPPRESSED'
+  WHEN EXISTS (
+    SELECT 1
+    FROM organisation_policy_versions op
+    CROSS JOIN LATERAL jsonb_to_recordset(op.frequency_caps)
+      AS fc("purposeId" text, "channel" text, "maxMessages" integer, "windowHours" integer)
+    WHERE op.organisation_id=b.organisation_id
+      AND op.status='ACTIVE'
+      AND op.effective_from<=$2
+      AND (op.effective_to IS NULL OR op.effective_to>$2)
+      AND (coalesce(fc."purposeId", '')='' OR fc."purposeId"=b.purpose_id)
+      AND upper(fc."channel")='WHATSAPP'
+      AND (
+        SELECT count(*)
+        FROM campaign_recipients recent
+        JOIN campaigns recent_campaign ON recent_campaign.id=recent.campaign_id
+        WHERE recent.contact_id=b.contact_id
+          AND recent_campaign.organisation_id=b.organisation_id
+          AND recent_campaign.purpose_id=b.purpose_id
+          AND recent.status NOT IN ('CANCELLED','SUPPRESSED_BEFORE_SEND')
+          AND recent.authorised_at>$2-make_interval(hours=>fc."windowHours")
+      )>=fc."maxMessages"
+  ) THEN 'FREQUENCY_CAPPED'
   WHEN NOT EXISTS (SELECT 1 FROM latest_grant) THEN 'NO_ACTIVE_CONSENT'
   WHEN (SELECT status FROM latest_grant)='WITHDRAWN' THEN 'CONSENT_WITHDRAWN'
   WHEN (SELECT status FROM latest_grant)='REVOKED' THEN 'CONSENT_REVOKED'

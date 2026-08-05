@@ -22,3 +22,9 @@
 2. Continue the backend adversarial programme with data-subject access, rectification, objection and anonymisation workflows.
 3. Complete campaign timezone/DST governance and test-send controls.
 4. Keep the final Next.js visual implementation aligned to the external designer's HTML reference when supplied.
+
+## After 0.8.10
+
+1. Obtain a reproducible pinned PostgreSQL driver and execute all migrations through 0042 against a live database.
+2. Run `EXPLAIN (ANALYZE, BUFFERS)` for frequency-cap and cohort paths on synthetic high-volume data.
+3. Continue backend remediation with platform-wide privacy deletion/anonymisation and retention-hold governance.

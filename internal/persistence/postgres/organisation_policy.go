@@ -45,7 +45,8 @@ func (r *OrganisationPolicyRepository) Active(ctx context.Context, org string, a
 func (r *OrganisationPolicyRepository) Create(ctx context.Context, p organisation.Policy) (organisation.Policy, error) {
 	a, _ := json.Marshal(p.AllowedPurposeIDs)
 	b, _ := json.Marshal(p.ProhibitedPurposeIDs)
-	_, err := r.DB.ExecContext(ctx, `INSERT INTO organisation_policy_versions(id,organisation_id,allowed_purpose_ids,prohibited_purpose_ids,contact_retention_days,campaign_retention_days,report_brand_name,report_footer,status,effective_from,effective_to,version,created_by,submitted_by,approved_by,reason,created_at,updated_at) VALUES($1::uuid,$2::uuid,$3::jsonb,$4::jsonb,$5,$6,NULLIF($7,''),NULLIF($8,''),$9,$10,$11,$12,NULLIF($13,'')::uuid,NULLIF($14,'')::uuid,NULLIF($15,'')::uuid,$16,$17,$18)`, p.ID, p.OrganisationID, string(a), string(b), p.ContactRetentionDays, p.CampaignRetentionDays, p.ReportBrandName, p.ReportFooter, p.Status, p.EffectiveFrom, p.EffectiveTo, p.Version, p.CreatedBy, p.SubmittedBy, p.ApprovedBy, p.Reason, p.CreatedAt, p.UpdatedAt)
+	c, _ := json.Marshal(p.FrequencyCaps)
+	_, err := r.DB.ExecContext(ctx, `INSERT INTO organisation_policy_versions(id,organisation_id,allowed_purpose_ids,prohibited_purpose_ids,frequency_caps,contact_retention_days,campaign_retention_days,report_brand_name,report_footer,status,effective_from,effective_to,version,created_by,submitted_by,approved_by,reason,created_at,updated_at) VALUES($1::uuid,$2::uuid,$3::jsonb,$4::jsonb,$5::jsonb,$6,$7,NULLIF($8,''),NULLIF($9,''),$10,$11,$12,$13,NULLIF($14,'')::uuid,NULLIF($15,'')::uuid,NULLIF($16,'')::uuid,$17,$18,$19)`, p.ID, p.OrganisationID, string(a), string(b), string(c), p.ContactRetentionDays, p.CampaignRetentionDays, p.ReportBrandName, p.ReportFooter, p.Status, p.EffectiveFrom, p.EffectiveTo, p.Version, p.CreatedBy, p.SubmittedBy, p.ApprovedBy, p.Reason, p.CreatedAt, p.UpdatedAt)
 	if err != nil {
 		return organisation.Policy{}, err
 	}
@@ -65,7 +66,8 @@ func (r *OrganisationPolicyRepository) CompareAndSwap(ctx context.Context, p org
 	}
 	a, _ := json.Marshal(p.AllowedPurposeIDs)
 	b, _ := json.Marshal(p.ProhibitedPurposeIDs)
-	res, err := tx.ExecContext(ctx, `UPDATE organisation_policy_versions SET allowed_purpose_ids=$2::jsonb,prohibited_purpose_ids=$3::jsonb,contact_retention_days=$4,campaign_retention_days=$5,report_brand_name=NULLIF($6,''),report_footer=NULLIF($7,''),status=$8,effective_from=$9,effective_to=$10,version=$11,submitted_by=NULLIF($12,'')::uuid,approved_by=NULLIF($13,'')::uuid,reason=$14,updated_at=$15 WHERE id=$1::uuid AND version=$16`, p.ID, string(a), string(b), p.ContactRetentionDays, p.CampaignRetentionDays, p.ReportBrandName, p.ReportFooter, p.Status, p.EffectiveFrom, p.EffectiveTo, p.Version, p.SubmittedBy, p.ApprovedBy, p.Reason, p.UpdatedAt, expected)
+	c, _ := json.Marshal(p.FrequencyCaps)
+	res, err := tx.ExecContext(ctx, `UPDATE organisation_policy_versions SET allowed_purpose_ids=$2::jsonb,prohibited_purpose_ids=$3::jsonb,frequency_caps=$4::jsonb,contact_retention_days=$5,campaign_retention_days=$6,report_brand_name=NULLIF($7,''),report_footer=NULLIF($8,''),status=$9,effective_from=$10,effective_to=$11,version=$12,submitted_by=NULLIF($13,'')::uuid,approved_by=NULLIF($14,'')::uuid,reason=$15,updated_at=$16 WHERE id=$1::uuid AND version=$17`, p.ID, string(a), string(b), string(c), p.ContactRetentionDays, p.CampaignRetentionDays, p.ReportBrandName, p.ReportFooter, p.Status, p.EffectiveFrom, p.EffectiveTo, p.Version, p.SubmittedBy, p.ApprovedBy, p.Reason, p.UpdatedAt, expected)
 	if err != nil {
 		return organisation.Policy{}, err
 	}
@@ -79,19 +81,20 @@ func (r *OrganisationPolicyRepository) CompareAndSwap(ctx context.Context, p org
 	return p, nil
 }
 
-const policySelect = `SELECT id::text,organisation_id::text,allowed_purpose_ids::text,prohibited_purpose_ids::text,contact_retention_days,campaign_retention_days,coalesce(report_brand_name,''),coalesce(report_footer,''),status,effective_from,effective_to,version,coalesce(created_by::text,''),coalesce(submitted_by::text,''),coalesce(approved_by::text,''),reason,created_at,updated_at FROM organisation_policy_versions`
+const policySelect = `SELECT id::text,organisation_id::text,allowed_purpose_ids::text,prohibited_purpose_ids::text,frequency_caps::text,contact_retention_days,campaign_retention_days,coalesce(report_brand_name,''),coalesce(report_footer,''),status,effective_from,effective_to,version,coalesce(created_by::text,''),coalesce(submitted_by::text,''),coalesce(approved_by::text,''),reason,created_at,updated_at FROM organisation_policy_versions`
 
 type policyScanner interface{ Scan(...any) error }
 
 func scanPolicy(row policyScanner) (organisation.Policy, error) {
 	var p organisation.Policy
-	var allowed, prohibited, status string
-	err := row.Scan(&p.ID, &p.OrganisationID, &allowed, &prohibited, &p.ContactRetentionDays, &p.CampaignRetentionDays, &p.ReportBrandName, &p.ReportFooter, &status, &p.EffectiveFrom, &p.EffectiveTo, &p.Version, &p.CreatedBy, &p.SubmittedBy, &p.ApprovedBy, &p.Reason, &p.CreatedAt, &p.UpdatedAt)
+	var allowed, prohibited, caps, status string
+	err := row.Scan(&p.ID, &p.OrganisationID, &allowed, &prohibited, &caps, &p.ContactRetentionDays, &p.CampaignRetentionDays, &p.ReportBrandName, &p.ReportFooter, &status, &p.EffectiveFrom, &p.EffectiveTo, &p.Version, &p.CreatedBy, &p.SubmittedBy, &p.ApprovedBy, &p.Reason, &p.CreatedAt, &p.UpdatedAt)
 	if err != nil {
 		return p, err
 	}
 	p.Status = organisation.PolicyStatus(status)
 	_ = json.Unmarshal([]byte(allowed), &p.AllowedPurposeIDs)
 	_ = json.Unmarshal([]byte(prohibited), &p.ProhibitedPurposeIDs)
+	_ = json.Unmarshal([]byte(caps), &p.FrequencyCaps)
 	return p, nil
 }

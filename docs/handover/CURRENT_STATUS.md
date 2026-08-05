@@ -26,3 +26,7 @@ The audience-import merge layer now has implemented paths for all declared updat
 ## 0.8.7 commercial-governance remediation
 
 Campaign commercial approval is now backed by campaign-specific quotation, invoice, payment and entitlement evidence. A campaign cannot enter `COMMERCIAL_APPROVED` through the service layer unless an independently approved, non-revoked commercial record exists for the same campaign and organisation and authorises at least the campaign maximum recipient count.
+
+## 0.8.10 remediation update
+
+Governed rolling frequency caps are now stored in effective-dated organisation policy versions and applied consistently to cohort compilation, recipient release and final dispatch. The generated traceability baseline is 48 implemented/tested, 31 partial and 319 not started. Live PostgreSQL execution and query-plan evidence remain blocked external release gates.

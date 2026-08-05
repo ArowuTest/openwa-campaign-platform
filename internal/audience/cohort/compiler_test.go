@@ -136,3 +136,22 @@ func TestDynamicNegativeFilterUsesNotExistsAndContainsEscapesWildcards(t *testin
 		t.Fatalf("LIKE literal was not escaped: %#v", last)
 	}
 }
+
+func TestCompileAppliesGovernedFrequencyCaps(t *testing.T) {
+	registry, err := audiencefilter.NewRegistry(audiencefilter.DefaultDefinitions()...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	query, err := NewCompiler(registry).Compile(audiencefilter.Group{
+		Join:  audiencefilter.JoinAnd,
+		Rules: []audiencefilter.Rule{{DefinitionCode: "COUNTRY", Operator: audiencefilter.OperatorIn, Values: []any{"NG"}}},
+	}, EligibilityContext{OrganisationID: "org-1", PurposeID: "purpose-1", Channel: "WHATSAPP", AsOf: time.Date(2026, 8, 5, 10, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, expected := range []string{"organisation_policy_versions", "frequency_caps", "campaign_recipients", "make_interval"} {
+		if !strings.Contains(query.SQL, expected) {
+			t.Fatalf("compiled SQL missing %s", expected)
+		}
+	}
+}

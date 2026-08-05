@@ -6,10 +6,10 @@ Total requirements: **398**
 
 | Status | Count |
 |---|---:|
-| IMPLEMENTED_TESTED | 45 |
+| IMPLEMENTED_TESTED | 48 |
 | PARTIAL | 31 |
 | BLOCKED_EXTERNAL | 0 |
-| NOT_STARTED | 322 |
+| NOT_STARTED | 319 |
 
 | ID | Priority | Status | Requirement | Evidence / notes |
 |---|---|---|---|---|
@@ -68,7 +68,7 @@ Total requirements: **398**
 | ORG-007 | Must | IMPLEMENTED_TESTED | Record commercial references such as quote, invoice and payment status. | `internal/commercial/service.go`, `internal/commercial/service_test.go`, `internal/persistence/postgres/commercial.go`, `database/migrations/0039_campaign_commercial_governance.sql`, `internal/platform/httpserver/server.go`, `internal/campaign/commercial_gate_test.go` — Versioned campaign commercial records now capture quotation, invoice, currency, recipient volume, pricing, payment reference and payment timestamp with maker-checker approval and revocation. |
 | ORG-008 | Must | IMPLEMENTED_TESTED | Retain an audit history of organisation changes. | `internal/organisation/service.go`, `internal/persistence/postgres/organisation.go`, `database/migrations/0036_organisation_lifecycle_governance.sql`, `internal/organisation/lifecycle_test.go`, `internal/platform/httpserver/server_test.go` — Material profile and lifecycle changes create immutable versioned organisation events with actor, reason and before/after status evidence. |
 | ORG-009 | Must | IMPLEMENTED_TESTED | Prevent accidental duplicate organisation creation. | `internal/organisation/service.go`, `internal/persistence/postgres/organisation.go`, `database/migrations/0036_organisation_lifecycle_governance.sql`, `internal/organisation/lifecycle_test.go` — Active organisations are protected by a normalised legal-name and country uniqueness rule in both memory and PostgreSQL repositories. |
-| ORG-010 | Must | IMPLEMENTED_TESTED | Support organisation-specific data-retention and report branding settings. | `internal/organisation/policy.go`, `internal/organisation/policy_test.go`, `internal/persistence/postgres/organisation_policy.go`, `database/migrations/0038_organisation_policy_governance.sql` — Effective-dated organisation policy versions govern contact/campaign retention periods and report branding metadata. |
+| ORG-010 | Must | IMPLEMENTED_TESTED | Support organisation-specific data-retention and report branding settings. | `database/migrations/0038_organisation_policy_governance.sql`, `database/migrations/0042_organisation_frequency_cap_policy.sql`, `internal/organisation/policy.go`, `internal/organisation/policy_test.go`, `internal/persistence/postgres/organisation_policy.go` — Effective-dated organisation policy versions govern contact/campaign retention periods and report branding metadata. The same policy aggregate now carries governed purpose/channel frequency caps. |
 | CRV-001 | Must | NOT_STARTED | Create a consent review at organisation, source or campaign scope. |  |
 | CRV-002 | Must | NOT_STARTED | Record consent collection method, source system, URL/form identifier and date range. |  |
 | CRV-003 | Must | NOT_STARTED | Record the consent wording or an immutable reference and wording version. |  |
@@ -152,7 +152,7 @@ Total requirements: **398**
 | SEG-005 | Must | NOT_STARTED | Display the age calculation method, source recency and confidence. |  |
 | SEG-006 | Must | NOT_STARTED | Allow exclusion of age data older than a configurable period. |  |
 | SEG-007 | Must | NOT_STARTED | Require active channel/purpose/organisation consent in the eligibility policy. |  |
-| SEG-008 | Must | NOT_STARTED | Apply suppression, contact status and frequency caps to final eligibility. |  |
+| SEG-008 | Must | IMPLEMENTED_TESTED | Apply suppression, contact status and frequency caps to final eligibility. | `internal/organisation/policy.go`, `internal/organisation/policy_test.go`, `internal/audience/cohort/compiler.go`, `internal/audience/cohort/compiler_test.go`, `internal/orchestration/postgres.go`, `internal/dispatch/postgres_material.go`, `internal/persistence/postgres/organisation_policy.go`, `database/migrations/0042_organisation_frequency_cap_policy.sql` — Cohort compilation applies active suppression, contact status and governed frequency caps before snapshot materialisation. |
 | SEG-009 | Must | NOT_STARTED | Support AND/OR groups with a maximum configurable complexity. |  |
 | SEG-010 | Must | NOT_STARTED | Provide a human-readable summary of the segment logic. |  |
 | SEG-011 | Must | NOT_STARTED | Estimate matching counts without exposing raw MSISDNs. |  |
@@ -298,7 +298,7 @@ Total requirements: **398**
 | ADM-006 | Must | NOT_STARTED | Configure age staleness and estimation policy. |  |
 | ADM-007 | Must | NOT_STARTED | Configure state/LGA reference data and validation. |  |
 | ADM-008 | Must | IMPLEMENTED_TESTED | Configure suppression precedence and STOP keywords. | `internal/consent/optout_policy.go`, `internal/persistence/postgres/optout_policy.go`, `database/migrations/0024_governed_opt_out_policy.sql`, `internal/consent/eligibility.go`, `internal/consent/eligibility_test.go`, `internal/orchestration/postgres.go`, `internal/dispatch/postgres_material.go`, `database/migrations/0040_consent_precedence_and_dispatch_guards.sql` — STOP commands are versioned, effective-dated, maker-checker governed and retained with immutable PostgreSQL history; suppression precedence remains enforced at final dispatch. Version 0.8.8 adds deterministic latest-effective-grant precedence and revalidates live consent-review evidence at release and dispatch. |
-| ADM-009 | Must | NOT_STARTED | Configure frequency caps by organisation/purpose/channel. |  |
+| ADM-009 | Must | IMPLEMENTED_TESTED | Configure frequency caps by organisation/purpose/channel. | `internal/organisation/policy.go`, `internal/organisation/policy_test.go`, `internal/audience/cohort/compiler.go`, `internal/audience/cohort/compiler_test.go`, `internal/orchestration/postgres.go`, `internal/dispatch/postgres_material.go`, `internal/persistence/postgres/organisation_policy.go`, `database/migrations/0042_organisation_frequency_cap_policy.sql` — Effective-dated, maker-checker organisation policies configure purpose/channel frequency caps with bounded message and time windows. |
 | ADM-010 | Must | NOT_STARTED | Configure campaign approval thresholds and roles. |  |
 | ADM-011 | Must | NOT_STARTED | Configure sender/session limits, rate caps and health thresholds. |  |
 | ADM-012 | Must | NOT_STARTED | Configure retry, reconciliation and unknown-outcome windows. |  |
@@ -395,7 +395,7 @@ Total requirements: **398**
 | AC-002 | Must | NOT_STARTED | The system securely imports and reconciles a large contact file, preserving source and validation reasons. |  |
 | AC-003 | Must | PARTIAL | The platform stores MSISDN encrypted, deduplicates using HMAC and masks it in UI/logs. | `internal/shared/crypto/msisdn.go`, `internal/audience/importer/csv.go` |
 | AC-004 | Must | NOT_STARTED | The segment builder creates a Lagos age 18–35 cohort using the configured self-declared-age policy. |  |
-| AC-005 | Must | NOT_STARTED | The final eligible count applies organisation/purpose/channel consent, expiry, suppression and frequency caps. |  |
+| AC-005 | Must | IMPLEMENTED_TESTED | The final eligible count applies organisation/purpose/channel consent, expiry, suppression and frequency caps. | `internal/organisation/policy.go`, `internal/organisation/policy_test.go`, `internal/audience/cohort/compiler.go`, `internal/audience/cohort/compiler_test.go`, `internal/orchestration/postgres.go`, `internal/dispatch/postgres_material.go`, `internal/persistence/postgres/organisation_policy.go`, `database/migrations/0042_organisation_frequency_cap_policy.sql` — Final release and final dispatch eligibility re-evaluate consent, suppression and governed frequency caps and return FREQUENCY_CAPPED when exceeded. |
 | AC-006 | Must | NOT_STARTED | The system creates an immutable audience snapshot and preserves policy/configuration versions. |  |
 | AC-007 | Must | NOT_STARTED | A campaign message and media are versioned, scanned, tested and approved through maker-checker. |  |
 | AC-008 | Must | NOT_STARTED | Campaign entitlement prevents excess or duplicate recipients. |  |

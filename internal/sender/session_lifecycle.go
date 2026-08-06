@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"campaign-platform/internal/platformpolicy"
 )
 
 type SessionGatewayResult struct {
@@ -32,10 +34,11 @@ type ActiveSessionWorkChecker interface {
 }
 
 type SessionLifecycleService struct {
-	Governance *GovernanceService
-	Gateway    SessionGateway
-	ActiveWork ActiveSessionWorkChecker
-	Clock      func() time.Time
+	Governance  *GovernanceService
+	Gateway     SessionGateway
+	ActiveWork  ActiveSessionWorkChecker
+	Maintenance *platformpolicy.MaintenanceAdministration
+	Clock       func() time.Time
 }
 
 func (s *SessionLifecycleService) now() time.Time {
@@ -72,6 +75,19 @@ func (s *SessionLifecycleService) load(ctx context.Context, id string) (Governed
 	return session, node, nil
 }
 
+func (s *SessionLifecycleService) loadForChange(ctx context.Context, id string) (GovernedSession, Node, error) {
+	session, node, err := s.load(ctx, id)
+	if err != nil {
+		return GovernedSession{}, Node{}, err
+	}
+	if s.Maintenance != nil {
+		err = s.Maintenance.Check(ctx, platformpolicy.OperationSessionChange, platformpolicy.OperationalScope{Provider: node.Provider, GatewayPoolID: node.GatewayPoolID, SenderPoolID: session.PoolID}, s.now())
+		if err != nil {
+			return GovernedSession{}, Node{}, err
+		}
+	}
+	return session, node, nil
+}
 func validateLifecycleInput(expected int64, actor, reason string) error {
 	if expected <= 0 || strings.TrimSpace(actor) == "" || len(strings.TrimSpace(reason)) < 8 {
 		return errors.New("expected version, actor and a meaningful reason are required")
@@ -83,7 +99,7 @@ func (s *SessionLifecycleService) Create(ctx context.Context, id string, expecte
 	if err := validateLifecycleInput(expected, actor, reason); err != nil {
 		return GovernedSession{}, SessionGatewayResult{}, err
 	}
-	session, node, err := s.load(ctx, id)
+	session, node, err := s.loadForChange(ctx, id)
 	if err != nil {
 		return GovernedSession{}, SessionGatewayResult{}, err
 	}
@@ -99,7 +115,7 @@ func (s *SessionLifecycleService) Create(ctx context.Context, id string, expecte
 }
 
 func (s *SessionLifecycleService) QR(ctx context.Context, id string) (SessionGatewayResult, error) {
-	session, node, err := s.load(ctx, id)
+	session, node, err := s.loadForChange(ctx, id)
 	if err != nil {
 		return SessionGatewayResult{}, err
 	}
@@ -110,7 +126,7 @@ func (s *SessionLifecycleService) QR(ctx context.Context, id string) (SessionGat
 }
 
 func (s *SessionLifecycleService) PairingCode(ctx context.Context, id, phone string) (SessionGatewayResult, error) {
-	session, node, err := s.load(ctx, id)
+	session, node, err := s.loadForChange(ctx, id)
 	if err != nil {
 		return SessionGatewayResult{}, err
 	}
@@ -133,7 +149,7 @@ func (s *SessionLifecycleService) Start(ctx context.Context, id string, expected
 	if err := validateLifecycleInput(expected, actor, reason); err != nil {
 		return GovernedSession{}, SessionGatewayResult{}, err
 	}
-	session, node, err := s.load(ctx, id)
+	session, node, err := s.loadForChange(ctx, id)
 	if err != nil {
 		return GovernedSession{}, SessionGatewayResult{}, err
 	}
@@ -155,7 +171,7 @@ func (s *SessionLifecycleService) Drain(ctx context.Context, id string, expected
 	if err := validateLifecycleInput(expected, actor, reason); err != nil {
 		return GovernedSession{}, err
 	}
-	session, node, err := s.load(ctx, id)
+	session, node, err := s.loadForChange(ctx, id)
 	if err != nil {
 		return GovernedSession{}, err
 	}
@@ -172,7 +188,7 @@ func (s *SessionLifecycleService) Resume(ctx context.Context, id string, expecte
 	if err := validateLifecycleInput(expected, actor, reason); err != nil {
 		return GovernedSession{}, err
 	}
-	session, node, err := s.load(ctx, id)
+	session, node, err := s.loadForChange(ctx, id)
 	if err != nil {
 		return GovernedSession{}, err
 	}
@@ -189,7 +205,7 @@ func (s *SessionLifecycleService) Stop(ctx context.Context, id string, expected 
 	if err := validateLifecycleInput(expected, actor, reason); err != nil {
 		return GovernedSession{}, SessionGatewayResult{}, err
 	}
-	session, node, err := s.load(ctx, id)
+	session, node, err := s.loadForChange(ctx, id)
 	if err != nil {
 		return GovernedSession{}, SessionGatewayResult{}, err
 	}
@@ -225,7 +241,7 @@ func (s *SessionLifecycleService) Logout(ctx context.Context, id string, expecte
 	if err := s.assertNoActiveWork(ctx, id); err != nil {
 		return GovernedSession{}, SessionGatewayResult{}, err
 	}
-	session, node, err := s.load(ctx, id)
+	session, node, err := s.loadForChange(ctx, id)
 	if err != nil {
 		return GovernedSession{}, SessionGatewayResult{}, err
 	}
@@ -247,7 +263,7 @@ func (s *SessionLifecycleService) Delete(ctx context.Context, id string, expecte
 	if err := s.assertNoActiveWork(ctx, id); err != nil {
 		return GovernedSession{}, err
 	}
-	session, node, err := s.load(ctx, id)
+	session, node, err := s.loadForChange(ctx, id)
 	if err != nil {
 		return GovernedSession{}, err
 	}

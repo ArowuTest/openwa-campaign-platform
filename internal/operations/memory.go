@@ -28,7 +28,7 @@ func (r *MemoryRepository) Dashboard(_ context.Context, now time.Time) (Dashboar
 	d := r.dashboard
 	d.GeneratedAt = now
 	for _, i := range r.incidents {
-		if i.Status != IncidentResolved {
+		if i.Status != IncidentResolved && i.Status != IncidentClosed {
 			d.OpenIncidents++
 			if i.Severity == SeverityCritical {
 				d.CriticalIncidents++

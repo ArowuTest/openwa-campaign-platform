@@ -51,37 +51,39 @@
     "status": "PARTIAL"
   },
   "ADM-001": {
+    "status": "IMPLEMENTED_TESTED",
     "evidence": [
-      "internal/audience/filter/administration.go",
-      "internal/persistence/postgres/filter_definitions.go",
-      "database/migrations/0019_filter_definition_administration.sql",
-      "internal/platform/httpserver/server.go"
+      "internal/platformpolicy/model.go",
+      "internal/platformpolicy/service.go",
+      "internal/platformpolicy/service_test.go",
+      "internal/platformpolicy/postgres.go",
+      "internal/platform/httpserver/platform_policy.go",
+      "database/migrations/0065_platform_governance_runtime_retention_and_alerts.sql"
     ],
-    "notes": "Governed typed audience-filter catalogue is implemented with validation, versioning, history and protected administration APIs. The broader platform configuration catalogue remains incomplete.",
-    "status": "PARTIAL"
+    "notes": "A shared configuration catalogue now validates canonical JSON values and governed platform/organisation/environment/campaign scopes through protected APIs."
   },
   "ADM-002": {
+    "status": "IMPLEMENTED_TESTED",
     "evidence": [
-      "internal/audience/filter/administration.go",
-      "database/migrations/0019_filter_definition_administration.sql"
+      "internal/platformpolicy/service.go",
+      "internal/platformpolicy/service_test.go",
+      "internal/platformpolicy/postgres.go",
+      "database/migrations/0065_platform_governance_runtime_retention_and_alerts.sql"
     ],
-    "notes": "Audience-filter definitions are versioned with immutable history and optimistic concurrency. Effective-dated activation for the complete material configuration catalogue remains outstanding.",
-    "status": "PARTIAL"
+    "notes": "Material configuration supports versioning, effective intervals, overlap prevention, future activation, supersession evidence and point-in-time resolution."
   },
   "ADM-003": {
+    "status": "PARTIAL",
     "evidence": [
+      "internal/platformpolicy/service.go",
+      "internal/platformpolicy/service_test.go",
+      "internal/retention/service.go",
+      "internal/retention/service_test.go",
+      "internal/sender/pacing.go",
       "internal/consent/optout_policy.go",
-      "internal/platform/httpserver/optout_policy.go",
-      "internal/inbound/retention_policy.go",
-      "internal/shared/crypto/keyring.go",
-      "database/migrations/0028_governed_inbound_retention_and_key_rotation.sql",
-      "internal/inbound/rotation.go",
-      "internal/inbound/rotation_postgres.go",
-      "cmd/inbound-governance-worker/main.go",
-      "database/migrations/0029_resumable_inbound_governance_operations.sql"
+      "database/migrations/0065_platform_governance_runtime_retention_and_alerts.sql"
     ],
-    "notes": "Opt-out policy changes require independent approval. Other security, retention, throughput and retry configuration groups still require the same governed approval model. Version 0.4.8 adds maker-checker inbound retention policy and versioned content-key rotation controls. Version 0.4.9 adds durable, lease-fenced and resumable key-rotation runs plus scheduled retention-sweep evidence.",
-    "status": "PARTIAL"
+    "notes": "Maker-checker now covers common platform configuration, retention, maintenance, pacing and consent/opt-out policies. A single governed catalogue for every security and provider retry setting remains incomplete."
   },
   "ADM-008": {
     "evidence": [
@@ -112,14 +114,16 @@
     "status": "IMPLEMENTED_TESTED"
   },
   "ADM-013": {
+    "status": "PARTIAL",
     "evidence": [
       "internal/operations/reporting_privacy.go",
       "internal/operations/reporting_privacy_test.go",
-      "internal/platform/httpserver/operations.go",
-      "database/migrations/0063_privacy_cases_contact_lifecycle_and_reporting_privacy.sql"
+      "internal/retention/service.go",
+      "internal/platform/httpserver/retention_alerts.go",
+      "internal/platformpolicy/service.go",
+      "database/migrations/0065_platform_governance_runtime_retention_and_alerts.sql"
     ],
-    "notes": "Governed privacy-threshold configuration and exact report policy evidence are implemented. A unified report-template and cross-domain retention administration service remains for the next governance checkpoint.",
-    "status": "PARTIAL"
+    "notes": "Privacy thresholds and cross-domain retention are governed and effective-dated. Full administrator-defined report template composition remains outstanding."
   },
   "ADM-014": {
     "evidence": [
@@ -276,14 +280,16 @@
     "status": "IMPLEMENTED_TESTED"
   },
   "BR-028": {
+    "status": "PARTIAL",
     "evidence": [
+      "internal/retention/service.go",
+      "internal/retention/postgres.go",
+      "internal/retention/service_test.go",
+      "cmd/platform-governance-worker/main.go",
       "internal/audience/importer/source_retention.go",
-      "internal/operations/export_worker.go",
-      "internal/storage/environment.go",
-      "database/migrations/0064_import_mapping_rollback_and_retention.sql"
+      "internal/operations/export_worker.go"
     ],
-    "notes": "Import source files and generated exports follow governed expiry and deletion evidence. Complete cross-domain campaign evidence/media retention remains for the platform retention milestone.",
-    "status": "PARTIAL"
+    "notes": "Effective-dated retention policies now schedule and execute supported import-source, export-object and inbound-content actions with legal-hold/review controls. Full campaign media, raw provider-event and audit archival execution remains held for later supported executors."
   },
   "BR-029": {
     "evidence": [
@@ -1365,5 +1371,186 @@
       "internal/platform/httpserver/server_test.go"
     ],
     "status": "IMPLEMENTED_TESTED"
+  },
+  "GWY-005": {
+    "status": "PARTIAL",
+    "evidence": [
+      "internal/sender/runtime_registration.go",
+      "internal/sender/runtime_registration_test.go",
+      "internal/sender/postgres_governance.go",
+      "internal/operations/postgres.go",
+      "database/migrations/0065_platform_governance_runtime_retention_and_alerts.sql"
+    ],
+    "notes": "Signed runtime reports now persist heartbeat time, boot identity, gateway/worker/configuration versions, declared capabilities, capacity, session count, queue depth, CPU and memory evidence. Stale/unavailable nodes feed operational reporting and alert metrics. Disk, inode, process and network evidence and production threshold validation remain outstanding."
+  },
+  "GWY-009": {
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/platformpolicy/service.go",
+      "internal/platformpolicy/service_test.go",
+      "internal/sender/governance.go",
+      "internal/platform/httpserver/gateway_admin.go",
+      "internal/execution/service.go",
+      "internal/dispatch/handler.go"
+    ],
+    "notes": "Governed draining blocks new campaign starts and session changes while optionally allowing already-active dispatch to reach recorded outcomes; gateway nodes and sessions have explicit draining transitions."
+  },
+  "APR-014": {
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/platformpolicy/service.go",
+      "internal/platformpolicy/service_test.go",
+      "internal/platform/httpserver/platform_policy.go",
+      "internal/execution/service.go",
+      "internal/dispatch/handler.go",
+      "database/migrations/0065_platform_governance_runtime_retention_and_alerts.sql"
+    ],
+    "notes": "MFA-protected, maker-checker emergency-stop windows block API writes, campaign start/resume, dispatch submission and session changes without deleting campaign or delivery evidence."
+  },
+  "SND-007": {
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/sender/governance.go",
+      "internal/sender/postgres_governance.go",
+      "internal/dispatch/postgres_material.go",
+      "internal/dispatch/http_gateway.go",
+      "services/openwa-gateway/src/session-authority.service.ts",
+      "services/openwa-gateway/src/send.controller.ts"
+    ],
+    "notes": "Session ownership, lease version and owner-node identity are frozen into dispatch material and revalidated by the gateway before submission."
+  },
+  "SND-008": {
+    "status": "PARTIAL",
+    "evidence": [
+      "internal/sender/runtime_registration.go",
+      "internal/sender/postgres_governance.go",
+      "internal/sender/memory_governance.go",
+      "internal/sender/runtime_registration_test.go"
+    ],
+    "notes": "Signed heartbeat/runtime reports refresh governed node state and stale sessions/nodes are excluded from allocation. Production timing and failover behaviour still require multi-node validation."
+  },
+  "SND-009": {
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/sender/session_lifecycle.go",
+      "internal/sender/session_lifecycle_test.go",
+      "services/openwa-gateway/src/session-authority.service.ts",
+      "internal/dispatch/postgres_material.go"
+    ],
+    "notes": "Uncertain or failed-recovery sessions require governed recovery/pairing and a fresh lease/fence before another owner can submit work."
+  },
+  "SND-010": {
+    "status": "PARTIAL",
+    "evidence": [
+      "internal/sender/governance.go",
+      "internal/sender/runtime_registration.go",
+      "internal/platform/httpserver/gateway_admin.go",
+      "database/migrations/0065_platform_governance_runtime_retention_and_alerts.sql"
+    ],
+    "notes": "The node inventory records internal/public network identity, pool, provider, engine, boot and deployed versions. Hostinger/VPS inventory reconciliation remains an external deployment control."
+  },
+  "SND-016": {
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/sender/governance.go",
+      "internal/sender/session_lifecycle.go",
+      "internal/sender/session_lifecycle_test.go",
+      "internal/sender/allocator.go"
+    ],
+    "notes": "New sessions begin in NEW and must pass pairing, connecting and readiness transitions before allocation."
+  },
+  "EVT-001": {
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/gateway/callback.go",
+      "internal/gateway/callback_test.go",
+      "internal/platform/httpserver/server_test.go",
+      "internal/platform/httpserver/inbound_optout_test.go"
+    ],
+    "notes": "Gateway delivery and inbound callbacks are authenticated over exact body bytes with HMAC and bounded timestamp validation; invalid or replayed content is rejected."
+  },
+  "ADM-004": {
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/platformpolicy/service.go",
+      "internal/platformpolicy/service_test.go",
+      "internal/platformpolicy/memory.go",
+      "internal/platformpolicy/postgres.go"
+    ],
+    "notes": "Rollback creates a new governed version referencing the prior configuration, requires MFA at the API, and preserves immutable activation/supersession evidence."
+  },
+  "ADM-018": {
+    "status": "PARTIAL",
+    "evidence": [
+      "internal/operations/alerting.go",
+      "internal/operations/alerting_test.go",
+      "internal/operations/alerting_postgres.go",
+      "internal/platform/httpserver/retention_alerts.go",
+      "cmd/platform-governance-worker/main.go"
+    ],
+    "notes": "Governed operational alert policies, escalation, portal delivery and incidents are implemented. Automatic policies specifically targeting every privileged configuration change and audit-chain failure remain to be configured/proven."
+  },
+  "BR-026": {
+    "status": "PARTIAL",
+    "evidence": [
+      "internal/platformpolicy/service.go",
+      "internal/execution/service.go",
+      "internal/dispatch/postgres_material.go",
+      "internal/operations/reporting_privacy.go",
+      "internal/sender/pacing.go"
+    ],
+    "notes": "Consent, audience snapshot, routing, provider capability, pacing, capacity and reporting privacy versions are retained with campaign evidence. The generic configuration catalogue is not yet bound automatically to every campaign decision."
+  },
+  "API-003": {
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/dispatch/postgres_material.go",
+      "internal/dispatch/governed_route_test.go",
+      "internal/dispatch/http_gateway.go",
+      "services/openwa-gateway/src/session-authority.service.ts",
+      "services/openwa-gateway/src/send.controller.ts"
+    ],
+    "notes": "Gateway commands carry owner node, lease, session configuration, gateway node and route evidence; stale, paused, unowned or incompatible authority is rejected."
+  },
+  "API-006": {
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "services/openwa-gateway/src/capabilities.controller.ts",
+      "services/openwa-gateway/src/gateway-identity.service.ts",
+      "internal/sender/runtime_registration.go",
+      "internal/provider/registry.go"
+    ],
+    "notes": "The restricted capability response and signed runtime report expose provider, engine, adapter/gateway/worker versions and supported message/event capabilities for fail-closed preflight."
+  },
+  "HST-004": {
+    "status": "PARTIAL",
+    "evidence": [
+      "internal/sender/runtime_registration.go",
+      "internal/sender/runtime_registration_test.go",
+      "internal/platform/httpserver/gateway_admin.go",
+      "services/openwa-gateway/src/internal-auth.middleware.ts"
+    ],
+    "notes": "Control/gateway commands and runtime registration are signed and bound to governed node identities. Firewall/private-network and mutual-TLS evidence remain deployment controls."
+  },
+  "HST-010": {
+    "status": "PARTIAL",
+    "evidence": [
+      "internal/sender/runtime_registration.go",
+      "internal/operations/alerting.go",
+      "internal/operations/alerting_test.go",
+      "internal/operations/postgres.go"
+    ],
+    "notes": "Runtime CPU/memory, queue, session and gateway-health evidence can drive governed alerts. Disk, inode, process/PID and network telemetry remains outstanding."
+  },
+  "AC-020": {
+    "status": "PARTIAL",
+    "evidence": [
+      "internal/platformpolicy/service.go",
+      "internal/platformpolicy/service_test.go",
+      "internal/operations/service.go",
+      "internal/operations/incident_governance_test.go",
+      "internal/operations/alerting.go"
+    ],
+    "notes": "The software provides approved emergency-stop, incident, escalation and capacity-governance controls. Formal operational-owner approval of runbooks and production capacity representations remains external evidence."
   }
 }

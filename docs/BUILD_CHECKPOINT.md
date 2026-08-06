@@ -1,25 +1,25 @@
 # Build checkpoint
 
-Current version: **0.8.26**
+Current version: **0.8.27**
 
-Branch: `work/backend-data-privacy-exports`
+Branch: `work/backend-platform-governance`
 
-This checkpoint hardens the `0.8.25` backend across secure export delivery, privacy/data-subject workflows, audience-import governance, reporting privacy, contact lifecycle, audit search and portable object storage.
+This checkpoint extends `0.8.26` with shared platform governance, signed gateway runtime discovery, governed gateway-pool/node administration, maintenance and emergency controls, cross-domain retention execution, operational alert escalation and immutable incident timelines.
 
 Implemented code-level scope includes:
 
-- immutable export criteria and report as-of evidence;
-- maker-checker export approval, actor-bound single-use download grants, revocation, expiry and download-outcome audit;
-- deterministic PDF, CSV and XLSX rendering and unbounded paged audit export generation;
-- real bounded XLSX import processing with worksheet, formula, macro, external-content and archive-expansion safeguards;
-- governed reusable mappings, deterministic templates, row-level issue export, safe rollback and source-file retention/deletion workers;
-- privacy cases for access, portability, rectification, objection, restriction and erasure/anonymisation;
-- AES-GCM privacy-package encryption under a dedicated keyring, independent approval/execution and legal holds;
-- governed small-cohort report suppression with exact policy-version evidence;
-- contact lifecycle transitions and immutable profile/status history;
-- expanded cursor-based audit filtering;
-- filesystem or S3/MinIO-compatible object storage;
-- migrations `0062`, `0063` and `0064`;
-- OpenAPI coverage for 232 implemented method/path pairs.
+- exact-body HMAC gateway runtime registration with durable nonce replay protection;
+- governed runtime identity including boot ID, provider/engine, adapter/gateway/worker/configuration versions, capabilities, heartbeat, capacity, sessions, queue, CPU and memory evidence;
+- maker-checker gateway-pool lifecycle and in-use retirement guards;
+- protected gateway-node drain, offline and retirement operations;
+- common configuration draft, submission, approval, activation, effective dating, supersession, retirement and rollback-by-replacement;
+- maintenance modes for read-only, admission freeze, draining and emergency stop, enforced inside API and business-service boundaries;
+- governed retention policies and durable fenced jobs with legal-hold-aware precedence, retries, evidence and review holds;
+- supported retention execution for inbound content, audience-import source files and expired export objects;
+- governed operational alert policies, threshold evaluation, cooldown, recovery, escalation, portal delivery and optional automatic incident creation;
+- append-only incident assignment, investigation, mitigation, resolution and closure timelines committed atomically with incident state;
+- a dedicated `platform-governance-worker` with readiness/liveness, bounded cycles and graceful shutdown;
+- migration `0065_platform_governance_runtime_retention_and_alerts.sql`;
+- OpenAPI coverage for 277 implemented method/path pairs.
 
-It remains pre-production. Live PostgreSQL migration execution, production-volume query plans, dependency-resolved OpenWA builds, genuine `whatsapp-web.js` and Baileys sessions, Hostinger deployment, penetration testing, backup/restore evidence, unified platform governance/retention, production observability and the frontend remain release gates.
+It remains pre-production. Live PostgreSQL migration execution, production-scale telemetry and alert validation, real OpenWA sessions, multi-node Hostinger networking, penetration testing, backup/restore evidence, complete destructive-retention executors, full observability and the production frontend remain release gates.

@@ -27,22 +27,31 @@ type Pool struct {
 }
 
 type Node struct {
-	ID              string     `json:"id"`
-	Name            string     `json:"name"`
-	PublicIP        string     `json:"publicIp,omitempty"`
-	InternalURL     string     `json:"internalUrl,omitempty"`
-	GatewayPoolID   string     `json:"gatewayPoolId,omitempty"`
-	Provider        string     `json:"provider,omitempty"`
-	Engine          string     `json:"engine,omitempty"`
-	AdapterVersion  string     `json:"adapterVersion,omitempty"`
-	BootID          string     `json:"bootId,omitempty"`
-	Status          string     `json:"status"`
-	BuildVersion    string     `json:"buildVersion,omitempty"`
-	Capacity        int        `json:"capacity"`
-	QueueDepth      int64      `json:"queueDepth"`
-	Draining        bool       `json:"draining"`
-	LastHeartbeatAt *time.Time `json:"lastHeartbeatAt,omitempty"`
-	Version         int64      `json:"version"`
+	ID                   string       `json:"id"`
+	Name                 string       `json:"name"`
+	PublicIP             string       `json:"publicIp,omitempty"`
+	InternalURL          string       `json:"internalUrl,omitempty"`
+	GatewayPoolID        string       `json:"gatewayPoolId,omitempty"`
+	Provider             string       `json:"provider,omitempty"`
+	Engine               string       `json:"engine,omitempty"`
+	AdapterVersion       string       `json:"adapterVersion,omitempty"`
+	BootID               string       `json:"bootId,omitempty"`
+	Status               string       `json:"status"`
+	BuildVersion         string       `json:"buildVersion,omitempty"`
+	GatewayVersion       string       `json:"gatewayVersion,omitempty"`
+	WorkerVersion        string       `json:"workerVersion,omitempty"`
+	ConfigurationVersion string       `json:"configurationVersion,omitempty"`
+	RuntimeCapabilities  []Capability `json:"runtimeCapabilities,omitempty"`
+	RuntimeState         RuntimeState `json:"runtimeState,omitempty"`
+	Capacity             int          `json:"capacity"`
+	SessionCount         int          `json:"sessionCount"`
+	QueueDepth           int64        `json:"queueDepth"`
+	CPUPercent           float64      `json:"cpuPercent"`
+	MemoryBytes          int64        `json:"memoryBytes"`
+	Draining             bool         `json:"draining"`
+	RegisteredAt         *time.Time   `json:"registeredAt,omitempty"`
+	LastHeartbeatAt      *time.Time   `json:"lastHeartbeatAt,omitempty"`
+	Version              int64        `json:"version"`
 }
 
 type GovernedSession struct {
@@ -88,6 +97,7 @@ type GovernanceStore interface {
 	GetNode(context.Context, string) (Node, error)
 	RegisterNode(context.Context, Node, string, string) (Node, error)
 	HeartbeatNode(context.Context, string, int64, Node, time.Time) (Node, error)
+	TransitionNode(context.Context, string, int64, string, string, string) (Node, error)
 	ListSessions(context.Context) ([]GovernedSession, error)
 	GetSession(context.Context, string) (GovernedSession, error)
 	RegisterSession(context.Context, GovernedSession, []byte, string, string) (GovernedSession, error)
@@ -168,6 +178,22 @@ func (s *GovernanceService) RegisterNode(ctx context.Context, value Node, actor,
 		return Node{}, errors.New("node capacity is invalid")
 	}
 	return s.Store.RegisterNode(ctx, value, actor, reason)
+}
+
+func (s *GovernanceService) TransitionNode(ctx context.Context, id string, expected int64, status, actor, reason string) (Node, error) {
+	if s == nil || s.Store == nil {
+		return Node{}, errors.New("sender governance store is required")
+	}
+	id, status, actor, reason = strings.TrimSpace(id), strings.ToUpper(strings.TrimSpace(status)), strings.TrimSpace(actor), strings.TrimSpace(reason)
+	if id == "" || expected <= 0 || actor == "" || reason == "" {
+		return Node{}, errors.New("node, expected version, actor and reason are required")
+	}
+	switch status {
+	case "DRAINING", "OFFLINE", "RETIRED":
+	default:
+		return Node{}, errors.New("administrative node transition is invalid")
+	}
+	return s.Store.TransitionNode(ctx, id, expected, status, actor, reason)
 }
 
 func (s *GovernanceService) RegisterSession(ctx context.Context, value GovernedSession, encryptedMSISDN []byte, actor, reason string) (GovernedSession, error) {

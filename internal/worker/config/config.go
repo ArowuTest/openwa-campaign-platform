@@ -774,6 +774,133 @@ func (c GovernanceConfig) Validate() error {
 	return nil
 }
 
+// PlatformGovernanceConfig controls the independent retention and operational
+// alert worker. It intentionally has no browser-session, administrator or
+// messaging-provider credentials; the worker needs only PostgreSQL and the
+// object-store credentials required for governed retention actions.
+type PlatformGovernanceConfig struct {
+	Environment             string
+	HealthAddr              string
+	DatabaseDriver          string
+	DatabaseURL             string
+	DBMaxOpen               int
+	DBMaxIdle               int
+	DBConnMaxLifetime       time.Duration
+	DBConnMaxIdleTime       time.Duration
+	DBPingTimeout           time.Duration
+	WorkerID                string
+	ObjectStoreRoot         string
+	RetentionBatch          int
+	RetentionLease          time.Duration
+	RetentionPollInterval   time.Duration
+	AlertEvaluationInterval time.Duration
+	AlertEscalationInterval time.Duration
+	AlertEscalationBatch    int
+	AlertEscalationLease    time.Duration
+	FailureBackoff          time.Duration
+	ShutdownTimeout         time.Duration
+}
+
+func LoadPlatformGovernance() (PlatformGovernanceConfig, error) {
+	cfg := PlatformGovernanceConfig{
+		Environment:     strings.ToLower(strings.TrimSpace(env("APP_ENV", "development"))),
+		HealthAddr:      strings.TrimSpace(env("WORKER_HEALTH_ADDR", ":8095")),
+		DatabaseDriver:  strings.TrimSpace(env("POSTGRES_DRIVER", "pgx")),
+		DatabaseURL:     strings.TrimSpace(os.Getenv("DATABASE_URL")),
+		WorkerID:        strings.TrimSpace(env("WORKER_ID", hostname("platform-governance-worker"))),
+		ObjectStoreRoot: strings.TrimSpace(env("OBJECT_STORE_ROOT", filepath.Join(os.TempDir(), "campaign-platform-objects"))),
+	}
+	var err error
+	if cfg.DBMaxOpen, err = integer("DB_MAX_OPEN", 12); err != nil {
+		return PlatformGovernanceConfig{}, err
+	}
+	if cfg.DBMaxIdle, err = integer("DB_MAX_IDLE", 4); err != nil {
+		return PlatformGovernanceConfig{}, err
+	}
+	if cfg.DBConnMaxLifetime, err = duration("DB_CONN_MAX_LIFETIME", 30*time.Minute); err != nil {
+		return PlatformGovernanceConfig{}, err
+	}
+	if cfg.DBConnMaxIdleTime, err = duration("DB_CONN_MAX_IDLE_TIME", 5*time.Minute); err != nil {
+		return PlatformGovernanceConfig{}, err
+	}
+	if cfg.DBPingTimeout, err = duration("DB_PING_TIMEOUT", 5*time.Second); err != nil {
+		return PlatformGovernanceConfig{}, err
+	}
+	if cfg.RetentionBatch, err = integer("PLATFORM_RETENTION_BATCH", 50); err != nil {
+		return PlatformGovernanceConfig{}, err
+	}
+	if cfg.RetentionLease, err = duration("PLATFORM_RETENTION_LEASE", 2*time.Minute); err != nil {
+		return PlatformGovernanceConfig{}, err
+	}
+	if cfg.RetentionPollInterval, err = duration("PLATFORM_RETENTION_POLL_INTERVAL", time.Minute); err != nil {
+		return PlatformGovernanceConfig{}, err
+	}
+	if cfg.AlertEvaluationInterval, err = duration("ALERT_EVALUATION_INTERVAL", 30*time.Second); err != nil {
+		return PlatformGovernanceConfig{}, err
+	}
+	if cfg.AlertEscalationInterval, err = duration("ALERT_ESCALATION_INTERVAL", 30*time.Second); err != nil {
+		return PlatformGovernanceConfig{}, err
+	}
+	if cfg.AlertEscalationBatch, err = integer("ALERT_ESCALATION_BATCH", 100); err != nil {
+		return PlatformGovernanceConfig{}, err
+	}
+	if cfg.AlertEscalationLease, err = duration("ALERT_ESCALATION_LEASE", time.Minute); err != nil {
+		return PlatformGovernanceConfig{}, err
+	}
+	if cfg.FailureBackoff, err = duration("PLATFORM_GOVERNANCE_FAILURE_BACKOFF", 10*time.Second); err != nil {
+		return PlatformGovernanceConfig{}, err
+	}
+	if cfg.ShutdownTimeout, err = duration("WORKER_SHUTDOWN_TIMEOUT", 30*time.Second); err != nil {
+		return PlatformGovernanceConfig{}, err
+	}
+	if err := cfg.Validate(); err != nil {
+		return PlatformGovernanceConfig{}, err
+	}
+	return cfg, nil
+}
+
+func (c PlatformGovernanceConfig) Validate() error {
+	switch c.Environment {
+	case "development", "test", "staging", "production":
+	default:
+		return fmt.Errorf("APP_ENV %q is unsupported", c.Environment)
+	}
+	if err := ValidateHealthAddress(c.HealthAddr); err != nil {
+		return err
+	}
+	if c.DatabaseDriver == "" || c.DatabaseURL == "" {
+		return errors.New("POSTGRES_DRIVER and DATABASE_URL are required")
+	}
+	if c.WorkerID == "" || len(c.WorkerID) > 128 {
+		return errors.New("WORKER_ID must contain 1 to 128 characters")
+	}
+	if c.DBMaxOpen < 1 || c.DBMaxOpen > 100 || c.DBMaxIdle < 0 || c.DBMaxIdle > c.DBMaxOpen {
+		return errors.New("database pool bounds are invalid")
+	}
+	if c.DBPingTimeout <= 0 || c.DBPingTimeout > 30*time.Second || c.DBConnMaxLifetime <= 0 || c.DBConnMaxIdleTime <= 0 {
+		return errors.New("database connection timing is invalid")
+	}
+	if c.RetentionBatch < 1 || c.RetentionBatch > 500 {
+		return errors.New("PLATFORM_RETENTION_BATCH must be between 1 and 500")
+	}
+	if c.RetentionLease < 15*time.Second || c.RetentionLease > 10*time.Minute {
+		return errors.New("PLATFORM_RETENTION_LEASE must be between 15 seconds and 10 minutes")
+	}
+	if c.AlertEscalationBatch < 1 || c.AlertEscalationBatch > 500 {
+		return errors.New("ALERT_ESCALATION_BATCH must be between 1 and 500")
+	}
+	if c.AlertEscalationLease < 15*time.Second || c.AlertEscalationLease > 10*time.Minute {
+		return errors.New("ALERT_ESCALATION_LEASE must be between 15 seconds and 10 minutes")
+	}
+	if c.RetentionPollInterval <= 0 || c.AlertEvaluationInterval <= 0 || c.AlertEscalationInterval <= 0 || c.FailureBackoff <= 0 {
+		return errors.New("platform governance worker intervals must be positive")
+	}
+	if c.ShutdownTimeout < time.Second || c.ShutdownTimeout > 5*time.Minute {
+		return errors.New("WORKER_SHUTDOWN_TIMEOUT must be between 1 second and 5 minutes")
+	}
+	return nil
+}
+
 func firstNonEmpty(values ...string) string {
 	for _, value := range values {
 		if strings.TrimSpace(value) != "" {

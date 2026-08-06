@@ -65,10 +65,37 @@ WHERE status IN('SUBMITTING','FAILED_RETRYABLE')`).Scan(&submitting, &retryable)
 		value := oldest.Time.UTC()
 		d.OldestQueuedAt = &value
 	}
-	if err := r.DB.QueryRowContext(ctx, `SELECT count(*) FILTER(WHERE status<>'RESOLVED'),count(*) FILTER(WHERE status<>'RESOLVED' AND severity='CRITICAL') FROM operations_incidents`).Scan(&d.OpenIncidents, &d.CriticalIncidents); err != nil {
+	if err := r.DB.QueryRowContext(ctx, `SELECT count(*) FILTER(WHERE status NOT IN ('RESOLVED','CLOSED')),count(*) FILTER(WHERE status NOT IN ('RESOLVED','CLOSED') AND severity='CRITICAL') FROM operations_incidents`).Scan(&d.OpenIncidents, &d.CriticalIncidents); err != nil {
 		return d, err
 	}
-	if err := r.DB.QueryRowContext(ctx, `SELECT count(*) FROM sender_nodes WHERE last_heartbeat_at IS NULL OR last_heartbeat_at < $1`, now.UTC().Add(-2*time.Minute)).Scan(&d.StaleWorkerNodes); err != nil {
+	staleBefore := now.UTC().Add(-2 * time.Minute)
+	if err := r.DB.QueryRowContext(ctx, `SELECT count(*) FROM sender_nodes WHERE last_heartbeat_at IS NULL OR last_heartbeat_at < $1`, staleBefore).Scan(&d.StaleWorkerNodes); err != nil {
+		return d, err
+	}
+	if err := r.DB.QueryRowContext(ctx, `SELECT count(*) FROM sender_nodes WHERE status IN ('UNHEALTHY','OFFLINE') OR last_heartbeat_at IS NULL OR last_heartbeat_at < $1`, staleBefore).Scan(&d.UnavailableGatewayNodes); err != nil {
+		return d, err
+	}
+	if err := r.DB.QueryRowContext(ctx, `SELECT count(*) FROM sender_sessions WHERE status IN ('DISCONNECTED','RESTRICTED','QUARANTINED','RECOVERY_FAILED')`).Scan(&d.UnhealthySenderSessions); err != nil {
+		return d, err
+	}
+	if err := r.DB.QueryRowContext(ctx, `WITH latest AS (
+  SELECT DISTINCT ON (campaign_id) campaign_id,decision,forecast_completion_at,deadline_at
+  FROM campaign_capacity_assessments ORDER BY campaign_id,evaluated_at DESC
+) SELECT count(*) FROM latest l JOIN campaigns c ON c.id=l.campaign_id
+WHERE c.status IN ('SCHEDULED','DISPATCHING','PAUSED') AND (l.decision IN ('HOLD','REJECT') OR l.forecast_completion_at>l.deadline_at)`).Scan(&d.CampaignsAtRisk); err != nil {
+		return d, err
+	}
+	if err := r.DB.QueryRowContext(ctx, `WITH reserved AS (
+  SELECT sender_pool_id,sum(reserved_daily_units) AS reserved
+  FROM campaign_pool_capacity_reservations
+  WHERE status IN ('HELD','ACTIVE') AND reservation_start<=$1 AND reservation_end>$1
+  GROUP BY sender_pool_id
+) SELECT count(*) FROM reserved r JOIN sender_pools p ON p.id=r.sender_pool_id WHERE r.reserved>p.daily_capacity`).Scan(&d.CapacityShortfallPools); err != nil {
+		return d, err
+	}
+	if err := r.DB.QueryRowContext(ctx, `SELECT
+  (SELECT count(*) FROM campaign_recipients WHERE reconciliation_required=true) +
+  (SELECT count(*) FROM campaign_metric_reconciliations WHERE consecutive_drift_count>0)`).Scan(&d.ReconciliationBacklog); err != nil {
 		return d, err
 	}
 	return d, nil
@@ -150,6 +177,61 @@ func (r *PostgreSQLRepository) UpdateIncident(ctx context.Context, v Incident, e
 	v.Version = expected + 1
 	return v, nil
 }
+
+func (r *PostgreSQLRepository) CreateIncidentWithEvents(ctx context.Context, v Incident, events []IncidentEvent) (Incident, error) {
+	tx, err := r.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return Incident{}, err
+	}
+	defer tx.Rollback()
+	_, err = tx.ExecContext(ctx, `INSERT INTO operations_incidents(id,campaign_id,sender_session_id,category,severity,status,summary,detail,owner_id,resolution,created_at,updated_at,resolved_at,version) VALUES($1::uuid,NULLIF($2,'')::uuid,NULLIF($3,'')::uuid,$4,$5,$6,$7,NULLIF($8,''),NULLIF($9,'')::uuid,NULLIF($10,''),$11,$12,$13,$14)`, v.ID, v.CampaignID, v.SenderSessionID, v.Category, v.Severity, v.Status, v.Summary, v.Detail, v.OwnerID, v.Resolution, v.CreatedAt, v.UpdatedAt, v.ResolvedAt, v.Version)
+	if err != nil {
+		return Incident{}, err
+	}
+	for _, event := range events {
+		if err = insertIncidentEvent(ctx, tx, event); err != nil {
+			return Incident{}, err
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return Incident{}, err
+	}
+	return v, nil
+}
+
+func (r *PostgreSQLRepository) UpdateIncidentWithEvents(ctx context.Context, v Incident, expected int64, events []IncidentEvent) (Incident, error) {
+	tx, err := r.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return Incident{}, err
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `UPDATE operations_incidents SET status=$2,owner_id=NULLIF($3,'')::uuid,resolution=NULLIF($4,''),resolved_at=$5,updated_at=$6,version=version+1 WHERE id=$1::uuid AND version=$7`, v.ID, v.Status, v.OwnerID, v.Resolution, v.ResolvedAt, v.UpdatedAt, expected)
+	if err != nil {
+		return Incident{}, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return Incident{}, err
+	}
+	if n != 1 {
+		return Incident{}, ErrConflict
+	}
+	v.Version = expected + 1
+	for _, event := range events {
+		if event.Evidence == nil {
+			event.Evidence = map[string]any{}
+		}
+		event.Evidence["version"] = v.Version
+		if err = insertIncidentEvent(ctx, tx, event); err != nil {
+			return Incident{}, err
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return Incident{}, err
+	}
+	return v, nil
+}
+
 func (r *PostgreSQLRepository) CampaignReport(ctx context.Context, id string, now time.Time) (CampaignReport, error) {
 	var v CampaignReport
 	var started, completed sql.NullTime

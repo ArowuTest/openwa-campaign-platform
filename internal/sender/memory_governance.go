@@ -9,16 +9,19 @@ import (
 )
 
 type MemoryGovernanceStore struct {
-	mu           sync.Mutex
-	pools        map[string]Pool
-	nodes        map[string]Node
-	sessions     map[string]GovernedSession
-	gatewayPools map[string]GatewayPool
-	seq          int64
+	mu                sync.Mutex
+	pools             map[string]Pool
+	nodes             map[string]Node
+	sessions          map[string]GovernedSession
+	gatewayPools      map[string]GatewayPool
+	runtimeNonces     map[string]time.Time
+	runtimeEvents     map[string][]RuntimeEvent
+	gatewayPoolEvents map[string][]GatewayPoolEvent
+	seq               int64
 }
 
 func NewMemoryGovernanceStore() *MemoryGovernanceStore {
-	return &MemoryGovernanceStore{pools: map[string]Pool{}, nodes: map[string]Node{}, sessions: map[string]GovernedSession{}, gatewayPools: map[string]GatewayPool{}}
+	return &MemoryGovernanceStore{pools: map[string]Pool{}, nodes: map[string]Node{}, sessions: map[string]GovernedSession{}, gatewayPools: map[string]GatewayPool{}, runtimeNonces: map[string]time.Time{}, runtimeEvents: map[string][]RuntimeEvent{}, gatewayPoolEvents: map[string][]GatewayPoolEvent{}}
 }
 func (m *MemoryGovernanceStore) next(prefix string) string {
 	m.seq++
@@ -132,6 +135,30 @@ func (m *MemoryGovernanceStore) HeartbeatNode(_ context.Context, id string, e in
 	m.nodes[id] = cur
 	return cur, nil
 }
+func (m *MemoryGovernanceStore) TransitionNode(_ context.Context, id string, expected int64, status, _, _ string) (Node, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	current, ok := m.nodes[id]
+	if !ok {
+		return Node{}, ErrSenderNotFound
+	}
+	if current.Version != expected {
+		return Node{}, ErrSenderConflict
+	}
+	if status == "RETIRED" {
+		for _, session := range m.sessions {
+			if session.NodeID == id && session.Status != StatusRetired {
+				return Node{}, errors.New("gateway node has non-retired sessions")
+			}
+		}
+	}
+	current.Status = status
+	current.Draining = status == "DRAINING" || status == "RETIRED"
+	current.Version++
+	m.nodes[id] = current
+	return current, nil
+}
+
 func (m *MemoryGovernanceStore) ListSessions(context.Context) ([]GovernedSession, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -264,7 +291,7 @@ func (m *MemoryGovernanceStore) GetGatewayPool(_ context.Context, id string) (Ga
 	return value, nil
 }
 
-func (m *MemoryGovernanceStore) CreateGatewayPool(_ context.Context, value GatewayPool, _, _ string) (GatewayPool, error) {
+func (m *MemoryGovernanceStore) CreateGatewayPool(_ context.Context, value GatewayPool, actor, reason string) (GatewayPool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, existing := range m.gatewayPools {
@@ -279,11 +306,19 @@ func (m *MemoryGovernanceStore) CreateGatewayPool(_ context.Context, value Gatew
 	value.Version = 1
 	value.CreatedAt = now
 	value.UpdatedAt = now
+	if value.CreatedBy == "" {
+		value.CreatedBy = actor
+	}
+	if value.Status == GatewayPoolActive && value.EffectiveFrom == nil {
+		effective := now
+		value.EffectiveFrom = &effective
+	}
 	m.gatewayPools[value.ID] = value
+	m.gatewayPoolEvents[value.ID] = append(m.gatewayPoolEvents[value.ID], GatewayPoolEvent{ID: m.next("gateway-event"), PoolID: value.ID, EventType: "CREATED", Version: 1, ActorID: actor, Reason: reason, Evidence: map[string]any{"status": value.Status, "provider": value.Provider, "engine": value.Engine}, OccurredAt: now})
 	return value, nil
 }
 
-func (m *MemoryGovernanceStore) UpdateGatewayPool(_ context.Context, id string, expectedVersion int64, value GatewayPool, _, _ string) (GatewayPool, error) {
+func (m *MemoryGovernanceStore) UpdateGatewayPool(_ context.Context, id string, expectedVersion int64, value GatewayPool, actor, reason string) (GatewayPool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	current, ok := m.gatewayPools[id]
@@ -298,5 +333,150 @@ func (m *MemoryGovernanceStore) UpdateGatewayPool(_ context.Context, id string, 
 	value.UpdatedAt = time.Now().UTC()
 	value.Version = expectedVersion + 1
 	m.gatewayPools[id] = value
+	m.gatewayPoolEvents[id] = append(m.gatewayPoolEvents[id], GatewayPoolEvent{ID: m.next("gateway-event"), PoolID: id, EventType: "STATUS_" + string(value.Status), Version: value.Version, ActorID: actor, Reason: reason, Evidence: map[string]any{"status": value.Status, "adapterVersion": value.AdapterVersion}, OccurredAt: value.UpdatedAt})
 	return value, nil
+}
+
+func (m *MemoryGovernanceStore) ListGatewayPoolEvents(_ context.Context, poolID string, limit int) ([]GatewayPoolEvent, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.gatewayPools[poolID]; !ok {
+		return nil, ErrSenderNotFound
+	}
+	values := m.gatewayPoolEvents[poolID]
+	if limit <= 0 || limit > len(values) {
+		limit = len(values)
+	}
+	out := make([]GatewayPoolEvent, 0, limit)
+	for index := len(values) - 1; index >= len(values)-limit; index-- {
+		out = append(out, values[index])
+	}
+	return out, nil
+}
+
+func (m *MemoryGovernanceStore) UseRuntimeNonce(_ context.Context, nodeID, nonce, _ string, expiresAt time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now().UTC()
+	for key, expiry := range m.runtimeNonces {
+		if !expiry.After(now) {
+			delete(m.runtimeNonces, key)
+		}
+	}
+	key := nodeID + ":" + nonce
+	if _, exists := m.runtimeNonces[key]; exists {
+		return ErrRuntimeReplay
+	}
+	m.runtimeNonces[key] = expiresAt
+	return nil
+}
+
+func cloneRuntimeEvent(value RuntimeEvent) RuntimeEvent {
+	if value.RuntimeIdentity != nil {
+		copyValue := map[string]any{}
+		for key, item := range value.RuntimeIdentity {
+			copyValue[key] = item
+		}
+		value.RuntimeIdentity = copyValue
+	}
+	return value
+}
+
+func (m *MemoryGovernanceStore) ApplyRuntimeReport(_ context.Context, nodeID string, expected int64, report RuntimeReport, requestHash string, now time.Time) (Node, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	current, ok := m.nodes[nodeID]
+	if !ok {
+		return Node{}, ErrSenderNotFound
+	}
+	if current.Version != expected {
+		return Node{}, ErrSenderConflict
+	}
+	previousBootID := current.BootID
+	current.GatewayPoolID = report.GatewayPoolID
+	current.Provider = report.Provider
+	current.Engine = report.Engine
+	current.AdapterVersion = report.AdapterVersion
+	current.GatewayVersion = report.GatewayVersion
+	current.WorkerVersion = report.WorkerVersion
+	current.ConfigurationVersion = report.ConfigurationVersion
+	current.BootID = report.BootID
+	current.InternalURL = report.InternalURL
+	current.RuntimeCapabilities = append([]Capability(nil), report.Capabilities...)
+	current.RuntimeState = report.RuntimeState
+	current.Capacity = report.Capacity
+	current.SessionCount = report.SessionCount
+	current.QueueDepth = report.QueueDepth
+	current.CPUPercent = report.CPUPercent
+	current.MemoryBytes = report.MemoryBytes
+	current.Draining = report.RuntimeState == RuntimeDraining
+	status := "READY"
+	switch report.RuntimeState {
+	case RuntimeDraining:
+		status = "DRAINING"
+	case RuntimeDegraded, RuntimeUnavailable:
+		status = "UNHEALTHY"
+	}
+	current.Status = status
+	current.LastHeartbeatAt = &now
+	if current.RegisteredAt == nil || previousBootID != report.BootID {
+		registered := now
+		current.RegisteredAt = &registered
+	}
+	current.Version++
+	m.nodes[nodeID] = current
+	eventType := "HEARTBEAT"
+	if current.Version == 2 || previousBootID != report.BootID {
+		eventType = "REGISTERED"
+	}
+	m.seq++
+	event := RuntimeEvent{ID: m.next("runtime"), NodeID: nodeID, GatewayPoolID: report.GatewayPoolID, EventType: eventType, NodeVersion: current.Version, BootID: report.BootID, RuntimeIdentity: map[string]any{"provider": report.Provider, "engine": report.Engine, "adapterVersion": report.AdapterVersion, "gatewayVersion": report.GatewayVersion, "workerVersion": report.WorkerVersion, "configurationVersion": report.ConfigurationVersion, "capabilities": report.Capabilities, "runtimeState": report.RuntimeState}, RequestHash: requestHash, Reason: "signed gateway runtime report accepted", OccurredAt: now}
+	m.runtimeEvents[nodeID] = append(m.runtimeEvents[nodeID], event)
+	return current, nil
+}
+
+func (m *MemoryGovernanceStore) RecordRuntimeRejection(_ context.Context, nodeID string, report RuntimeReport, requestHash, reason string, now time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.seq++
+	event := RuntimeEvent{ID: m.next("runtime"), NodeID: nodeID, GatewayPoolID: report.GatewayPoolID, EventType: "REJECTED", NodeVersion: report.ExpectedNodeVersion, BootID: report.BootID, RuntimeIdentity: map[string]any{"provider": report.Provider, "engine": report.Engine, "adapterVersion": report.AdapterVersion, "gatewayVersion": report.GatewayVersion, "workerVersion": report.WorkerVersion, "configurationVersion": report.ConfigurationVersion, "capabilities": report.Capabilities, "runtimeState": report.RuntimeState}, RequestHash: requestHash, Reason: reason, OccurredAt: now}
+	m.runtimeEvents[nodeID] = append(m.runtimeEvents[nodeID], event)
+	return nil
+}
+
+func (m *MemoryGovernanceStore) ListRuntimeEvents(_ context.Context, nodeID string, limit int) ([]RuntimeEvent, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.nodes[nodeID]; !ok {
+		return nil, ErrSenderNotFound
+	}
+	values := m.runtimeEvents[nodeID]
+	if limit <= 0 || limit > len(values) {
+		limit = len(values)
+	}
+	out := make([]RuntimeEvent, 0, limit)
+	for index := len(values) - 1; index >= len(values)-limit; index-- {
+		out = append(out, cloneRuntimeEvent(values[index]))
+	}
+	return out, nil
+}
+
+func (m *MemoryGovernanceStore) GatewayPoolUsage(_ context.Context, poolID string, _ time.Time) (GatewayPoolUsage, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.gatewayPools[poolID]; !ok {
+		return GatewayPoolUsage{}, ErrSenderNotFound
+	}
+	var usage GatewayPoolUsage
+	for _, node := range m.nodes {
+		if node.GatewayPoolID == poolID && node.Status != "RETIRED" {
+			usage.NonRetiredNodes++
+		}
+	}
+	for _, session := range m.sessions {
+		if session.GatewayPoolID == poolID && session.Status != StatusRetired {
+			usage.NonRetiredSessions++
+		}
+	}
+	return usage, nil
 }

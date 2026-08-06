@@ -36,8 +36,10 @@ import (
 	"campaign-platform/internal/operations"
 	"campaign-platform/internal/orchestration"
 	"campaign-platform/internal/organisation"
+	"campaign-platform/internal/platformpolicy"
 	"campaign-platform/internal/privacy"
 	"campaign-platform/internal/provider"
+	"campaign-platform/internal/retention"
 	"campaign-platform/internal/segment"
 	"campaign-platform/internal/sender"
 	sharedcrypto "campaign-platform/internal/shared/crypto"
@@ -82,9 +84,16 @@ type Dependencies struct {
 	AudienceMaterialisations *materialisation.MaterialisationService
 	Releases                 *orchestration.ReleaseService
 	SenderGovernance         *sender.GovernanceService
+	GatewayPools             *sender.GatewayPoolAdministration
+	GatewayRuntime           *sender.RuntimeRegistrationService
 	SenderSessionLifecycle   *sender.SessionLifecycleService
 	PacingPolicies           *sender.PacingAdministration
 	ProviderCapabilities     *provider.Service
+	Configurations           *platformpolicy.ConfigurationAdministration
+	Maintenance              *platformpolicy.MaintenanceAdministration
+	Retention                *retention.Administration
+	AlertPolicies            *operations.AlertAdministration
+	AlertEvaluator           *operations.AlertEvaluator
 	DeliveryMetrics          *delivery.MetricsService
 	Execution                *execution.Coordinator
 	RoutingPlans             *execution.RoutingAdministration
@@ -285,6 +294,26 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/dispatch-shards/{id}/reallocate", s.require("campaign.operate", s.reallocateDispatchShard))
 	mux.Handle("GET /api/v1/dispatch-shards/{id}/reallocations", s.require("campaign.read", s.listDispatchShardReallocations))
 	mux.Handle("GET /api/v1/campaigns/{id}/execution-forecast", s.require("campaign.read", s.getCampaignExecutionForecast))
+	mux.Handle("GET /api/v1/admin/retention-policies", s.require("retention.read", s.listRetentionPolicies))
+	mux.Handle("POST /api/v1/admin/retention-policies", s.require("retention.write", s.createRetentionPolicy))
+	mux.Handle("GET /api/v1/admin/retention-policies/{id}", s.require("retention.read", s.getRetentionPolicy))
+	mux.Handle("POST /api/v1/admin/retention-policies/{id}/submit", s.require("retention.write", s.submitRetentionPolicy))
+	mux.Handle("POST /api/v1/admin/retention-policies/{id}/decision", s.require("retention.approve", s.decideRetentionPolicy))
+	mux.Handle("POST /api/v1/admin/retention-policies/{id}/retire", s.require("retention.approve", s.retireRetentionPolicy))
+	mux.Handle("GET /api/v1/admin/retention-policies/{id}/events", s.require("retention.read", s.listRetentionPolicyEvents))
+	mux.Handle("GET /api/v1/operations/retention-jobs", s.require("retention.read", s.listRetentionJobs))
+	mux.Handle("GET /api/v1/operations/alert-policies", s.require("operations.read", s.listAlertPolicies))
+	mux.Handle("POST /api/v1/operations/alert-policies", s.require("operations.write", s.createAlertPolicy))
+	mux.Handle("POST /api/v1/operations/alert-policies/{id}/submit", s.require("operations.write", s.submitAlertPolicy))
+	mux.Handle("POST /api/v1/operations/alert-policies/{id}/decision", s.require("operations.approve", s.decideAlertPolicy))
+	mux.Handle("POST /api/v1/operations/alert-policies/{id}/retire", s.require("operations.approve", s.retireAlertPolicy))
+	mux.Handle("GET /api/v1/operations/alert-policies/{id}/events", s.require("operations.read", s.listAlertPolicyEvents))
+	mux.Handle("GET /api/v1/operations/alerts", s.require("operations.read", s.listOperationalAlerts))
+	mux.Handle("POST /api/v1/operations/alerts/{id}/acknowledge", s.require("operations.write", s.acknowledgeOperationalAlert))
+	mux.Handle("GET /api/v1/operations/alerts/{id}/events", s.require("operations.read", s.listOperationalAlertEvents))
+	mux.Handle("POST /api/v1/operations/alerts/evaluate", s.require("operations.write", s.evaluateOperationalAlerts))
+	mux.Handle("GET /api/v1/operations/notifications", s.require("operations.read", s.listOperationalNotifications))
+	mux.Handle("GET /api/v1/operations/incidents/{id}/timeline", s.require("operations.read", s.getOperationsIncidentTimeline))
 	mux.Handle("GET /api/v1/operations/dashboard", s.require("operations.read", s.operationsDashboard))
 	mux.Handle("GET /api/v1/operations/incidents", s.require("operations.read", s.listOperationsIncidents))
 	mux.Handle("GET /api/v1/operations/audit-events", s.require("audit.read", s.searchAuditEvents))
@@ -335,6 +364,32 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/campaigns/{id}/inbound-metrics", s.require("campaign.read", s.getCampaignInboundMetrics))
 	mux.Handle("GET /api/v1/audience-snapshots/{id}", s.require("audience.read", s.getAudienceSnapshot))
 	mux.Handle("GET /api/v1/audience-snapshots/overlap", s.require("audience.read", s.getAudienceSnapshotOverlap))
+	mux.Handle("GET /api/v1/admin/configurations", s.require("configuration.write", s.listPlatformConfigurations))
+	mux.Handle("POST /api/v1/admin/configurations", s.require("configuration.write", s.createPlatformConfiguration))
+	mux.Handle("POST /api/v1/admin/configurations/{id}/submit", s.require("configuration.write", s.submitPlatformConfiguration))
+	mux.Handle("POST /api/v1/admin/configurations/{id}/decision", s.require("configuration.approve", s.decidePlatformConfiguration))
+	mux.Handle("POST /api/v1/admin/configurations/{id}/retire", s.require("configuration.approve", s.retirePlatformConfiguration))
+	mux.Handle("POST /api/v1/admin/configurations/{id}/rollback", s.require("configuration.approve", s.rollbackPlatformConfiguration))
+	mux.Handle("GET /api/v1/admin/configurations/{id}/events", s.require("configuration.write", s.listPlatformConfigurationEvents))
+	mux.Handle("GET /api/v1/admin/maintenance-windows", s.require("operations.read", s.listMaintenanceWindows))
+	mux.Handle("GET /api/v1/admin/maintenance-windows/active", s.require("operations.read", s.listActiveMaintenanceWindows))
+	mux.Handle("POST /api/v1/admin/maintenance-windows", s.require("operations.write", s.createMaintenanceWindow))
+	mux.Handle("POST /api/v1/admin/maintenance-windows/{id}/submit", s.require("operations.write", s.submitMaintenanceWindow))
+	mux.Handle("POST /api/v1/admin/maintenance-windows/{id}/decision", s.require("configuration.approve", s.decideMaintenanceWindow))
+	mux.Handle("POST /api/v1/admin/maintenance-windows/{id}/end", s.require("operations.write", s.endMaintenanceWindow))
+	mux.Handle("GET /api/v1/admin/maintenance-windows/{id}/events", s.require("operations.read", s.listMaintenanceEvents))
+	mux.Handle("GET /api/v1/admin/gateway-pools", s.require("sender.read", s.listGatewayPools))
+	mux.Handle("POST /api/v1/admin/gateway-pools", s.require("sender.admin", s.createGatewayPool))
+	mux.Handle("GET /api/v1/admin/gateway-pools/{id}", s.require("sender.read", s.getGatewayPool))
+	mux.Handle("POST /api/v1/admin/gateway-pools/{id}/submit", s.require("sender.admin", s.submitGatewayPool))
+	mux.Handle("POST /api/v1/admin/gateway-pools/{id}/decision", s.require("configuration.approve", s.decideGatewayPool))
+	mux.Handle("POST /api/v1/admin/gateway-pools/{id}/retire", s.require("sender.admin", s.retireGatewayPool))
+	mux.Handle("GET /api/v1/admin/gateway-pools/{id}/events", s.require("sender.read", s.listGatewayPoolEvents))
+	mux.Handle("GET /api/v1/admin/gateway-nodes/{id}", s.require("sender.read", s.getGatewayNode))
+	mux.Handle("POST /api/v1/admin/gateway-nodes/{id}/{action}", s.require("sender.admin", s.transitionGatewayNode))
+	mux.Handle("GET /api/v1/admin/gateway-nodes/{id}/runtime-events", s.require("sender.read", s.listGatewayRuntimeEvents))
+	mux.HandleFunc("POST /api/v1/internal/gateway-nodes/{id}/runtime", s.registerGatewayRuntime)
+
 	mux.Handle("GET /api/v1/admin/provider-capabilities", s.require("configuration.write", s.listProviderCapabilities))
 	mux.Handle("POST /api/v1/admin/provider-capabilities", s.require("configuration.write", s.createProviderCapability))
 	mux.Handle("POST /api/v1/admin/provider-capabilities/{id}/submit", s.require("configuration.write", s.submitProviderCapability))
@@ -376,6 +431,7 @@ func (s *Server) Handler() http.Handler {
 	handler = s.recoverPanic(handler)
 	handler = s.securityHeaders(handler)
 	handler = s.networkAdmission(handler)
+	handler = s.maintenanceAdmission(handler)
 	handler = s.requestID(handler)
 	handler = s.requestLogging(handler)
 	return handler

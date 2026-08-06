@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"campaign-platform/internal/campaign"
+	"campaign-platform/internal/platformpolicy"
 )
 
 type CampaignService interface {
@@ -26,9 +27,24 @@ type Coordinator struct {
 	Store               RuntimeStore
 	SafetyMarginPercent int
 	RoutingPlans        *RoutingAdministration
+	Maintenance         *platformpolicy.MaintenanceAdministration
 	Clock               func() time.Time
 }
 
+func executionScope(entity campaign.Campaign) platformpolicy.OperationalScope {
+	return platformpolicy.OperationalScope{
+		Provider:      string(entity.Transport.Provider),
+		GatewayPoolID: entity.Transport.GatewayPoolID,
+		SenderPoolID:  entity.Transport.SenderPoolID,
+	}
+}
+
+func (c *Coordinator) checkMaintenance(ctx context.Context, action platformpolicy.Operation, entity campaign.Campaign) error {
+	if c == nil || c.Maintenance == nil {
+		return nil
+	}
+	return c.Maintenance.Check(ctx, action, executionScope(entity), c.now())
+}
 func (c *Coordinator) now() time.Time {
 	if c.Clock != nil {
 		return c.Clock().UTC()
@@ -134,6 +150,9 @@ func (c *Coordinator) Start(ctx context.Context, id, actor, reason string, expec
 	if err != nil {
 		return campaign.Campaign{}, CapacityEvidence{}, err
 	}
+	if err := c.checkMaintenance(ctx, platformpolicy.OperationCampaignStart, entity); err != nil {
+		return campaign.Campaign{}, CapacityEvidence{}, err
+	}
 	window, err := entity.EvaluateDispatchWindow(c.now())
 	if err != nil {
 		return campaign.Campaign{}, CapacityEvidence{}, err
@@ -180,6 +199,9 @@ func (c *Coordinator) Pause(ctx context.Context, id, actor, reason string, expec
 func (c *Coordinator) Resume(ctx context.Context, id, actor, reason string, expected int64) (campaign.Campaign, CapacityEvidence, error) {
 	entity, err := c.Campaigns.Get(ctx, strings.TrimSpace(id))
 	if err != nil {
+		return campaign.Campaign{}, CapacityEvidence{}, err
+	}
+	if err := c.checkMaintenance(ctx, platformpolicy.OperationCampaignResume, entity); err != nil {
 		return campaign.Campaign{}, CapacityEvidence{}, err
 	}
 	window, err := entity.EvaluateDispatchWindow(c.now())

@@ -27,32 +27,32 @@ External organisations do not receive portal access in the initial release. They
 
 ## Current checkpoint
 
-Version `0.8.26` is a data privacy, secure export and audience-import governance checkpoint based on `0.8.25`. It remains pre-production and must not be represented as deployment-certified.
+Version `0.8.27` is the platform-governance and operational-control checkpoint based on `0.8.26`. It remains pre-production and must not be represented as deployment-certified.
 
 The repository includes:
 
 - Server-derived identity, MFA/session, RBAC and maker-checker controls.
-- Governed organisation, consent, suppression, audience, campaign and commercial lifecycles.
+- Governed organisation, consent, suppression, audience, campaign, commercial, privacy and export lifecycles.
 - Immutable audience snapshots, approved message versions and recipient entitlements.
 - Durable workers, fenced leases, queue reconstruction and unknown-outcome protection.
 - Multi-pool routing across separately governed OpenWA `WHATSAPP_WEB_JS` and `BAILEYS` gateway pools.
-- Exact provider-capability, gateway-node, session-lease and route-fence evidence revalidated before submission.
-- Canonical sender lifecycle, trusted malware-scanned media/evidence and durable signed inbound-message forwarding.
-- Secure export requests with immutable criteria, maker-checker approval, actor-bound single-use download grants, expiry, revocation and complete download-outcome audit.
-- Valid deterministic PDF, CSV and XLSX export rendering with spreadsheet-formula neutralisation and no fixed audit-export ceiling.
-- Governed privacy cases for access, portability, rectification, objection, restriction and erasure/anonymisation, with deadlines, assignment, independent approval, encrypted result packages and legal holds.
-- Server-side small-cohort suppression using the exact effective reporting-privacy policy version.
-- Real bounded XLSX audience imports, governed reusable mappings, templates, row-level issue exports, safe rollback and durable source-file retention/deletion evidence.
-- Governed contact lifecycle transitions and immutable profile/lifecycle history.
-- Filesystem or S3/MinIO-compatible object storage selected through one production configuration contract.
-- PostgreSQL migrations through `0064_import_mapping_rollback_and_retention.sql`.
-- OpenAPI coverage for all 229 implemented `/api/v1` method/path pairs.
-- An SRS traceability catalogue containing 398 granular requirement records: 96 implemented/tested, 38 partial and 264 not started.
+- Canonical sender/session lifecycle, owner-node and lease fencing, trusted media/evidence, and signed delivery/inbound callbacks.
+- Secure deterministic exports, privacy cases/legal holds, small-cohort report suppression, real XLSX imports, governed mappings/rollback/source retention and filesystem or S3/MinIO object storage.
+- Governed gateway-pool maker-checker administration and protected node drain/offline/retirement operations.
+- Signed gateway runtime registration with restart-safe nonce replay protection, boot generation, build/configuration/capability drift detection, heartbeat, capacity, queue, CPU and memory evidence.
+- Shared platform configuration governance with canonical JSON validation, effective dating, overlap prevention, immutable supersession, retirement and rollback-by-replacement.
+- Governed maintenance windows and emergency-stop controls enforced by API admission, campaign start/resume, final dispatch and session lifecycle services.
+- Cross-domain retention policies, durable lease-fenced jobs, legal-hold-aware scheduling, supported data actions and fail-closed review for unsupported destruction.
+- Governed operational alert policies, threshold evaluation, deduplication, recovery, escalation, portal notifications, automatic incidents and append-only incident timelines.
+- A separate `platform-governance-worker` for restart-safe retention scheduling/execution and alert evaluation/escalation.
+- PostgreSQL migrations through `0065_platform_governance_runtime_retention_and_alerts.sql`.
+- OpenAPI coverage for all 277 implemented `/api/v1` method/path pairs.
+- An SRS traceability catalogue containing 398 granular requirement records: 107 implemented/tested, 44 partial and 247 not started.
 - Imported OpenWA source under the repository's governed third-party-source model; see `UPSTREAM.md` and `THIRD_PARTY_NOTICES.md`.
 
 ## Verified code-level checks
 
-The checkpoint is expected to pass:
+The checkpoint passes:
 
 ```bash
 make fmt

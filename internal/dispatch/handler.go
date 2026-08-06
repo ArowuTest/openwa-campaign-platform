@@ -9,6 +9,7 @@ import (
 
 	"campaign-platform/internal/delivery"
 	"campaign-platform/internal/jobs"
+	"campaign-platform/internal/platformpolicy"
 )
 
 const JobType = "DISPATCH_CAMPAIGN_RECIPIENT"
@@ -123,6 +124,7 @@ type Handler struct {
 	Gateway     Gateway
 	Throttle    Throttle
 	Pacing      PacingController
+	Maintenance *platformpolicy.MaintenanceAdministration
 	Clock       func() time.Time
 }
 
@@ -163,6 +165,12 @@ func (h *Handler) Handle(ctx context.Context, job jobs.Job) error {
 	}
 	if err := validateMaterial(material); err != nil {
 		return err
+	}
+	if h.Maintenance != nil {
+		err := h.Maintenance.Check(ctx, platformpolicy.OperationDispatchSubmit, platformpolicy.OperationalScope{Provider: material.Provider, GatewayPoolID: material.GatewayPoolID, SenderPoolID: material.SenderPoolID}, now)
+		if err != nil {
+			return jobs.RetryableError{Code: "MAINTENANCE_MODE_ACTIVE", RetryAfter: time.Minute, Err: err}
+		}
 	}
 	attemptKey := fmt.Sprintf("%s:%d", job.ID, job.AttemptCount)
 	if h.Pacing != nil {

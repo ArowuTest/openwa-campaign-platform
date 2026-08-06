@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Internal Audience & Campaign Control API
-  version: 0.8.26
+  version: 0.8.27
   description: >
     Internal-only API for organisation records, offline consent reviews, secure audience imports,
     governed cohort definitions and controlled campaign lifecycle management.
@@ -2493,6 +2493,339 @@ paths:
       responses:
         '200': { description: Reporting privacy policy retired }
         '403': { description: Recent MFA step-up required }
+  /admin/configurations:
+    get:
+      operationId: listPlatformConfigurations
+      summary: List governed effective-dated platform configurations
+      responses:
+        '200': { description: Configuration list }
+    post:
+      operationId: createPlatformConfiguration
+      summary: Create a draft governed platform configuration
+      responses:
+        '201': { description: Draft configuration created }
+  /admin/configurations/{id}/submit:
+    post:
+      operationId: submitPlatformConfiguration
+      summary: Submit a platform configuration for independent approval
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Configuration submitted }
+  /admin/configurations/{id}/decision:
+    post:
+      operationId: decidePlatformConfiguration
+      summary: Approve or reject a submitted platform configuration
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Configuration decision recorded }
+  /admin/configurations/{id}/retire:
+    post:
+      operationId: retirePlatformConfiguration
+      summary: Retire an active platform configuration
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Configuration retired }
+  /admin/configurations/{id}/rollback:
+    post:
+      operationId: rollbackPlatformConfiguration
+      summary: Create a governed rollback configuration from historical evidence
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '201': { description: Rollback draft created }
+  /admin/configurations/{id}/events:
+    get:
+      operationId: listPlatformConfigurationEvents
+      summary: List immutable platform configuration events
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Configuration event history }
+  /admin/maintenance-windows:
+    get:
+      operationId: listMaintenanceWindows
+      summary: List governed maintenance windows
+      responses:
+        '200': { description: Maintenance-window list }
+    post:
+      operationId: createMaintenanceWindow
+      summary: Create a draft maintenance window
+      responses:
+        '201': { description: Draft maintenance window created }
+  /admin/maintenance-windows/active:
+    get:
+      operationId: listActiveMaintenanceWindows
+      summary: List maintenance windows effective at the requested time
+      responses:
+        '200': { description: Active maintenance-window list }
+  /admin/maintenance-windows/{id}/submit:
+    post:
+      operationId: submitMaintenanceWindow
+      summary: Submit a maintenance window for independent approval
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Maintenance window submitted }
+  /admin/maintenance-windows/{id}/decision:
+    post:
+      operationId: decideMaintenanceWindow
+      summary: Approve or reject a maintenance window
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Maintenance-window decision recorded }
+  /admin/maintenance-windows/{id}/end:
+    post:
+      operationId: endMaintenanceWindow
+      summary: End an active maintenance window
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Maintenance window ended }
+  /admin/maintenance-windows/{id}/events:
+    get:
+      operationId: listMaintenanceWindowEvents
+      summary: List immutable maintenance-window events
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Maintenance-window event history }
+  /admin/gateway-pools:
+    get:
+      operationId: listGovernedGatewayPools
+      summary: List governed OpenWA gateway pools
+      responses:
+        '200': { description: Gateway-pool list }
+    post:
+      operationId: createGovernedGatewayPool
+      summary: Create a draft gateway pool
+      responses:
+        '201': { description: Draft gateway pool created }
+  /admin/gateway-pools/{id}:
+    get:
+      operationId: getGovernedGatewayPool
+      summary: Get a governed gateway pool
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Gateway-pool detail }
+  /admin/gateway-pools/{id}/submit:
+    post:
+      operationId: submitGovernedGatewayPool
+      summary: Submit a gateway pool for independent approval
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Gateway pool submitted }
+  /admin/gateway-pools/{id}/decision:
+    post:
+      operationId: decideGovernedGatewayPool
+      summary: Approve or reject a gateway pool
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Gateway-pool decision recorded }
+  /admin/gateway-pools/{id}/retire:
+    post:
+      operationId: retireGovernedGatewayPool
+      summary: Retire a governed gateway pool
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Gateway pool retired }
+  /admin/gateway-pools/{id}/events:
+    get:
+      operationId: listGovernedGatewayPoolEvents
+      summary: List immutable gateway-pool events
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Gateway-pool event history }
+  /admin/gateway-nodes/{id}:
+    get:
+      operationId: getGovernedGatewayNode
+      summary: Get governed gateway-node runtime and lifecycle evidence
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Gateway-node detail }
+  /admin/gateway-nodes/{id}/{action}:
+    post:
+      operationId: transitionGovernedGatewayNode
+      summary: Drain, mark offline, or retire a governed gateway node
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: action, in: path, required: true, schema: { type: string, enum: [drain, offline, retire] } }
+      responses:
+        '200': { description: Gateway-node transition recorded }
+  /admin/gateway-nodes/{id}/runtime-events:
+    get:
+      operationId: listGatewayRuntimeEvents
+      summary: List signed gateway runtime registration evidence
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Gateway runtime event history }
+  /internal/gateway-nodes/{id}/runtime:
+    post:
+      operationId: registerGatewayRuntime
+      summary: Register or heartbeat a gateway node using an exact-body signed runtime report
+      security: []
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: X-Gateway-Runtime-Timestamp, in: header, required: true, schema: { type: string } }
+        - { name: X-Gateway-Runtime-Nonce, in: header, required: true, schema: { type: string } }
+        - { name: X-Gateway-Runtime-Signature, in: header, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Signed runtime report accepted }
+        '401': { description: Signature or timestamp invalid }
+        '409': { description: Replay or governed runtime drift }
+  /admin/retention-policies:
+    get:
+      operationId: listCrossDomainRetentionPolicies
+      summary: List governed cross-domain retention policies
+      responses:
+        '200': { description: Retention-policy list }
+    post:
+      operationId: createCrossDomainRetentionPolicy
+      summary: Create a draft cross-domain retention policy
+      responses:
+        '201': { description: Draft retention policy created }
+  /admin/retention-policies/{id}:
+    get:
+      operationId: getCrossDomainRetentionPolicy
+      summary: Get a cross-domain retention policy
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Retention-policy detail }
+  /admin/retention-policies/{id}/submit:
+    post:
+      operationId: submitCrossDomainRetentionPolicy
+      summary: Submit a retention policy for independent approval
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Retention policy submitted }
+  /admin/retention-policies/{id}/decision:
+    post:
+      operationId: decideCrossDomainRetentionPolicy
+      summary: Approve or reject a retention policy
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Retention-policy decision recorded }
+  /admin/retention-policies/{id}/retire:
+    post:
+      operationId: retireCrossDomainRetentionPolicy
+      summary: Retire an active retention policy
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Retention policy retired }
+  /admin/retention-policies/{id}/events:
+    get:
+      operationId: listCrossDomainRetentionPolicyEvents
+      summary: List immutable retention-policy events
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Retention-policy event history }
+  /operations/retention-jobs:
+    get:
+      operationId: listRetentionJobs
+      summary: List durable cross-domain retention jobs
+      responses:
+        '200': { description: Retention-job list }
+  /operations/alert-policies:
+    get:
+      operationId: listOperationalAlertPolicies
+      summary: List governed operational alert policies
+      responses:
+        '200': { description: Alert-policy list }
+    post:
+      operationId: createOperationalAlertPolicy
+      summary: Create a draft operational alert policy
+      responses:
+        '201': { description: Draft alert policy created }
+  /operations/alert-policies/{id}/submit:
+    post:
+      operationId: submitOperationalAlertPolicy
+      summary: Submit an alert policy for independent approval
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Alert policy submitted }
+  /operations/alert-policies/{id}/decision:
+    post:
+      operationId: decideOperationalAlertPolicy
+      summary: Approve or reject an alert policy
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Alert-policy decision recorded }
+  /operations/alert-policies/{id}/retire:
+    post:
+      operationId: retireOperationalAlertPolicy
+      summary: Retire an active alert policy
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Alert policy retired }
+  /operations/alert-policies/{id}/events:
+    get:
+      operationId: listOperationalAlertPolicyEvents
+      summary: List immutable alert-policy events
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Alert-policy event history }
+  /operations/alerts:
+    get:
+      operationId: listGovernedOperationalAlerts
+      summary: List active, acknowledged, or resolved operational alerts
+      responses:
+        '200': { description: Operational-alert list }
+  /operations/alerts/evaluate:
+    post:
+      operationId: evaluateGovernedOperationalAlerts
+      summary: Evaluate active alert policies against authoritative operations metrics
+      responses:
+        '200': { description: Alert evaluation completed }
+  /operations/alerts/{id}/acknowledge:
+    post:
+      operationId: acknowledgeGovernedOperationalAlert
+      summary: Acknowledge an active alert and stop further escalation
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Alert acknowledged }
+  /operations/alerts/{id}/events:
+    get:
+      operationId: listGovernedOperationalAlertEvents
+      summary: List immutable alert lifecycle and escalation events
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Alert event history }
+  /operations/notifications:
+    get:
+      operationId: listOperationalNotifications
+      summary: List operational portal and future transport-neutral notifications
+      responses:
+        '200': { description: Operational-notification list }
+  /operations/incidents/{id}/timeline:
+    get:
+      operationId: getOperationalIncidentTimeline
+      summary: Get the append-only operational incident timeline
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Incident timeline }
+
 components:
   securitySchemes:
     internalSession:

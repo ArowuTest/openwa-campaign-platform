@@ -47,6 +47,7 @@ type Config struct {
 	AudienceImportSourceRetentionDays int
 	GatewayCallbackSecret             string
 	GatewayCommandSecret              string
+	GatewayRuntimeSecret              string
 	GatewayCallbackMaxSkew            time.Duration
 	MediaDownloadSecret               string
 	ObjectStoreDriver                 string
@@ -68,6 +69,7 @@ func Load() (Config, error) {
 	environment := strings.ToLower(strings.TrimSpace(envOrDefault("APP_ENV", "development")))
 	callbackSecret := strings.TrimSpace(os.Getenv("GATEWAY_CALLBACK_SECRET"))
 	commandSecret := strings.TrimSpace(os.Getenv("GATEWAY_COMMAND_SECRET"))
+	runtimeSecret := strings.TrimSpace(os.Getenv("GATEWAY_RUNTIME_SECRET"))
 	mediaDownloadSecret := strings.TrimSpace(os.Getenv("MEDIA_DOWNLOAD_SECRET"))
 	objectStoreRoot := strings.TrimSpace(os.Getenv("OBJECT_STORE_ROOT"))
 	if objectStoreRoot == "" && environment == "development" {
@@ -78,6 +80,9 @@ func Load() (Config, error) {
 	}
 	if commandSecret == "" && environment == "development" {
 		commandSecret = "development-gateway-command-secret-change-me"
+	}
+	if runtimeSecret == "" && environment == "development" {
+		runtimeSecret = "development-gateway-runtime-secret-change-me"
 	}
 	if mediaDownloadSecret == "" && environment == "development" {
 		mediaDownloadSecret = "development-media-download-secret-change-me"
@@ -193,6 +198,7 @@ func Load() (Config, error) {
 		AudienceImportSourceRetentionDays: importSourceRetentionDays,
 		GatewayCallbackSecret:             callbackSecret,
 		GatewayCommandSecret:              commandSecret,
+		GatewayRuntimeSecret:              runtimeSecret,
 		GatewayCallbackMaxSkew:            callbackSkew,
 		MediaDownloadSecret:               mediaDownloadSecret,
 		ObjectStoreDriver:                 strings.ToLower(strings.TrimSpace(envOrDefault("OBJECT_STORE_DRIVER", "filesystem"))),
@@ -266,6 +272,9 @@ func (c Config) Validate() error {
 	}
 	if len(c.GatewayCommandSecret) > 0 && len(c.GatewayCommandSecret) < 32 {
 		return errors.New("GATEWAY_COMMAND_SECRET must contain at least 32 characters")
+	}
+	if len(c.GatewayRuntimeSecret) > 0 && len(c.GatewayRuntimeSecret) < 32 {
+		return errors.New("GATEWAY_RUNTIME_SECRET must contain at least 32 characters")
 	}
 	if len(c.MediaDownloadSecret) > 0 && len(c.MediaDownloadSecret) < 32 {
 		return errors.New("MEDIA_DOWNLOAD_SECRET must contain at least 32 characters")
@@ -356,6 +365,15 @@ func (c Config) Validate() error {
 		}
 		if len(c.GatewayCallbackSecret) < 32 || strings.Contains(c.GatewayCallbackSecret, "development-") || strings.Contains(strings.ToLower(c.GatewayCallbackSecret), "change-me") {
 			return errors.New("production requires a strong GATEWAY_CALLBACK_SECRET")
+		}
+		if len(c.GatewayCommandSecret) < 32 || strings.Contains(c.GatewayCommandSecret, "development-") || strings.Contains(strings.ToLower(c.GatewayCommandSecret), "change-me") {
+			return errors.New("production requires a strong GATEWAY_COMMAND_SECRET")
+		}
+		if len(c.GatewayRuntimeSecret) < 32 || strings.Contains(c.GatewayRuntimeSecret, "development-") || strings.Contains(strings.ToLower(c.GatewayRuntimeSecret), "change-me") {
+			return errors.New("production requires a strong GATEWAY_RUNTIME_SECRET")
+		}
+		if c.GatewayRuntimeSecret == c.GatewayCallbackSecret || c.GatewayRuntimeSecret == c.GatewayCommandSecret || c.GatewayCallbackSecret == c.GatewayCommandSecret {
+			return errors.New("gateway command, callback, and runtime secrets must be distinct")
 		}
 		if len(c.MediaDownloadSecret) < 32 || strings.Contains(c.MediaDownloadSecret, "development-") || strings.Contains(strings.ToLower(c.MediaDownloadSecret), "change-me") {
 			return errors.New("production requires a strong MEDIA_DOWNLOAD_SECRET")

@@ -36,12 +36,17 @@ type Repository interface {
 	ConsumeDownloadGrant(context.Context, string, string, string, time.Time) (ExportRequest, DownloadGrant, error)
 	RevokeDownloadGrants(context.Context, string, time.Time) error
 }
+type IncidentEvidenceRepository interface {
+	CreateIncidentWithEvents(context.Context, Incident, []IncidentEvent) (Incident, error)
+	UpdateIncidentWithEvents(context.Context, Incident, int64, []IncidentEvent) (Incident, error)
+}
 type Service struct {
 	Repo             Repository
 	AuditRepository  audit.Repository
 	Audit            *audit.Recorder
 	Deliveries       *delivery.Service
 	ReportingPrivacy *ReportingPrivacyAdministration
+	Alerting         AlertStore
 	Clock            func() time.Time
 }
 
@@ -88,7 +93,16 @@ func (s *Service) CreateIncident(ctx context.Context, in Incident, actor, correl
 	in.CreatedAt = now
 	in.UpdatedAt = now
 	in.Version = 1
-	out, err := s.Repo.CreateIncident(ctx, in)
+	timeline := IncidentEvent{IncidentID: in.ID, EventType: "CREATED", ActorID: actor, Detail: in.Summary, Evidence: map[string]any{"category": in.Category, "severity": in.Severity}, OccurredAt: now}
+	var out Incident
+	if atomicRepo, ok := s.Repo.(IncidentEvidenceRepository); ok {
+		out, err = atomicRepo.CreateIncidentWithEvents(ctx, in, []IncidentEvent{timeline})
+	} else {
+		out, err = s.Repo.CreateIncident(ctx, in)
+		if err == nil && s.Alerting != nil {
+			err = s.Alerting.AddIncidentEvent(ctx, timeline)
+		}
+	}
 	if err != nil {
 		return Incident{}, err
 	}
@@ -102,26 +116,99 @@ func (s *Service) UpdateIncident(ctx context.Context, id string, expected int64,
 	if err != nil {
 		return Incident{}, err
 	}
+	previousStatus := current.Status
+	previousOwner := current.OwnerID
+	owner = strings.TrimSpace(owner)
+	detail := strings.TrimSpace(resolution)
+	if !allowedIncidentTransition(previousStatus, status) {
+		return Incident{}, ErrInvalid
+	}
 	current.Status = status
-	current.OwnerID = strings.TrimSpace(owner)
-	current.Resolution = strings.TrimSpace(resolution)
+	current.OwnerID = owner
 	current.UpdatedAt = s.now()
-	if status == IncidentResolved {
-		if current.Resolution == "" {
+	switch status {
+	case IncidentOpen, IncidentAcknowledged, IncidentInvestigating, IncidentMitigated:
+		current.Resolution = ""
+		current.ResolvedAt = nil
+	case IncidentResolved, IncidentClosed:
+		if detail == "" {
 			return Incident{}, ErrInvalid
 		}
+		current.Resolution = detail
 		t := current.UpdatedAt
 		current.ResolvedAt = &t
+	default:
+		return Incident{}, ErrInvalid
 	}
-	out, err := s.Repo.UpdateIncident(ctx, current, expected)
+	events := make([]IncidentEvent, 0, 2)
+	if previousOwner != owner {
+		events = append(events, IncidentEvent{IncidentID: current.ID, EventType: "ASSIGNED", ActorID: actor, Detail: nonEmptyIncidentDetail(detail, "incident owner changed"), Evidence: map[string]any{"previousOwnerId": previousOwner, "ownerId": owner, "version": expected + 1}, OccurredAt: current.UpdatedAt})
+	}
+	if previousStatus != status {
+		eventType := map[IncidentStatus]string{IncidentOpen: "REOPENED", IncidentAcknowledged: "ACKNOWLEDGED", IncidentInvestigating: "INVESTIGATION_NOTE", IncidentMitigated: "MITIGATION", IncidentResolved: "RESOLVED", IncidentClosed: "CLOSED"}[status]
+		events = append(events, IncidentEvent{IncidentID: current.ID, EventType: eventType, ActorID: actor, Detail: nonEmptyIncidentDetail(detail, "incident status changed to "+string(status)), Evidence: map[string]any{"previousStatus": previousStatus, "status": status, "ownerId": owner, "version": expected + 1}, OccurredAt: current.UpdatedAt})
+	} else if detail != "" && status == IncidentInvestigating {
+		events = append(events, IncidentEvent{IncidentID: current.ID, EventType: "INVESTIGATION_NOTE", ActorID: actor, Detail: detail, Evidence: map[string]any{"ownerId": owner, "version": expected + 1}, OccurredAt: current.UpdatedAt})
+	}
+	if len(events) == 0 {
+		return Incident{}, ErrInvalid
+	}
+	var out Incident
+	if atomicRepo, ok := s.Repo.(IncidentEvidenceRepository); ok {
+		out, err = atomicRepo.UpdateIncidentWithEvents(ctx, current, expected, events)
+	} else {
+		out, err = s.Repo.UpdateIncident(ctx, current, expected)
+		if err == nil && s.Alerting != nil {
+			for _, event := range events {
+				if eventErr := s.Alerting.AddIncidentEvent(ctx, event); eventErr != nil {
+					err = eventErr
+					break
+				}
+			}
+		}
+	}
 	if err != nil {
 		return Incident{}, err
 	}
 	if s.Audit != nil {
-		_, err = s.Audit.Record(ctx, audit.Input{ActorType: "USER", ActorID: actor, Action: "OPERATIONS_INCIDENT_UPDATED", ObjectType: "OPERATIONS_INCIDENT", ObjectID: id, After: map[string]any{"status": out.Status, "ownerId": out.OwnerID}, Reason: out.Resolution, CorrelationID: correlation, OccurredAt: out.UpdatedAt})
+		_, err = s.Audit.Record(ctx, audit.Input{ActorType: "USER", ActorID: actor, Action: "OPERATIONS_INCIDENT_UPDATED", ObjectType: "OPERATIONS_INCIDENT", ObjectID: id, After: map[string]any{"status": out.Status, "ownerId": out.OwnerID}, Reason: detail, CorrelationID: correlation, OccurredAt: out.UpdatedAt})
 	}
 	return out, err
 }
+
+func allowedIncidentTransition(from, to IncidentStatus) bool {
+	if from == to {
+		return true
+	}
+	switch from {
+	case IncidentOpen, IncidentAcknowledged, IncidentInvestigating, IncidentMitigated:
+		return to == IncidentOpen || to == IncidentAcknowledged || to == IncidentInvestigating || to == IncidentMitigated || to == IncidentResolved || to == IncidentClosed
+	case IncidentResolved:
+		return to == IncidentClosed
+	case IncidentClosed:
+		return false
+	default:
+		return false
+	}
+}
+
+func nonEmptyIncidentDetail(value, fallback string) string {
+	if strings.TrimSpace(value) != "" {
+		return strings.TrimSpace(value)
+	}
+	return fallback
+}
+
+func (s *Service) IncidentTimeline(ctx context.Context, id string, limit int) ([]IncidentEvent, error) {
+	if s.Alerting == nil {
+		return nil, errors.New("incident timeline is unavailable")
+	}
+	if limit <= 0 || limit > 1000 {
+		limit = 200
+	}
+	return s.Alerting.ListIncidentEvents(ctx, strings.TrimSpace(id), limit)
+}
+
 func (s *Service) ListExceptions(ctx context.Context, campaignID string, limit int) ([]DeliveryException, error) {
 	return s.Repo.ListExceptions(ctx, campaignID, limit)
 }

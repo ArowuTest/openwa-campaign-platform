@@ -20,6 +20,7 @@ import (
 	"campaign-platform/internal/outbox"
 	"campaign-platform/internal/persistence/database"
 	postgresrepo "campaign-platform/internal/persistence/postgres"
+	"campaign-platform/internal/platformpolicy"
 	"campaign-platform/internal/sender"
 	sharedcrypto "campaign-platform/internal/shared/crypto"
 	"campaign-platform/internal/storage"
@@ -75,6 +76,7 @@ func main() {
 		ShutdownGrace: cfg.ShutdownTimeout,
 	}
 
+	maintenance := &platformpolicy.MaintenanceAdministration{Store: &platformpolicy.PostgreSQLStore{DB: db}}
 	ledger := delivery.NewService(&delivery.PostgreSQLRepository{DB: db})
 	pacingPolicies := &sender.PacingAdministration{Store: &postgresrepo.PacingPolicyRepository{DB: db}}
 	allocator := &sender.PostgreSQLAllocator{DB: db, HeartbeatTTL: cfg.SenderHeartbeatTTL}
@@ -105,6 +107,7 @@ func main() {
 		Materials:   materials,
 		Eligibility: &dispatch.PostgreSQLFinalEligibility{DB: db},
 		Pacing:      &dispatch.PostgreSQLPacingController{DB: db, Policies: pacingPolicies},
+		Maintenance: maintenance,
 		Gateway: &dispatch.HTTPGateway{
 			BaseURL: cfg.GatewayURL, CommandSecret: cfg.GatewayCommandSecret,
 			Client: gatewayClient, MaximumResponseBytes: cfg.GatewayMaxResponse,
@@ -127,7 +130,7 @@ func main() {
 	campaignService := campaign.NewService(&postgresrepo.CampaignRepository{DB: db})
 	executionStore := &execution.PostgreSQLStore{DB: db}
 	routingPlans := &execution.RoutingAdministration{Store: &execution.PostgreSQLRoutingPlanStore{DB: db}, Campaigns: campaignService}
-	executionCoordinator := &execution.Coordinator{Campaigns: campaignService, Store: executionStore, SafetyMarginPercent: 15, RoutingPlans: routingPlans}
+	executionCoordinator := &execution.Coordinator{Campaigns: campaignService, Store: executionStore, SafetyMarginPercent: 15, RoutingPlans: routingPlans, Maintenance: maintenance}
 	executionRunner := &execution.Runner{Repository: executionStore, Coordinator: executionCoordinator, Owner: cfg.WorkerID + ":execution", Lease: cfg.JobLease, PollInterval: cfg.JobPollInterval, Batch: 20}
 	shardRunner := &execution.ShardRunner{Repository: &execution.PostgreSQLShardRepository{DB: db}, Owner: cfg.WorkerID + ":shards", TargetSize: cfg.DispatchShardTargetSize, DiscoveryBatch: 10, ClaimBatch: cfg.DispatchShardClaimBatch, Lease: cfg.JobLease, PollInterval: cfg.JobPollInterval}
 

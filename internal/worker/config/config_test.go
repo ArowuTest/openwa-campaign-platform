@@ -124,3 +124,24 @@ func TestLoadMetricsRejectsDriftIntervalAboveMatchInterval(t *testing.T) {
 		t.Fatal("expected metrics interval error")
 	}
 }
+
+func TestLoadPlatformGovernanceAcceptsBoundedConfiguration(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://example")
+	t.Setenv("OBJECT_STORE_ROOT", t.TempDir())
+	cfg, err := LoadPlatformGovernance()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.RetentionBatch != 50 || cfg.AlertEscalationBatch != 100 {
+		t.Fatalf("unexpected defaults: %+v", cfg)
+	}
+}
+
+func TestLoadPlatformGovernanceRejectsShortLeases(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://example")
+	t.Setenv("OBJECT_STORE_ROOT", t.TempDir())
+	t.Setenv("ALERT_ESCALATION_LEASE", "5s")
+	if _, err := LoadPlatformGovernance(); err == nil {
+		t.Fatal("expected short escalation lease to fail")
+	}
+}

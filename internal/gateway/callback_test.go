@@ -28,6 +28,23 @@ func TestCallbackSignatureBindsTimestampAndRawBody(t *testing.T) {
 	}
 }
 
+func TestCallbackVerificationAcceptsPreviousSecretDuringRotation(t *testing.T) {
+	active := bytes.Repeat([]byte{1}, 32)
+	previous := bytes.Repeat([]byte{2}, 32)
+	now := time.Unix(1_800_000_000, 0).UTC()
+	body := []byte(`{"schemaVersion":"1.0","eventId":"evt-rotate"}`)
+	timestamp, signature, err := SignCallback(previous, now, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyCallbackAny([][]byte{active, previous}, timestamp, signature, body, now, time.Minute); err != nil {
+		t.Fatalf("previous rotation secret rejected: %v", err)
+	}
+	if err := VerifyCallbackAny([][]byte{active}, timestamp, signature, body, now, time.Minute); !errors.Is(err, ErrSignatureInvalid) {
+		t.Fatalf("callback unexpectedly verified without previous secret: %v", err)
+	}
+}
+
 func TestDecodeAndMapCallback(t *testing.T) {
 	body := []byte(`{"schemaVersion":"1.0","eventId":"evt-1","eventType":"message.delivered","sessionId":"session-1","clientReference":"recipient-1","providerMessageId":"provider-1","occurredAt":"2026-08-04T08:00:00Z"}`)
 	event, err := DecodeCallback(body)

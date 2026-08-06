@@ -17,11 +17,20 @@ import { ProviderEventOutboxService } from './provider-event-outbox.service';
 import { SessionAuthorityService } from './session-authority.service';
 import { InboundMessageOutboxService } from './inbound-message-outbox.service';
 import { InboundMessagePublisherService } from './inbound-message-publisher.service';
+import { CommandReplayService } from './command-replay.service';
+import { IdempotencyController } from './idempotency.controller';
+import { GatewayObservabilityService } from './observability.service';
+import { ObservabilityMiddleware } from './observability.middleware';
+import { MetricsController } from './metrics.controller';
+import { RuntimeRegistrationService } from './runtime-registration.service';
 
 @Module({
-  controllers: [HealthController, SendController, SessionController, CapabilitiesController, OpenWAWebhookController],
+  controllers: [HealthController, SendController, SessionController, CapabilitiesController, OpenWAWebhookController, IdempotencyController, MetricsController],
   providers: [
     GatewayIdentityService,
+    GatewayObservabilityService,
+    RuntimeRegistrationService,
+    CommandReplayService,
     MockMessagingProvider,
     OpenWAProvider,
     IdempotencyService,
@@ -37,8 +46,10 @@ import { InboundMessagePublisherService } from './inbound-message-publisher.serv
 })
 export class AppModule implements NestModule {
   configure(consumer: MiddlewareConsumer) {
+    consumer.apply(ObservabilityMiddleware).forRoutes("*");
     consumer.apply(InternalAuthMiddleware).exclude(
       { path: 'healthz', method: RequestMethod.GET },
+      { path: 'metrics', method: RequestMethod.GET },
       { path: 'internal/openwa/events', method: RequestMethod.POST }
     ).forRoutes('*');
   }

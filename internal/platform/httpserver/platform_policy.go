@@ -105,7 +105,7 @@ func (s *Server) listPlatformConfigurations(w http.ResponseWriter, r *http.Reque
 		s.writePlatformPolicyError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
+	httpx.WriteListAuto(w, http.StatusOK, items)
 }
 
 func (s *Server) createPlatformConfiguration(w http.ResponseWriter, r *http.Request) {
@@ -216,7 +216,7 @@ func (s *Server) listPlatformConfigurationEvents(w http.ResponseWriter, r *http.
 		s.writePlatformPolicyError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
+	httpx.WriteListAuto(w, http.StatusOK, items)
 }
 
 type maintenanceRequest struct {
@@ -260,7 +260,7 @@ func (s *Server) listMaintenanceWindows(w http.ResponseWriter, r *http.Request) 
 		s.writePlatformPolicyError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
+	httpx.WriteListAuto(w, http.StatusOK, items)
 }
 
 func validPlatformScope(v platformpolicy.ScopeType) bool {
@@ -299,7 +299,7 @@ func (s *Server) listActiveMaintenanceWindows(w http.ResponseWriter, r *http.Req
 		s.writePlatformPolicyError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
+	httpx.WriteListAuto(w, http.StatusOK, items)
 }
 func (s *Server) createMaintenanceWindow(w http.ResponseWriter, r *http.Request) {
 	admin, ok := s.requireMaintenance(w, r)
@@ -383,7 +383,7 @@ func (s *Server) listMaintenanceEvents(w http.ResponseWriter, r *http.Request) {
 		s.writePlatformPolicyError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
+	httpx.WriteListAuto(w, http.StatusOK, items)
 }
 
 func (s *Server) writePlatformPolicyError(w http.ResponseWriter, r *http.Request, err error) {

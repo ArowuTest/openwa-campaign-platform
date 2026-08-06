@@ -1,8 +1,19 @@
-FROM golang:1.24-alpine AS build
+FROM golang:1.23.2-alpine AS build
 WORKDIR /src
+RUN apk add --no-cache build-base postgresql-dev
 COPY go.mod ./
-COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /out/export-worker ./cmd/export-worker
-FROM gcr.io/distroless/static-debian12:nonroot
-COPY --from=build /out/export-worker /export-worker
+COPY cmd ./cmd
+COPY internal ./internal
+RUN CGO_ENABLED=1 go build -trimpath -ldflags='-s -w' -o /out/export-worker ./cmd/export-worker \
+    && mkdir -p /out/object-store
+
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates libpq \
+    && addgroup -S campaign \
+    && adduser -S campaign -G campaign
+
+RUN mkdir -p /var/lib/campaign-platform/objects && chown -R campaign:campaign /var/lib/campaign-platform
+COPY --from=build --chown=campaign:campaign /out/export-worker /export-worker
+USER campaign:campaign
+EXPOSE 8093
 ENTRYPOINT ["/export-worker"]

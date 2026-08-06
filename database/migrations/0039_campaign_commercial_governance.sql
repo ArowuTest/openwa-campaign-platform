@@ -24,6 +24,6 @@ CREATE TABLE IF NOT EXISTS campaign_commercial_approvals (
 );
 CREATE INDEX IF NOT EXISTS campaign_commercial_org_status_idx ON campaign_commercial_approvals(organisation_id,status,created_at DESC);
 ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS commercial_approval_id uuid REFERENCES campaign_commercial_approvals(id);
-INSERT INTO internal_roles(code,name,description,active,permissions) VALUES ('FINANCE_USER','Finance user','Records quotations, invoices, payment evidence and commercial approvals.',true,ARRAY['finance.read','finance.write']) ON CONFLICT (code) DO UPDATE SET name=EXCLUDED.name,description=EXCLUDED.description,active=true,permissions=EXCLUDED.permissions;
-INSERT INTO internal_roles(code,name,description,active,permissions) VALUES ('FINANCE_APPROVER','Finance approver','Independently approves or revokes campaign commercial evidence.',true,ARRAY['finance.read','finance.approve']) ON CONFLICT (code) DO UPDATE SET name=EXCLUDED.name,description=EXCLUDED.description,active=true,permissions=EXCLUDED.permissions;
+INSERT INTO roles(code,name,description,system_role,permissions) VALUES ('FINANCE_USER','Finance user','Records quotations, invoices, payment evidence and commercial approvals.',true,ARRAY['finance.read','finance.write']) ON CONFLICT (code) DO UPDATE SET name=EXCLUDED.name,description=EXCLUDED.description,system_role=true,permissions=EXCLUDED.permissions;
+INSERT INTO roles(code,name,description,system_role,permissions) VALUES ('FINANCE_APPROVER','Finance approver','Independently approves or revokes campaign commercial evidence.',true,ARRAY['finance.read','finance.approve']) ON CONFLICT (code) DO UPDATE SET name=EXCLUDED.name,description=EXCLUDED.description,system_role=true,permissions=EXCLUDED.permissions;
 COMMIT;

@@ -21,6 +21,7 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ../../database/bootstrap/001_bootstrap.sh:/docker-entrypoint-initdb.d/001_bootstrap.sh:ro
+      - ../../database/bootstrap/002_service_roles.sql:/docker-entrypoint-initdb.d/002_service_roles.sql:ro
       - ../../database/migrations:/opt/campaign/migrations:ro
       - ../../database/reference-data/geography:/opt/campaign/geography:ro
     healthcheck:
@@ -117,7 +118,7 @@ services:
     environment:
       APP_ENV: ${APP_ENV:-development}
       WORKER_HEALTH_ADDR: :8091
-      POSTGRES_DRIVER: ${POSTGRES_DRIVER:-pgx}
+      POSTGRES_DRIVER: ${POSTGRES_DRIVER:-postgres}
       DATABASE_URL: postgres://campaign:${POSTGRES_PASSWORD:-campaign-development-only}@postgres:5432/campaign?sslmode=disable
       WORKER_ID: ${AUDIENCE_WORKER_ID:-audience-worker-01}
       OBJECT_STORE_ROOT: /var/lib/campaign-platform/objects
@@ -164,7 +165,7 @@ services:
     environment:
       APP_ENV: ${APP_ENV:-development}
       WORKER_HEALTH_ADDR: :8092
-      POSTGRES_DRIVER: ${POSTGRES_DRIVER:-pgx}
+      POSTGRES_DRIVER: ${POSTGRES_DRIVER:-postgres}
       DATABASE_URL: postgres://campaign:${POSTGRES_PASSWORD:-campaign-development-only}@postgres:5432/campaign?sslmode=disable
       WORKER_ID: ${CAMPAIGN_WORKER_ID:-campaign-worker-01}
       MSISDN_ENCRYPTION_KEY_BASE64: ${MSISDN_ENCRYPTION_KEY_BASE64:-}
@@ -233,7 +234,7 @@ services:
     environment:
       APP_ENV: ${APP_ENV:-development}
       WORKER_HEALTH_ADDR: :8094
-      POSTGRES_DRIVER: ${POSTGRES_DRIVER:-pgx}
+      POSTGRES_DRIVER: ${POSTGRES_DRIVER:-postgres}
       DATABASE_URL: postgres://campaign:${POSTGRES_PASSWORD:-campaign-development-only}@postgres:5432/campaign?sslmode=disable
       WORKER_ID: ${INBOUND_GOVERNANCE_WORKER_ID:-inbound-governance-worker-01}
       INBOUND_CONTENT_KEYS_JSON: ${INBOUND_CONTENT_KEYS_JSON:-}
@@ -264,7 +265,7 @@ services:
     environment:
       APP_ENV: ${APP_ENV:-development}
       WORKER_HEALTH_ADDR: :8093
-      POSTGRES_DRIVER: ${POSTGRES_DRIVER:-pgx}
+      POSTGRES_DRIVER: ${POSTGRES_DRIVER:-postgres}
       DATABASE_URL: postgres://campaign:${POSTGRES_PASSWORD:-campaign-development-only}@postgres:5432/campaign?sslmode=disable
       WORKER_ID: ${METRICS_WORKER_ID:-metrics-worker-01}
       DB_MAX_OPEN: ${METRICS_DB_MAX_OPEN:-12}
@@ -298,7 +299,7 @@ services:
     environment:
       APP_ENV: ${APP_ENV:-development}
       WORKER_HEALTH_ADDR: :8095
-      POSTGRES_DRIVER: ${POSTGRES_DRIVER:-pgx}
+      POSTGRES_DRIVER: ${POSTGRES_DRIVER:-postgres}
       DATABASE_URL: postgres://campaign:${POSTGRES_PASSWORD:-campaign-development-only}@postgres:5432/campaign?sslmode=disable
       WORKER_ID: ${PLATFORM_GOVERNANCE_WORKER_ID:-platform-governance-worker-01}
       DB_MAX_OPEN: ${PLATFORM_GOVERNANCE_DB_MAX_OPEN:-12}

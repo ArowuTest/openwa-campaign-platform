@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	"campaign-platform/internal/inbound"
+	"campaign-platform/internal/observability"
 	"campaign-platform/internal/persistence/database"
 	sharedcrypto "campaign-platform/internal/shared/crypto"
 	workerconfig "campaign-platform/internal/worker/config"
@@ -27,7 +27,7 @@ func main() {
 		_ = response.Body.Close()
 		return
 	}
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	logger := observability.NewLogger(os.Stdout, "inbound-governance-worker", os.Getenv("APP_ENV"))
 	cfg, err := workerconfig.LoadGovernance()
 	if err != nil {
 		logger.Error("inbound governance worker configuration is invalid", "error", err)
@@ -40,7 +40,7 @@ func main() {
 	}
 	rootCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
-	db, err := database.Open(rootCtx, database.PoolConfig{Driver: cfg.DatabaseDriver, DSN: cfg.DatabaseURL, MaxOpen: cfg.DBMaxOpen, MaxIdle: cfg.DBMaxIdle, ConnMaxLifetime: cfg.DBConnMaxLifetime, ConnMaxIdleTime: cfg.DBConnMaxIdleTime, PingTimeout: cfg.DBPingTimeout})
+	db, err := database.Open(rootCtx, database.PoolConfig{Driver: cfg.DatabaseDriver, DSN: cfg.DatabaseURL, MaxOpen: cfg.DBMaxOpen, MaxIdle: cfg.DBMaxIdle, ConnMaxLifetime: cfg.DBConnMaxLifetime, ConnMaxIdleTime: cfg.DBConnMaxIdleTime, PingTimeout: cfg.DBPingTimeout, Environment: cfg.Environment, ServiceName: "inbound-governance-worker"})
 	if err != nil {
 		logger.Error("inbound governance database startup failed", "error", err)
 		os.Exit(1)

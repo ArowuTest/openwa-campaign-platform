@@ -13,12 +13,15 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"campaign-platform/internal/shared/envfile"
 )
 
 type Config struct {
 	Environment                       string
 	HTTPAddr                          string
 	LogLevel                          string
+	ProfilingToken                    string
 	DatabaseURL                       string
 	DatabaseDriver                    string
 	DatabaseMaxOpen                   int
@@ -46,8 +49,11 @@ type Config struct {
 	InboundRetentionDays              int
 	AudienceImportSourceRetentionDays int
 	GatewayCallbackSecret             string
+	GatewayCallbackPreviousSecret     string
 	GatewayCommandSecret              string
+	GatewayCommandPreviousSecret      string
 	GatewayRuntimeSecret              string
+	GatewayRuntimePreviousSecret      string
 	GatewayCallbackMaxSkew            time.Duration
 	MediaDownloadSecret               string
 	ObjectStoreDriver                 string
@@ -67,9 +73,15 @@ type Config struct {
 // value is always rejected so deployed services fail closed.
 func Load() (Config, error) {
 	environment := strings.ToLower(strings.TrimSpace(envOrDefault("APP_ENV", "development")))
+	if err := envfile.Resolve(environment, "DATABASE_URL", "BOOTSTRAP_ADMIN_PASSWORD", "BOOTSTRAP_ADMIN_TOTP_SECRET", "MSISDN_ENCRYPTION_KEY_BASE64", "MSISDN_LOOKUP_KEY_BASE64", "IDENTITY_SECRET_KEY_BASE64", "INBOUND_CONTENT_KEY_BASE64", "INBOUND_CONTENT_KEYS_JSON", "PRIVACY_EVIDENCE_KEY_BASE64", "PRIVACY_EVIDENCE_KEYS_JSON", "GATEWAY_CALLBACK_SECRET", "GATEWAY_CALLBACK_SECRET_PREVIOUS", "GATEWAY_COMMAND_SECRET", "GATEWAY_COMMAND_SECRET_PREVIOUS", "GATEWAY_RUNTIME_SECRET", "GATEWAY_RUNTIME_SECRET_PREVIOUS", "MEDIA_DOWNLOAD_SECRET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY", "S3_SESSION_TOKEN", "PROFILING_TOKEN"); err != nil {
+		return Config{}, err
+	}
 	callbackSecret := strings.TrimSpace(os.Getenv("GATEWAY_CALLBACK_SECRET"))
+	callbackPreviousSecret := strings.TrimSpace(os.Getenv("GATEWAY_CALLBACK_SECRET_PREVIOUS"))
 	commandSecret := strings.TrimSpace(os.Getenv("GATEWAY_COMMAND_SECRET"))
+	commandPreviousSecret := strings.TrimSpace(os.Getenv("GATEWAY_COMMAND_SECRET_PREVIOUS"))
 	runtimeSecret := strings.TrimSpace(os.Getenv("GATEWAY_RUNTIME_SECRET"))
+	runtimePreviousSecret := strings.TrimSpace(os.Getenv("GATEWAY_RUNTIME_SECRET_PREVIOUS"))
 	mediaDownloadSecret := strings.TrimSpace(os.Getenv("MEDIA_DOWNLOAD_SECRET"))
 	objectStoreRoot := strings.TrimSpace(os.Getenv("OBJECT_STORE_ROOT"))
 	if objectStoreRoot == "" && environment == "development" {
@@ -170,8 +182,9 @@ func Load() (Config, error) {
 		Environment:                       environment,
 		HTTPAddr:                          strings.TrimSpace(envOrDefault("HTTP_ADDR", ":8080")),
 		LogLevel:                          strings.ToLower(strings.TrimSpace(envOrDefault("LOG_LEVEL", "info"))),
+		ProfilingToken:                    strings.TrimSpace(os.Getenv("PROFILING_TOKEN")),
 		DatabaseURL:                       strings.TrimSpace(os.Getenv("DATABASE_URL")),
-		DatabaseDriver:                    strings.TrimSpace(envOrDefault("DATABASE_DRIVER", "pgx")),
+		DatabaseDriver:                    strings.TrimSpace(envOrDefault("DATABASE_DRIVER", "postgres")),
 		DatabaseMaxOpen:                   dbMaxOpen,
 		DatabaseMaxIdle:                   dbMaxIdle,
 		DatabaseConnMaxLifetime:           dbLifetime,
@@ -197,8 +210,11 @@ func Load() (Config, error) {
 		InboundRetentionDays:              inboundRetentionDays,
 		AudienceImportSourceRetentionDays: importSourceRetentionDays,
 		GatewayCallbackSecret:             callbackSecret,
+		GatewayCallbackPreviousSecret:     callbackPreviousSecret,
 		GatewayCommandSecret:              commandSecret,
+		GatewayCommandPreviousSecret:      commandPreviousSecret,
 		GatewayRuntimeSecret:              runtimeSecret,
+		GatewayRuntimePreviousSecret:      runtimePreviousSecret,
 		GatewayCallbackMaxSkew:            callbackSkew,
 		MediaDownloadSecret:               mediaDownloadSecret,
 		ObjectStoreDriver:                 strings.ToLower(strings.TrimSpace(envOrDefault("OBJECT_STORE_DRIVER", "filesystem"))),
@@ -239,6 +255,9 @@ func (c Config) Validate() error {
 	default:
 		return fmt.Errorf("LOG_LEVEL %q is unsupported", c.LogLevel)
 	}
+	if c.ProfilingToken != "" && len(c.ProfilingToken) < 32 {
+		return errors.New("PROFILING_TOKEN must contain at least 32 characters when profiling is enabled")
+	}
 	if c.MaxImportPreviewRows <= 0 || c.MaxImportPreviewRows > 2_000_000 {
 		return errors.New("MAX_IMPORT_PREVIEW_ROWS must be between 1 and 2000000")
 	}
@@ -275,6 +294,24 @@ func (c Config) Validate() error {
 	}
 	if len(c.GatewayRuntimeSecret) > 0 && len(c.GatewayRuntimeSecret) < 32 {
 		return errors.New("GATEWAY_RUNTIME_SECRET must contain at least 32 characters")
+	}
+	for name, value := range map[string]string{
+		"GATEWAY_CALLBACK_SECRET_PREVIOUS": c.GatewayCallbackPreviousSecret,
+		"GATEWAY_COMMAND_SECRET_PREVIOUS":  c.GatewayCommandPreviousSecret,
+		"GATEWAY_RUNTIME_SECRET_PREVIOUS":  c.GatewayRuntimePreviousSecret,
+	} {
+		if value != "" && len(value) < 32 {
+			return fmt.Errorf("%s must contain at least 32 characters", name)
+		}
+	}
+	if c.GatewayCallbackPreviousSecret == c.GatewayCallbackSecret && c.GatewayCallbackPreviousSecret != "" {
+		return errors.New("GATEWAY_CALLBACK_SECRET_PREVIOUS must differ from the active secret")
+	}
+	if c.GatewayCommandPreviousSecret == c.GatewayCommandSecret && c.GatewayCommandPreviousSecret != "" {
+		return errors.New("GATEWAY_COMMAND_SECRET_PREVIOUS must differ from the active secret")
+	}
+	if c.GatewayRuntimePreviousSecret == c.GatewayRuntimeSecret && c.GatewayRuntimePreviousSecret != "" {
+		return errors.New("GATEWAY_RUNTIME_SECRET_PREVIOUS must differ from the active secret")
 	}
 	if len(c.MediaDownloadSecret) > 0 && len(c.MediaDownloadSecret) < 32 {
 		return errors.New("MEDIA_DOWNLOAD_SECRET must contain at least 32 characters")

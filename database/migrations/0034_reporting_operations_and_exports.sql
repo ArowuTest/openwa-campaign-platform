@@ -15,8 +15,8 @@ CREATE TABLE export_requests(
 );
 CREATE INDEX idx_export_requests_status ON export_requests(status,created_at DESC);
 CREATE INDEX idx_export_requests_expiry ON export_requests(expires_at) WHERE status='READY';
-UPDATE role_definitions SET permissions=(SELECT ARRAY(SELECT DISTINCT unnest(permissions || ARRAY['operations.read','operations.write','report.read','export.request','export.approve']))) WHERE code='SUPER_ADMIN';
-UPDATE role_definitions SET permissions=(SELECT ARRAY(SELECT DISTINCT unnest(permissions || ARRAY['operations.read','operations.write','report.read','export.request']))) WHERE code IN('CAMPAIGN_OPERATOR','TECHNICAL_ADMIN');
-UPDATE role_definitions SET permissions=(SELECT ARRAY(SELECT DISTINCT unnest(permissions || ARRAY['operations.read','report.read','export.request']))) WHERE code='ANALYST';
-UPDATE role_definitions SET permissions=(SELECT ARRAY(SELECT DISTINCT unnest(permissions || ARRAY['export.approve']))) WHERE code='COMPLIANCE_REVIEWER';
+UPDATE roles SET permissions=(SELECT ARRAY(SELECT DISTINCT unnest(permissions || ARRAY['operations.read','operations.write','report.read','export.request','export.approve']))) WHERE code='SUPER_ADMIN';
+UPDATE roles SET permissions=(SELECT ARRAY(SELECT DISTINCT unnest(permissions || ARRAY['operations.read','operations.write','report.read','export.request']))) WHERE code IN('CAMPAIGN_OPERATOR','TECHNICAL_ADMIN');
+UPDATE roles SET permissions=(SELECT ARRAY(SELECT DISTINCT unnest(permissions || ARRAY['operations.read','report.read','export.request']))) WHERE code='ANALYST';
+UPDATE roles SET permissions=(SELECT ARRAY(SELECT DISTINCT unnest(permissions || ARRAY['export.approve']))) WHERE code='COMPLIANCE_REVIEWER';
 COMMIT;

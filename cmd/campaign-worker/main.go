@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -17,6 +16,7 @@ import (
 	"campaign-platform/internal/execution"
 	"campaign-platform/internal/jobs"
 	"campaign-platform/internal/message"
+	"campaign-platform/internal/observability"
 	"campaign-platform/internal/outbox"
 	"campaign-platform/internal/persistence/database"
 	postgresrepo "campaign-platform/internal/persistence/postgres"
@@ -39,7 +39,7 @@ func main() {
 		_ = response.Body.Close()
 		return
 	}
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	logger := observability.NewLogger(os.Stdout, "campaign-worker", os.Getenv("APP_ENV"))
 	cfg, err := workerconfig.LoadCampaign()
 	if err != nil {
 		logger.Error("campaign worker configuration is invalid", "error", err)
@@ -51,7 +51,7 @@ func main() {
 		Driver: cfg.DatabaseDriver, DSN: cfg.DatabaseURL,
 		MaxOpen: cfg.DBMaxOpen, MaxIdle: cfg.DBMaxIdle,
 		ConnMaxLifetime: cfg.DBConnMaxLifetime, ConnMaxIdleTime: cfg.DBConnMaxIdleTime,
-		PingTimeout: cfg.DBPingTimeout,
+		PingTimeout: cfg.DBPingTimeout, Environment: cfg.Environment, ServiceName: "campaign-worker",
 	})
 	if err != nil {
 		logger.Error("campaign worker database startup failed", "error", err)

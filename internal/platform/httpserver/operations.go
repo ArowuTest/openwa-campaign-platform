@@ -43,7 +43,7 @@ func (s *Server) listOperationsIncidents(w http.ResponseWriter, r *http.Request)
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, 200, map[string]any{"items": v, "count": len(v)})
+	httpx.WriteListAuto(w, 200, v)
 }
 
 type createIncidentRequest struct {
@@ -181,7 +181,7 @@ func (s *Server) listExports(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, page)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextAfter)
 }
 
 func (s *Server) getExport(w http.ResponseWriter, r *http.Request) {
@@ -392,7 +392,11 @@ func (s *Server) searchAuditEvents(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, page)
+	nextCursor := ""
+	if page.NextSequence > 0 {
+		nextCursor = strconv.FormatUint(page.NextSequence, 10)
+	}
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), nextCursor)
 }
 
 func (s *Server) listDeliveryExceptions(w http.ResponseWriter, r *http.Request) {
@@ -406,7 +410,7 @@ func (s *Server) listDeliveryExceptions(w http.ResponseWriter, r *http.Request) 
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
+	httpx.WriteListAuto(w, http.StatusOK, items)
 }
 
 type deliveryResolutionRequest struct {
@@ -473,7 +477,7 @@ func (s *Server) listOperationalJobs(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
+	httpx.WriteListAuto(w, http.StatusOK, items)
 }
 func (s *Server) getOperationalJobSummary(w http.ResponseWriter, r *http.Request) {
 	if s.deps.JobOperations == nil {
@@ -520,7 +524,7 @@ func (s *Server) listOperationalJobEvents(w http.ResponseWriter, r *http.Request
 		writeJobOperationsError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, 200, map[string]any{"items": items, "count": len(items)})
+	httpx.WriteListAuto(w, 200, items)
 }
 func (s *Server) retryOperationalJob(w http.ResponseWriter, r *http.Request) {
 	s.performOperationalJobAction(w, r, true)
@@ -602,7 +606,7 @@ func (s *Server) listReportingPrivacyPolicies(w http.ResponseWriter, r *http.Req
 		writeOperationsError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
+	httpx.WriteListAuto(w, http.StatusOK, items)
 }
 
 func (s *Server) createReportingPrivacyPolicy(w http.ResponseWriter, r *http.Request) {
@@ -651,7 +655,7 @@ func (s *Server) listReportingPrivacyPolicyEvents(w http.ResponseWriter, r *http
 		writeOperationsError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": out, "count": len(out)})
+	httpx.WriteListAuto(w, http.StatusOK, out)
 }
 
 type reportingPrivacyTransitionRequest struct {

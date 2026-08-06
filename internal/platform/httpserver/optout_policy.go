@@ -31,7 +31,7 @@ func (s *Server) listOptOutPolicies(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, 200, map[string]any{"items": items})
+	httpx.WriteListAuto(w, 200, items)
 }
 func (s *Server) createOptOutPolicy(w http.ResponseWriter, r *http.Request) {
 	if s.deps.OptOutPolicies == nil {

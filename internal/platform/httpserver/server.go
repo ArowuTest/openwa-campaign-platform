@@ -55,71 +55,72 @@ type ReadinessCheck struct {
 }
 
 type Dependencies struct {
-	Registry                 *audiencefilter.Registry
-	FilterDefinitions        *audiencefilter.AdministrationService
-	Compiler                 *cohort.Compiler
-	Cohorts                  *cohort.ExecutionService
-	Organisations            *organisation.Service
-	OrganisationPolicies     *organisation.PolicyAdministration
-	ConsentReviews           *consent.Service
-	ConsentLedger            *consent.LedgerService
-	OptOutProcessor          *consent.OptOutProcessor
-	OptOutPolicies           *consent.OptOutPolicyAdministration
-	InboundReplies           *inbound.Service
-	InboundRetentionPolicies *inbound.RetentionPolicyAdministration
-	InboundRotation          *inbound.RotationService
-	Campaigns                *campaign.Service
-	CampaignWorkspace        *campaignworkspace.Service
-	Commercial               *commercial.Service
-	Geography                *geography.Catalogue
-	MaxImportPreviewRows     int
-	Identity                 *identity.Service
-	IdentityAdministration   *identity.AdministrationService
-	SecureCookies            bool
-	MSISDNProtector          *sharedcrypto.MSISDNProtector
-	Messages                 *message.Service
-	TestMessages             *testmessage.Service
-	Snapshots                *segment.Service
-	SegmentDefinitions       *segment.DefinitionService
-	AudienceMaterialisations *materialisation.MaterialisationService
-	Releases                 *orchestration.ReleaseService
-	SenderGovernance         *sender.GovernanceService
-	GatewayPools             *sender.GatewayPoolAdministration
-	GatewayRuntime           *sender.RuntimeRegistrationService
-	SenderSessionLifecycle   *sender.SessionLifecycleService
-	PacingPolicies           *sender.PacingAdministration
-	ProviderCapabilities     *provider.Service
-	Configurations           *platformpolicy.ConfigurationAdministration
-	Maintenance              *platformpolicy.MaintenanceAdministration
-	Retention                *retention.Administration
-	AlertPolicies            *operations.AlertAdministration
-	AlertEvaluator           *operations.AlertEvaluator
-	DeliveryMetrics          *delivery.MetricsService
-	Execution                *execution.Coordinator
-	RoutingPlans             *execution.RoutingAdministration
-	ShardReallocations       *execution.ReallocationAdministration
-	JobOperations            *jobs.AdministrationService
-	Operations               *operations.Service
-	PrivacyCases             *privacy.Service
-	AudienceImports          *importer.ImportService
-	ContactLifecycle         *contactlife.Service
-	AudienceImportMappings   *importer.MappingAdministration
-	AudienceImportRollback   *importer.RollbackService
-	AudienceImportIssues     *importer.IssueExportService
-	AudienceConflicts        *importer.ConflictService
-	AudienceReconciliation   *importer.ReconciliationService
-	AudienceSourceTrust      *importer.SourceTrustService
-	AudienceImportIntake     *importer.IntakeService
-	MaxImportFileBytes       int64
-	DeliveryEvents           *delivery.Service
-	GatewayCallbackSecret    []byte
-	GatewayCallbackMaxSkew   time.Duration
-	GatewayCallbackMaxBody   int64
-	MediaObjects             storage.ObjectStore
-	TrustedAssets            *storage.TrustedAssetService
-	MediaDownloadSecret      []byte
-	ReadinessChecks          []ReadinessCheck
-	NetworkPolicy            NetworkPolicy
+	Registry                       *audiencefilter.Registry
+	FilterDefinitions              *audiencefilter.AdministrationService
+	Compiler                       *cohort.Compiler
+	Cohorts                        *cohort.ExecutionService
+	Organisations                  *organisation.Service
+	OrganisationPolicies           *organisation.PolicyAdministration
+	ConsentReviews                 *consent.Service
+	ConsentLedger                  *consent.LedgerService
+	OptOutProcessor                *consent.OptOutProcessor
+	OptOutPolicies                 *consent.OptOutPolicyAdministration
+	InboundReplies                 *inbound.Service
+	InboundRetentionPolicies       *inbound.RetentionPolicyAdministration
+	InboundRotation                *inbound.RotationService
+	Campaigns                      *campaign.Service
+	CampaignWorkspace              *campaignworkspace.Service
+	Commercial                     *commercial.Service
+	Geography                      *geography.Catalogue
+	MaxImportPreviewRows           int
+	Identity                       *identity.Service
+	IdentityAdministration         *identity.AdministrationService
+	SecureCookies                  bool
+	MSISDNProtector                *sharedcrypto.MSISDNProtector
+	Messages                       *message.Service
+	TestMessages                   *testmessage.Service
+	Snapshots                      *segment.Service
+	SegmentDefinitions             *segment.DefinitionService
+	AudienceMaterialisations       *materialisation.MaterialisationService
+	Releases                       *orchestration.ReleaseService
+	SenderGovernance               *sender.GovernanceService
+	GatewayPools                   *sender.GatewayPoolAdministration
+	GatewayRuntime                 *sender.RuntimeRegistrationService
+	SenderSessionLifecycle         *sender.SessionLifecycleService
+	PacingPolicies                 *sender.PacingAdministration
+	ProviderCapabilities           *provider.Service
+	Configurations                 *platformpolicy.ConfigurationAdministration
+	Maintenance                    *platformpolicy.MaintenanceAdministration
+	Retention                      *retention.Administration
+	AlertPolicies                  *operations.AlertAdministration
+	AlertEvaluator                 *operations.AlertEvaluator
+	DeliveryMetrics                *delivery.MetricsService
+	Execution                      *execution.Coordinator
+	RoutingPlans                   *execution.RoutingAdministration
+	ShardReallocations             *execution.ReallocationAdministration
+	JobOperations                  *jobs.AdministrationService
+	Operations                     *operations.Service
+	PrivacyCases                   *privacy.Service
+	AudienceImports                *importer.ImportService
+	ContactLifecycle               *contactlife.Service
+	AudienceImportMappings         *importer.MappingAdministration
+	AudienceImportRollback         *importer.RollbackService
+	AudienceImportIssues           *importer.IssueExportService
+	AudienceConflicts              *importer.ConflictService
+	AudienceReconciliation         *importer.ReconciliationService
+	AudienceSourceTrust            *importer.SourceTrustService
+	AudienceImportIntake           *importer.IntakeService
+	MaxImportFileBytes             int64
+	DeliveryEvents                 *delivery.Service
+	GatewayCallbackSecret          []byte
+	GatewayCallbackPreviousSecrets [][]byte
+	GatewayCallbackMaxSkew         time.Duration
+	GatewayCallbackMaxBody         int64
+	MediaObjects                   storage.ObjectStore
+	TrustedAssets                  *storage.TrustedAssetService
+	MediaDownloadSecret            []byte
+	ReadinessChecks                []ReadinessCheck
+	NetworkPolicy                  NetworkPolicy
 }
 
 type Server struct {
@@ -454,7 +455,7 @@ func (s *Server) ingestGatewayInboundMessage(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	now := time.Now().UTC()
-	if err := gateway.VerifyCallback(s.deps.GatewayCallbackSecret, r.Header.Get(gateway.TimestampHeader), r.Header.Get(gateway.SignatureHeader), body, now, s.deps.GatewayCallbackMaxSkew); err != nil {
+	if err := gateway.VerifyCallbackAny(append([][]byte{s.deps.GatewayCallbackSecret}, s.deps.GatewayCallbackPreviousSecrets...), r.Header.Get(gateway.TimestampHeader), r.Header.Get(gateway.SignatureHeader), body, now, s.deps.GatewayCallbackMaxSkew); err != nil {
 		httpx.WriteError(w, r, http.StatusUnauthorized, "GATEWAY_SIGNATURE_INVALID", "The gateway callback could not be authenticated.", nil)
 		return
 	}
@@ -506,7 +507,7 @@ func (s *Server) ingestGatewayEvent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	now := time.Now().UTC()
-	if err := gateway.VerifyCallback(s.deps.GatewayCallbackSecret, r.Header.Get(gateway.TimestampHeader), r.Header.Get(gateway.SignatureHeader), body, now, s.deps.GatewayCallbackMaxSkew); err != nil {
+	if err := gateway.VerifyCallbackAny(append([][]byte{s.deps.GatewayCallbackSecret}, s.deps.GatewayCallbackPreviousSecrets...), r.Header.Get(gateway.TimestampHeader), r.Header.Get(gateway.SignatureHeader), body, now, s.deps.GatewayCallbackMaxSkew); err != nil {
 		// Deliberately do not disclose whether the timestamp or MAC was incorrect.
 		httpx.WriteError(w, r, http.StatusUnauthorized, "GATEWAY_SIGNATURE_INVALID", "The gateway callback could not be authenticated.", nil)
 		return
@@ -634,10 +635,10 @@ func (s *Server) listFilterDefinitions(w http.ResponseWriter, r *http.Request) {
 			s.internalError(w, r, err)
 			return
 		}
-		httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+		httpx.WriteListAuto(w, http.StatusOK, items)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": s.deps.Registry.ListForPermissions(principal.User.HasPermission)})
+	httpx.WriteListAuto(w, http.StatusOK, s.deps.Registry.ListForPermissions(principal.User.HasPermission))
 }
 
 func (s *Server) listAllFilterDefinitions(w http.ResponseWriter, r *http.Request) {
@@ -650,7 +651,7 @@ func (s *Server) listAllFilterDefinitions(w http.ResponseWriter, r *http.Request
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+	httpx.WriteListAuto(w, http.StatusOK, items)
 }
 func (s *Server) createFilterDefinition(w http.ResponseWriter, r *http.Request) {
 	if s.deps.FilterDefinitions == nil {
@@ -804,7 +805,7 @@ func (s *Server) listSegments(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+	httpx.WriteListAuto(w, http.StatusOK, items)
 }
 func (s *Server) createSegment(w http.ResponseWriter, r *http.Request) {
 	if s.deps.SegmentDefinitions == nil {
@@ -899,7 +900,7 @@ func (s *Server) listSegmentVersions(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+	httpx.WriteListAuto(w, http.StatusOK, items)
 }
 
 func (s *Server) cloneSegment(w http.ResponseWriter, r *http.Request) {
@@ -965,7 +966,7 @@ func writeSegmentResult(w http.ResponseWriter, r *http.Request, item segment.Def
 }
 
 func (s *Server) listCountries(w http.ResponseWriter, _ *http.Request) {
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": s.deps.Geography.Countries()})
+	httpx.WriteListAuto(w, http.StatusOK, s.deps.Geography.Countries())
 }
 
 func (s *Server) listAreas(w http.ResponseWriter, r *http.Request) {
@@ -983,7 +984,7 @@ func (s *Server) listAreas(w http.ResponseWriter, r *http.Request) {
 		strings.TrimSpace(r.URL.Query().Get("parent")),
 		level,
 	)
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+	httpx.WriteListAuto(w, http.StatusOK, items)
 }
 
 func (s *Server) listOrganisations(w http.ResponseWriter, r *http.Request) {
@@ -992,7 +993,7 @@ func (s *Server) listOrganisations(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+	httpx.WriteListAuto(w, http.StatusOK, items)
 }
 
 func (s *Server) createOrganisation(w http.ResponseWriter, r *http.Request) {
@@ -1080,7 +1081,7 @@ func (s *Server) listOrganisationEvents(w http.ResponseWriter, r *http.Request) 
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+	httpx.WriteListAuto(w, http.StatusOK, items)
 }
 
 func (s *Server) listOrganisationPolicies(w http.ResponseWriter, r *http.Request) {
@@ -1093,7 +1094,7 @@ func (s *Server) listOrganisationPolicies(w http.ResponseWriter, r *http.Request
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+	httpx.WriteListAuto(w, http.StatusOK, items)
 }
 func (s *Server) createOrganisationPolicy(w http.ResponseWriter, r *http.Request) {
 	if s.deps.OrganisationPolicies == nil {
@@ -1173,7 +1174,7 @@ func (s *Server) listCommercialRecords(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+	httpx.WriteListAuto(w, http.StatusOK, items)
 }
 func (s *Server) createCommercialRecord(w http.ResponseWriter, r *http.Request) {
 	if s.deps.Commercial == nil || s.deps.Campaigns == nil {
@@ -1279,7 +1280,7 @@ func (s *Server) listConsentReviews(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+	httpx.WriteListAuto(w, http.StatusOK, items)
 }
 
 func (s *Server) createConsentReview(w http.ResponseWriter, r *http.Request) {
@@ -1323,16 +1324,12 @@ func (s *Server) decideConsentReview(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listCampaigns(w http.ResponseWriter, r *http.Request) {
-	limit := 100
-	if raw := strings.TrimSpace(r.URL.Query().Get("limit")); raw != "" {
-		parsed, parseErr := strconv.Atoi(raw)
-		if parseErr != nil || parsed < 1 || parsed > 500 {
-			httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_LIMIT", "The campaign page limit must be between 1 and 500.", nil)
-			return
-		}
-		limit = parsed
+	pageRequest, err := httpx.ParsePage(r, 100, 500)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_REQUEST", "The campaign page request is invalid.", map[string]any{"detail": err.Error()})
+		return
 	}
-	page, err := s.deps.Campaigns.List(r.Context(), limit, r.URL.Query().Get("cursor"))
+	page, err := s.deps.Campaigns.List(r.Context(), pageRequest.Limit, pageRequest.Cursor)
 	if err != nil {
 		if strings.Contains(err.Error(), "page cursor") {
 			httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The campaign page cursor is invalid.", nil)
@@ -1341,7 +1338,7 @@ func (s *Server) listCampaigns(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, page)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 
 func (s *Server) createCampaign(w http.ResponseWriter, r *http.Request) {
@@ -1621,7 +1618,7 @@ func (s *Server) listCampaignMaterialChanges(w http.ResponseWriter, r *http.Requ
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+	httpx.WriteListAuto(w, http.StatusOK, items)
 }
 
 type audienceImportMetadata struct {
@@ -1823,7 +1820,7 @@ func (s *Server) listAudienceImportConflicts(w http.ResponseWriter, r *http.Requ
 		httpx.WriteError(w, r, http.StatusBadRequest, "AUDIENCE_CONFLICT_QUERY_INVALID", "The conflict query is invalid.", map[string]any{"detail": err.Error()})
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
+	httpx.WriteListAuto(w, http.StatusOK, items)
 }
 
 type resolveAudienceConflictsBatchRequest struct {
@@ -1905,7 +1902,7 @@ func (s *Server) listAudienceSourceTrust(w http.ResponseWriter, r *http.Request)
 		httpx.WriteError(w, r, http.StatusBadRequest, "AUDIENCE_SOURCE_TRUST_QUERY_INVALID", "The source-trust query is invalid.", map[string]any{"detail": err.Error()})
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
+	httpx.WriteListAuto(w, http.StatusOK, items)
 }
 
 type upsertAudienceSourceTrustRequest struct {
@@ -2167,7 +2164,7 @@ func (s *Server) listMessageVersions(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+	httpx.WriteListAuto(w, http.StatusOK, items)
 }
 
 func (s *Server) createMessageVersion(w http.ResponseWriter, r *http.Request) {
@@ -2234,7 +2231,7 @@ func (s *Server) listTestRecipients(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+	httpx.WriteListAuto(w, http.StatusOK, items)
 }
 func (s *Server) createTestRecipient(w http.ResponseWriter, r *http.Request) {
 	if s.deps.TestMessages == nil {
@@ -2361,7 +2358,7 @@ func (s *Server) listTestMessages(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+	httpx.WriteListAuto(w, http.StatusOK, items)
 }
 func (s *Server) getTestMessage(w http.ResponseWriter, r *http.Request) {
 	if s.deps.TestMessages == nil {
@@ -2625,7 +2622,7 @@ func (s *Server) listAudienceMaterialisations(w http.ResponseWriter, r *http.Req
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+	httpx.WriteListAuto(w, http.StatusOK, items)
 }
 func (s *Server) getAudienceMaterialisation(w http.ResponseWriter, r *http.Request) {
 	if s.deps.AudienceMaterialisations == nil {
@@ -2820,7 +2817,7 @@ func (s *Server) listDispatchShardReallocations(w http.ResponseWriter, r *http.R
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": values})
+	httpx.WriteListAuto(w, http.StatusOK, values)
 }
 
 func (s *Server) getCampaignExecutionForecast(w http.ResponseWriter, r *http.Request) {
@@ -3038,7 +3035,7 @@ func (s *Server) listInboundReplies(w http.ResponseWriter, r *http.Request) {
 			items[index].MessageText = ""
 		}
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+	httpx.WriteListAuto(w, http.StatusOK, items)
 }
 
 func (s *Server) getInboundReplyContent(w http.ResponseWriter, r *http.Request) {
@@ -3177,7 +3174,7 @@ func (s *Server) listSenderPacingPolicies(w http.ResponseWriter, r *http.Request
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": values})
+	httpx.WriteListAuto(w, http.StatusOK, values)
 }
 
 func (s *Server) createSenderPacingPolicy(w http.ResponseWriter, r *http.Request) {
@@ -3295,7 +3292,7 @@ func (s *Server) listCampaignRoutingPlans(w http.ResponseWriter, r *http.Request
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": values})
+	httpx.WriteListAuto(w, http.StatusOK, values)
 }
 func (s *Server) createCampaignRoutingPlan(w http.ResponseWriter, r *http.Request) {
 	if s.deps.RoutingPlans == nil {
@@ -3354,7 +3351,7 @@ func (s *Server) listRoutingPlanReservations(w http.ResponseWriter, r *http.Requ
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": values})
+	httpx.WriteListAuto(w, http.StatusOK, values)
 }
 
 func (s *Server) getRoutingPlanPoolReport(w http.ResponseWriter, r *http.Request) {
@@ -3371,7 +3368,7 @@ func (s *Server) getRoutingPlanPoolReport(w http.ResponseWriter, r *http.Request
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": values})
+	httpx.WriteListAuto(w, http.StatusOK, values)
 }
 
 func (s *Server) releaseRoutingPlanReservations(w http.ResponseWriter, r *http.Request) {

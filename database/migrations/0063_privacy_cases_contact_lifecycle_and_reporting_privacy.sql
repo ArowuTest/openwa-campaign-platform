@@ -186,9 +186,9 @@ BEGIN RAISE EXCEPTION 'reporting privacy policy events are append-only'; END;
 $$;
 CREATE TRIGGER reporting_privacy_policy_events_append_only BEFORE UPDATE OR DELETE ON reporting_privacy_policy_events FOR EACH ROW EXECUTE FUNCTION prevent_reporting_privacy_event_mutation();
 
-UPDATE role_definitions SET permissions=(SELECT ARRAY(SELECT DISTINCT unnest(permissions || ARRAY['privacy.read','privacy.write','privacy.approve','privacy.execute','privacy.hold','reporting_privacy.write','reporting_privacy.approve']))) WHERE code='SUPER_ADMIN';
-UPDATE role_definitions SET permissions=(SELECT ARRAY(SELECT DISTINCT unnest(permissions || ARRAY['privacy.read','privacy.write','privacy.approve','privacy.hold','reporting_privacy.write','reporting_privacy.approve']))) WHERE code='COMPLIANCE_REVIEWER';
-UPDATE role_definitions SET permissions=(SELECT ARRAY(SELECT DISTINCT unnest(permissions || ARRAY['privacy.read','privacy.execute']))) WHERE code='TECHNICAL_ADMIN';
-UPDATE role_definitions SET permissions=(SELECT ARRAY(SELECT DISTINCT unnest(permissions || ARRAY['audience.contact_status.write']))) WHERE code IN ('SUPER_ADMIN','COMPLIANCE_REVIEWER');
+UPDATE roles SET permissions=(SELECT ARRAY(SELECT DISTINCT unnest(permissions || ARRAY['privacy.read','privacy.write','privacy.approve','privacy.execute','privacy.hold','reporting_privacy.write','reporting_privacy.approve']))) WHERE code='SUPER_ADMIN';
+UPDATE roles SET permissions=(SELECT ARRAY(SELECT DISTINCT unnest(permissions || ARRAY['privacy.read','privacy.write','privacy.approve','privacy.hold','reporting_privacy.write','reporting_privacy.approve']))) WHERE code='COMPLIANCE_REVIEWER';
+UPDATE roles SET permissions=(SELECT ARRAY(SELECT DISTINCT unnest(permissions || ARRAY['privacy.read','privacy.execute']))) WHERE code='TECHNICAL_ADMIN';
+UPDATE roles SET permissions=(SELECT ARRAY(SELECT DISTINCT unnest(permissions || ARRAY['audience.contact_status.write']))) WHERE code IN ('SUPER_ADMIN','COMPLIANCE_REVIEWER');
 
 COMMIT;

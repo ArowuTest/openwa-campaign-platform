@@ -79,7 +79,7 @@ func (s *Server) listPrivacyCases(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, page)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextAfter)
 }
 
 func (s *Server) getPrivacyCase(w http.ResponseWriter, r *http.Request) {
@@ -118,7 +118,7 @@ func (s *Server) listPrivacyCaseEvents(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
+	httpx.WriteListAuto(w, http.StatusOK, items)
 }
 
 func (s *Server) assignPrivacyCase(w http.ResponseWriter, r *http.Request) {
@@ -342,7 +342,7 @@ func (s *Server) listPrivacyLegalHoldEvents(w http.ResponseWriter, r *http.Reque
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
+	httpx.WriteListAuto(w, http.StatusOK, items)
 }
 
 func (s *Server) listPrivacyLegalHolds(w http.ResponseWriter, r *http.Request) {
@@ -373,7 +373,7 @@ func (s *Server) listPrivacyLegalHolds(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
+	httpx.WriteListAuto(w, http.StatusOK, items)
 }
 
 func (s *Server) releasePrivacyLegalHold(w http.ResponseWriter, r *http.Request) {

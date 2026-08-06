@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -15,6 +14,7 @@ import (
 	"campaign-platform/internal/audience/importer"
 	"campaign-platform/internal/audience/materialisation"
 	"campaign-platform/internal/geography"
+	"campaign-platform/internal/observability"
 	"campaign-platform/internal/persistence/database"
 	postgresrepo "campaign-platform/internal/persistence/postgres"
 	"campaign-platform/internal/segment"
@@ -34,7 +34,7 @@ func main() {
 		_ = response.Body.Close()
 		return
 	}
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	logger := observability.NewLogger(os.Stdout, "audience-worker", os.Getenv("APP_ENV"))
 	cfg, err := workerconfig.LoadAudience()
 	if err != nil {
 		logger.Error("audience worker configuration is invalid", "error", err)
@@ -47,7 +47,7 @@ func main() {
 		Driver: cfg.DatabaseDriver, DSN: cfg.DatabaseURL,
 		MaxOpen: cfg.DBMaxOpen, MaxIdle: cfg.DBMaxIdle,
 		ConnMaxLifetime: cfg.DBConnMaxLifetime, ConnMaxIdleTime: cfg.DBConnMaxIdleTime,
-		PingTimeout: cfg.DBPingTimeout,
+		PingTimeout: cfg.DBPingTimeout, Environment: cfg.Environment, ServiceName: "audience-worker",
 	})
 	if err != nil {
 		logger.Error("audience worker database startup failed", "error", err)

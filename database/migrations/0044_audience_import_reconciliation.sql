@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS audience_import_reconciliations (
   evidence jsonb NOT NULL,
   evidence_hash text NOT NULL CHECK (evidence_hash ~ '^[a-f0-9]{64}$'),
   reason text NOT NULL CHECK (length(btrim(reason)) >= 8),
-  performed_by uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  performed_by uuid NOT NULL REFERENCES internal_users(id) ON DELETE RESTRICT,
   created_at timestamptz NOT NULL,
   CHECK (jsonb_typeof(evidence) = 'object')
 );

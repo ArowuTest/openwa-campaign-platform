@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/base64"
+	"os"
 	"strings"
 	"testing"
 )
@@ -59,6 +60,32 @@ func TestLoadProductionFailsClosedAndAcceptsStrongConfiguration(t *testing.T) {
 	}
 }
 
+func TestLoadGatewaySecretRotationRequiresDistinctStrongPreviousSecrets(t *testing.T) {
+	setProductionEnvironment(t)
+	t.Setenv("GATEWAY_CALLBACK_SECRET_PREVIOUS", "8a3487bb4f3241f4b122e6bd4bc55bdf9fe32fac")
+	t.Setenv("GATEWAY_COMMAND_SECRET_PREVIOUS", "5227e0c4710e4578b139ffae0bb64aac2c9fb590")
+	t.Setenv("GATEWAY_RUNTIME_SECRET_PREVIOUS", "ac3f48793c0844e89653e1f25b778376a4e7dd69")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("valid rotation configuration rejected: %v", err)
+	}
+	if cfg.GatewayCallbackPreviousSecret == "" || cfg.GatewayCommandPreviousSecret == "" || cfg.GatewayRuntimePreviousSecret == "" {
+		t.Fatal("previous secrets were not loaded")
+	}
+
+	setProductionEnvironment(t)
+	t.Setenv("GATEWAY_COMMAND_SECRET_PREVIOUS", os.Getenv("GATEWAY_COMMAND_SECRET"))
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "must differ") {
+		t.Fatalf("expected duplicate active/previous rejection, got %v", err)
+	}
+
+	setProductionEnvironment(t)
+	t.Setenv("GATEWAY_RUNTIME_SECRET_PREVIOUS", "too-short")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "at least 32") {
+		t.Fatalf("expected weak previous secret rejection, got %v", err)
+	}
+}
+
 func TestValidateRejectsUnsafeBounds(t *testing.T) {
 	setDevelopmentEnvironment(t)
 	t.Setenv("MAX_IMPORT_PREVIEW_ROWS", "2000001")
@@ -77,7 +104,7 @@ func setDevelopmentEnvironment(t *testing.T) {
 	t.Helper()
 	values := map[string]string{
 		"APP_ENV": "development", "HTTP_ADDR": ":8080", "LOG_LEVEL": "info",
-		"DATABASE_URL": "", "DATABASE_DRIVER": "pgx", "DATABASE_MAX_OPEN": "30", "DATABASE_MAX_IDLE": "10", "DATABASE_CONN_MAX_LIFETIME": "30m", "DATABASE_CONN_MAX_IDLE_TIME": "5m", "DATABASE_PING_TIMEOUT": "5s", "REDIS_ADDR": "localhost:6379", "MAX_IMPORT_PREVIEW_ROWS": "100000",
+		"DATABASE_URL": "", "DATABASE_DRIVER": "postgres", "DATABASE_MAX_OPEN": "30", "DATABASE_MAX_IDLE": "10", "DATABASE_CONN_MAX_LIFETIME": "30m", "DATABASE_CONN_MAX_IDLE_TIME": "5m", "DATABASE_PING_TIMEOUT": "5s", "REDIS_ADDR": "localhost:6379", "MAX_IMPORT_PREVIEW_ROWS": "100000",
 		"BOOTSTRAP_ADMIN_EMAIL": "admin@example.test", "BOOTSTRAP_ADMIN_PASSWORD": "development-only-password-change-me",
 		"BOOTSTRAP_ADMIN_TOTP_SECRET": "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", "SECURE_COOKIES": "false",
 		"SESSION_IDLE_TIMEOUT": "30m", "SESSION_ABSOLUTE_TIMEOUT": "12h",
@@ -97,7 +124,7 @@ func setProductionEnvironment(t *testing.T) {
 	lookup := base64.StdEncoding.EncodeToString(make([]byte, 48))
 	values := map[string]string{
 		"APP_ENV": "production", "HTTP_ADDR": ":8080", "LOG_LEVEL": "info",
-		"DATABASE_URL": "postgres://campaign:secret@postgres:5432/campaign?sslmode=require", "DATABASE_DRIVER": "pgx", "DATABASE_MAX_OPEN": "30", "DATABASE_MAX_IDLE": "10", "DATABASE_CONN_MAX_LIFETIME": "30m", "DATABASE_CONN_MAX_IDLE_TIME": "5m", "DATABASE_PING_TIMEOUT": "5s", "REDIS_ADDR": "redis:6379",
+		"DATABASE_URL": "postgres://campaign:secret@postgres:5432/campaign?sslmode=require", "DATABASE_DRIVER": "postgres", "DATABASE_MAX_OPEN": "30", "DATABASE_MAX_IDLE": "10", "DATABASE_CONN_MAX_LIFETIME": "30m", "DATABASE_CONN_MAX_IDLE_TIME": "5m", "DATABASE_PING_TIMEOUT": "5s", "REDIS_ADDR": "redis:6379",
 		"MAX_IMPORT_PREVIEW_ROWS": "100000", "BOOTSTRAP_ADMIN_EMAIL": "admin@example.test",
 		"BOOTSTRAP_ADMIN_PASSWORD": "a-strong-bootstrap-password-12345", "BOOTSTRAP_ADMIN_TOTP_SECRET": "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ",
 		"SECURE_COOKIES": "true", "SESSION_IDLE_TIMEOUT": "30m", "SESSION_ABSOLUTE_TIMEOUT": "12h",

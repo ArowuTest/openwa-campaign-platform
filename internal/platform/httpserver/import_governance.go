@@ -104,7 +104,7 @@ func (s *Server) listAudienceImportMappings(w http.ResponseWriter, r *http.Reque
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, 200, map[string]any{"items": out, "count": len(out)})
+	httpx.WriteListAuto(w, 200, out)
 }
 func (s *Server) createAudienceImportMapping(w http.ResponseWriter, r *http.Request) {
 	a := s.mappingAdmin(w, r)
@@ -151,7 +151,7 @@ func (s *Server) listAudienceImportMappingEvents(w http.ResponseWriter, r *http.
 		httpx.WriteError(w, r, 404, "IMPORT_MAPPING_NOT_FOUND", "The mapping was not found.", nil)
 		return
 	}
-	httpx.WriteJSON(w, 200, map[string]any{"items": out, "count": len(out)})
+	httpx.WriteListAuto(w, 200, out)
 }
 func (s *Server) submitAudienceImportMapping(w http.ResponseWriter, r *http.Request) {
 	a := s.mappingAdmin(w, r)

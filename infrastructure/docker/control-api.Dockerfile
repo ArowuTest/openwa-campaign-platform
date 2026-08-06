@@ -1,14 +1,19 @@
 FROM golang:1.23.2-alpine AS build
 WORKDIR /src
+RUN apk add --no-cache build-base postgresql-dev
 COPY go.mod ./
 COPY cmd ./cmd
 COPY internal ./internal
-RUN CGO_ENABLED=0 go build -trimpath -o /out/control-api ./cmd/control-api \
+RUN CGO_ENABLED=1 go build -trimpath -ldflags='-s -w' -o /out/control-api ./cmd/control-api \
     && mkdir -p /out/object-store
 
-FROM gcr.io/distroless/static-debian12:nonroot
-COPY --from=build /out/control-api /control-api
-COPY --from=build --chown=nonroot:nonroot /out/object-store /var/lib/campaign-platform/objects
-USER nonroot:nonroot
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates libpq \
+    && addgroup -S campaign \
+    && adduser -S campaign -G campaign
+
+RUN mkdir -p /var/lib/campaign-platform/objects && chown -R campaign:campaign /var/lib/campaign-platform
+COPY --from=build --chown=campaign:campaign /out/control-api /control-api
+USER campaign:campaign
 EXPOSE 8080
 ENTRYPOINT ["/control-api"]

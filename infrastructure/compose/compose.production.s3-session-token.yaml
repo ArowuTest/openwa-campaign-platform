@@ -1,0 +1,28 @@
+# Optional overlay for temporary S3/MinIO credentials that require a session
+# token. The base production stack supports long-lived access-key credentials
+# without forcing operators to create an empty secret.
+services:
+  control-api:
+    environment:
+      S3_SESSION_TOKEN_FILE: /run/secrets/s3_session_token
+    secrets:
+      - s3_session_token
+  audience-worker:
+    environment:
+      S3_SESSION_TOKEN_FILE: /run/secrets/s3_session_token
+    secrets:
+      - s3_session_token
+  export-worker:
+    environment:
+      S3_SESSION_TOKEN_FILE: /run/secrets/s3_session_token
+    secrets:
+      - s3_session_token
+  platform-governance-worker:
+    environment:
+      S3_SESSION_TOKEN_FILE: /run/secrets/s3_session_token
+    secrets:
+      - s3_session_token
+
+secrets:
+  s3_session_token:
+    file: "${S3_SESSION_TOKEN_FILE:?required when the S3 session-token overlay is enabled}"

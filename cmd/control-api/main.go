@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"campaign-platform/internal/observability"
 	"campaign-platform/internal/platform/httpserver"
 	"campaign-platform/internal/shared/config"
 	sharedcrypto "campaign-platform/internal/shared/crypto"
@@ -30,7 +31,7 @@ func main() {
 		log.New(os.Stderr, "configuration: ", 0).Println(err)
 		os.Exit(1)
 	}
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	logger := observability.NewLogger(os.Stdout, "control-api", os.Getenv("APP_ENV"))
 	startupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	runtime, err := buildControlRuntime(startupCtx, cfg, logger)
 	cancel()
@@ -43,7 +44,13 @@ func main() {
 			logger.Error("control API resource close failed", "error", err)
 		}
 	}()
-	server := &http.Server{Addr: cfg.HTTPAddr, Handler: httpserver.New(logger, runtime.Dependencies).Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 1 << 20}
+	registry := observability.NewRegistry("control-api")
+	application := observability.HTTPMiddleware(registry, logger, httpserver.New(logger, runtime.Dependencies).Handler())
+	router := http.NewServeMux()
+	router.Handle("GET /metrics", registry.Handler(runtime.DB))
+	observability.RegisterProfiling(router, cfg.ProfilingToken)
+	router.Handle("/", application)
+	server := &http.Server{Addr: cfg.HTTPAddr, Handler: router, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 1 << 20}
 	errorsCh := make(chan error, 1)
 	go func() {
 		logger.Info("control API starting", "address", cfg.HTTPAddr, "environment", cfg.Environment)

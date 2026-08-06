@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -11,6 +10,7 @@ import (
 	"time"
 
 	"campaign-platform/internal/delivery/reconciliation"
+	"campaign-platform/internal/observability"
 	"campaign-platform/internal/persistence/database"
 	workerconfig "campaign-platform/internal/worker/config"
 	workerruntime "campaign-platform/internal/worker/runtime"
@@ -27,7 +27,7 @@ func main() {
 		return
 	}
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	logger := observability.NewLogger(os.Stdout, "metrics-worker", os.Getenv("APP_ENV"))
 	cfg, err := workerconfig.LoadMetrics()
 	if err != nil {
 		logger.Error("metrics worker configuration is invalid", "error", err)
@@ -40,7 +40,7 @@ func main() {
 		Driver: cfg.DatabaseDriver, DSN: cfg.DatabaseURL,
 		MaxOpen: cfg.DBMaxOpen, MaxIdle: cfg.DBMaxIdle,
 		ConnMaxLifetime: cfg.DBConnMaxLifetime, ConnMaxIdleTime: cfg.DBConnMaxIdleTime,
-		PingTimeout: cfg.DBPingTimeout,
+		PingTimeout: cfg.DBPingTimeout, Environment: cfg.Environment, ServiceName: "metrics-worker",
 	})
 	if err != nil {
 		logger.Error("metrics worker database startup failed", "error", err)

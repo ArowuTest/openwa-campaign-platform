@@ -31,7 +31,7 @@ func (s *Server) listInboundRetentionPolicies(w http.ResponseWriter, r *http.Req
 		httpx.WriteError(w, r, http.StatusInternalServerError, "RETENTION_POLICY_LIST_FAILED", "Retention policies could not be listed.", nil)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+	httpx.WriteListAuto(w, http.StatusOK, items)
 }
 func (s *Server) createInboundRetentionPolicy(w http.ResponseWriter, r *http.Request) {
 	principal, _ := identity.PrincipalFromContext(r.Context())
@@ -99,7 +99,7 @@ func (s *Server) listInboundReencryptionRuns(w http.ResponseWriter, r *http.Requ
 		httpx.WriteError(w, r, http.StatusInternalServerError, "INBOUND_REENCRYPT_LIST_FAILED", "Re-encryption runs could not be listed.", nil)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+	httpx.WriteListAuto(w, http.StatusOK, items)
 }
 func (s *Server) getInboundReencryptionRun(w http.ResponseWriter, r *http.Request) {
 	if s.deps.InboundRotation == nil {

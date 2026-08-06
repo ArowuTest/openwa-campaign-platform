@@ -3,7 +3,7 @@ BEGIN;
 CREATE TABLE audience_materialisation_jobs (
     id uuid PRIMARY KEY,
     campaign_id uuid NOT NULL REFERENCES campaigns(id),
-    segment_id uuid NULL REFERENCES segment_definitions(id),
+    segment_id uuid NULL REFERENCES segments(id),
     segment_definition jsonb NOT NULL,
     definition_version bigint NOT NULL CHECK (definition_version > 0),
     eligibility_context jsonb NOT NULL,

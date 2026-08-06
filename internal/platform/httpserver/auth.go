@@ -175,7 +175,7 @@ func (s *Server) activeSessions(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
+	httpx.WriteListAuto(w, http.StatusOK, items)
 }
 
 func (s *Server) revokeAllSessions(w http.ResponseWriter, r *http.Request) {

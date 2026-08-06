@@ -5,8 +5,11 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"os"
 	"sync/atomic"
 	"time"
+
+	"campaign-platform/internal/observability"
 )
 
 type Health struct {
@@ -15,19 +18,24 @@ type Health struct {
 	DB        *sql.DB
 	active    func() int64
 	ready     atomic.Bool
+	registry  *observability.Registry
 }
 
 func NewHealth(service string, db *sql.DB, active func() int64) *Health {
-	return &Health{Service: service, StartedAt: time.Now().UTC(), DB: db, active: active}
+	return &Health{Service: service, StartedAt: time.Now().UTC(), DB: db, active: active, registry: observability.NewRegistry(service)}
 }
 
 func (h *Health) SetReady(value bool) { h.ready.Store(value) }
+
+func (h *Health) Registry() *observability.Registry { return h.registry }
 
 func (h *Health) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		writeHealth(w, http.StatusOK, map[string]any{"status": "ok", "service": h.Service, "uptimeSeconds": int64(time.Since(h.StartedAt).Seconds())})
 	})
+	mux.Handle("GET /metrics", h.registry.Handler(h.DB))
+	observability.RegisterProfiling(mux, os.Getenv("PROFILING_TOKEN"))
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
 		if !h.ready.Load() || h.DB == nil {
 			writeHealth(w, http.StatusServiceUnavailable, map[string]any{"status": "not_ready", "service": h.Service})
@@ -43,6 +51,8 @@ func (h *Health) Handler() http.Handler {
 		if h.active != nil {
 			active = h.active()
 		}
+		h.registry.Set("campaign_platform_worker_active", "Active worker operations.", nil, float64(active))
+		h.registry.Set("campaign_platform_worker_ready", "Worker readiness state.", nil, 1)
 		writeHealth(w, http.StatusOK, map[string]any{"status": "ready", "service": h.Service, "active": active})
 	})
 	return mux

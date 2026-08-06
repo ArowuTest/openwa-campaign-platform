@@ -19,7 +19,7 @@ func TestRuntimeRegistrationVerifiesIdentityAndRejectsReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	now := time.Date(2026, 8, 6, 9, 0, 0, 0, time.UTC)
+	now := time.Now().UTC().Add(time.Second)
 	report := RuntimeReport{NodeID: node.ID, ExpectedNodeVersion: node.Version, GatewayPoolID: pool.ID, Provider: "OPENWA", Engine: "WHATSAPP_WEB_JS", AdapterVersion: "adapter-1", GatewayVersion: "0.13.0", WorkerVersion: "0.8.27", ConfigurationVersion: "cfg-2", BootID: "boot-a", InternalURL: "https://gateway.internal", Capabilities: []Capability{CapabilitySendText, CapabilityDeliveryEvents}, RuntimeState: RuntimeReady, Capacity: 4, SessionCount: 2, QueueDepth: 3, CPUPercent: 12.5, MemoryBytes: 1024, ObservedAt: now}
 	raw, _ := json.Marshal(report)
 	secret := []byte("01234567890123456789012345678901")
@@ -37,6 +37,31 @@ func TestRuntimeRegistrationVerifiesIdentityAndRejectsReplay(t *testing.T) {
 	}
 	if _, err = service.Register(context.Background(), node.ID, ts, nonce, signature, raw); !errors.Is(err, ErrRuntimeReplay) {
 		t.Fatalf("expected replay rejection, got %v", err)
+	}
+}
+
+func TestRuntimeRegistrationAcceptsPreviousSecretDuringRotation(t *testing.T) {
+	repo := NewMemoryGovernanceStore()
+	pool, err := (&GatewayPoolService{Store: repo}).Create(context.Background(), GatewayPool{Name: "rotation", Provider: GatewayProviderOpenWA, Engine: GatewayEngineWhatsAppWebJS, AdapterVersion: "adapter-1", Status: GatewayPoolActive, Capabilities: []Capability{CapabilitySendText}, MinimumHealthyNodes: 1}, "maker", "bootstrap")
+	if err != nil {
+		t.Fatal(err)
+	}
+	node, err := (&GovernanceService{Store: repo}).RegisterNode(context.Background(), Node{Name: "rotation-node", Status: "OFFLINE", GatewayPoolID: pool.ID, Provider: "OPENWA", Engine: "WHATSAPP_WEB_JS", AdapterVersion: "adapter-1"}, "maker", "register")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	report := RuntimeReport{NodeID: node.ID, ExpectedNodeVersion: node.Version, GatewayPoolID: pool.ID, Provider: "OPENWA", Engine: "WHATSAPP_WEB_JS", AdapterVersion: "adapter-1", GatewayVersion: "0.13.0", WorkerVersion: "0.8.28", ConfigurationVersion: "cfg-rotate", BootID: "boot-rotate", InternalURL: "https://gateway.internal", Capabilities: []Capability{CapabilitySendText}, RuntimeState: RuntimeReady, Capacity: 1, ObservedAt: now}
+	raw, _ := json.Marshal(report)
+	active := []byte("active-runtime-secret-012345678901")
+	previous := []byte("previous-runtime-secret-0123456789")
+	ts, nonce, signature, err := SignRuntimeReport(previous, now, "nonce-rotation-123456789", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &RuntimeRegistrationService{Store: repo, GatewayPools: repo, Secret: active, PreviousSecrets: [][]byte{previous}, MaximumSkew: time.Minute, Clock: func() time.Time { return now }}
+	if _, err := service.Register(context.Background(), node.ID, ts, nonce, signature, raw); err != nil {
+		t.Fatalf("previous runtime secret rejected: %v", err)
 	}
 }
 

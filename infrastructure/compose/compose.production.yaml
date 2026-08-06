@@ -1,0 +1,388 @@
+name: campaign-platform-production
+
+x-service-defaults: &service-defaults
+  restart: unless-stopped
+  init: true
+  read_only: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  logging:
+    driver: json-file
+    options:
+      max-size: 20m
+      max-file: "5"
+  networks:
+    - private
+
+x-go-worker-defaults: &go-worker-defaults
+  <<: *service-defaults
+  tmpfs:
+    - /tmp:size=64m,noexec,nosuid
+  environment: &go-worker-environment
+    APP_ENV: production
+    POSTGRES_DRIVER: postgres
+    PROFILING_TOKEN_FILE: /run/secrets/profiling_token
+  secrets:
+    - profiling_token
+
+services:
+  control-api:
+    <<: *service-defaults
+    image: ${CONTROL_API_IMAGE:?CONTROL_API_IMAGE must be digest-pinned}
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid
+    environment:
+      APP_ENV: production
+      HTTP_ADDR: :8080
+      POSTGRES_DRIVER: postgres
+      DATABASE_URL_FILE: /run/secrets/control_api_database_url
+      DATABASE_EXPECTED_ROLE: campaign_control_api
+      REDIS_ADDR: ${REDIS_ADDR:?REDIS_ADDR is required}
+      BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:?BOOTSTRAP_ADMIN_EMAIL is required}
+      BOOTSTRAP_ADMIN_PASSWORD_FILE: /run/secrets/bootstrap_admin_password
+      BOOTSTRAP_ADMIN_TOTP_SECRET_FILE: /run/secrets/bootstrap_admin_totp
+      MSISDN_ENCRYPTION_KEY_BASE64_FILE: /run/secrets/msisdn_encryption_key
+      MSISDN_LOOKUP_KEY_BASE64_FILE: /run/secrets/msisdn_lookup_key
+      IDENTITY_SECRET_KEY_BASE64_FILE: /run/secrets/identity_secret_key
+      INBOUND_CONTENT_KEYS_JSON_FILE: /run/secrets/inbound_content_keys
+      INBOUND_CONTENT_ACTIVE_KEY_VERSION: ${INBOUND_CONTENT_ACTIVE_KEY_VERSION:?active inbound key version is required}
+      PRIVACY_EVIDENCE_KEYS_JSON_FILE: /run/secrets/privacy_evidence_keys
+      PRIVACY_EVIDENCE_ACTIVE_KEY_VERSION: ${PRIVACY_EVIDENCE_ACTIVE_KEY_VERSION:?active privacy key version is required}
+      GATEWAY_CALLBACK_SECRET_FILE: /run/secrets/gateway_callback_secret
+      GATEWAY_CALLBACK_SECRET_PREVIOUS_FILE: /run/secrets/gateway_callback_secret_previous
+      GATEWAY_COMMAND_SECRET_FILE: /run/secrets/gateway_command_secret
+      GATEWAY_COMMAND_SECRET_PREVIOUS_FILE: /run/secrets/gateway_command_secret_previous
+      GATEWAY_RUNTIME_SECRET_FILE: /run/secrets/gateway_runtime_secret
+      GATEWAY_RUNTIME_SECRET_PREVIOUS_FILE: /run/secrets/gateway_runtime_secret_previous
+      MEDIA_DOWNLOAD_SECRET_FILE: /run/secrets/media_download_secret
+      PROFILING_TOKEN_FILE: /run/secrets/profiling_token
+      SECURE_COOKIES: "true"
+      OBJECT_STORE_DRIVER: s3
+      OBJECT_STORE_TEMP_DIR: /tmp
+      S3_ENDPOINT: ${S3_ENDPOINT:?S3_ENDPOINT is required}
+      S3_BUCKET: ${S3_BUCKET:?S3_BUCKET is required}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_PATH_STYLE: ${S3_PATH_STYLE:-true}
+      S3_ALLOW_INSECURE: "false"
+      S3_ACCESS_KEY_ID_FILE: /run/secrets/s3_access_key_id
+      S3_SECRET_ACCESS_KEY_FILE: /run/secrets/s3_secret_access_key
+      CLAMAV_ADDRESS: ${CLAMAV_ADDRESS:?CLAMAV_ADDRESS is required}
+      OPENWA_GATEWAY_URL: http://openwa-gateway:2785
+      MEDIA_DOWNLOAD_BASE_URL: http://control-api:8080/api/v1/internal/media
+    secrets:
+      - control_api_database_url
+      - bootstrap_admin_password
+      - bootstrap_admin_totp
+      - msisdn_encryption_key
+      - msisdn_lookup_key
+      - identity_secret_key
+      - inbound_content_keys
+      - privacy_evidence_keys
+      - gateway_callback_secret
+      - gateway_callback_secret_previous
+      - gateway_command_secret
+      - gateway_command_secret_previous
+      - gateway_runtime_secret
+      - gateway_runtime_secret_previous
+      - media_download_secret
+      - profiling_token
+      - s3_access_key_id
+      - s3_secret_access_key
+    healthcheck:
+      test: ["CMD", "/control-api", "healthcheck", "http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  audience-worker:
+    <<: *go-worker-defaults
+    image: ${AUDIENCE_WORKER_IMAGE:?AUDIENCE_WORKER_IMAGE must be digest-pinned}
+    environment:
+      <<: *go-worker-environment
+      WORKER_HEALTH_ADDR: :8091
+      DATABASE_URL_FILE: /run/secrets/audience_worker_database_url
+      DATABASE_EXPECTED_ROLE: campaign_audience_worker
+      WORKER_ID: ${AUDIENCE_WORKER_ID:-audience-worker-01}
+      OBJECT_STORE_DRIVER: s3
+      OBJECT_STORE_TEMP_DIR: /tmp
+      S3_ENDPOINT: ${S3_ENDPOINT:?S3_ENDPOINT is required}
+      S3_BUCKET: ${S3_BUCKET:?S3_BUCKET is required}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_PATH_STYLE: ${S3_PATH_STYLE:-true}
+      S3_ALLOW_INSECURE: "false"
+      S3_ACCESS_KEY_ID_FILE: /run/secrets/s3_access_key_id
+      S3_SECRET_ACCESS_KEY_FILE: /run/secrets/s3_secret_access_key
+      MSISDN_ENCRYPTION_KEY_BASE64_FILE: /run/secrets/msisdn_encryption_key
+      MSISDN_LOOKUP_KEY_BASE64_FILE: /run/secrets/msisdn_lookup_key
+    secrets:
+      - audience_worker_database_url
+      - msisdn_encryption_key
+      - msisdn_lookup_key
+      - s3_access_key_id
+      - s3_secret_access_key
+      - profiling_token
+    healthcheck:
+      test: ["CMD", "/audience-worker", "healthcheck", "http://127.0.0.1:8091/readyz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  campaign-worker:
+    <<: *go-worker-defaults
+    image: ${CAMPAIGN_WORKER_IMAGE:?CAMPAIGN_WORKER_IMAGE must be digest-pinned}
+    environment:
+      <<: *go-worker-environment
+      WORKER_HEALTH_ADDR: :8092
+      DATABASE_URL_FILE: /run/secrets/campaign_worker_database_url
+      DATABASE_EXPECTED_ROLE: campaign_campaign_worker
+      WORKER_ID: ${CAMPAIGN_WORKER_ID:-campaign-worker-01}
+      MSISDN_ENCRYPTION_KEY_BASE64_FILE: /run/secrets/msisdn_encryption_key
+      MSISDN_LOOKUP_KEY_BASE64_FILE: /run/secrets/msisdn_lookup_key
+      GATEWAY_COMMAND_SECRET_FILE: /run/secrets/gateway_command_secret
+      MEDIA_DOWNLOAD_SECRET_FILE: /run/secrets/media_download_secret
+      OPENWA_GATEWAY_URL: http://openwa-gateway:2785
+      MEDIA_DOWNLOAD_BASE_URL: http://control-api:8080/api/v1/internal/media
+    secrets:
+      - campaign_worker_database_url
+      - msisdn_encryption_key
+      - msisdn_lookup_key
+      - gateway_command_secret
+      - media_download_secret
+      - profiling_token
+    healthcheck:
+      test: ["CMD", "/campaign-worker", "healthcheck", "http://127.0.0.1:8092/readyz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  export-worker:
+    <<: *go-worker-defaults
+    image: ${EXPORT_WORKER_IMAGE:?EXPORT_WORKER_IMAGE must be digest-pinned}
+    environment:
+      <<: *go-worker-environment
+      WORKER_HEALTH_ADDR: :8093
+      DATABASE_URL_FILE: /run/secrets/export_worker_database_url
+      DATABASE_EXPECTED_ROLE: campaign_export_worker
+      EXPORT_WORKER_ID: ${EXPORT_WORKER_ID:-export-worker-01}
+      OBJECT_STORE_DRIVER: s3
+      OBJECT_STORE_TEMP_DIR: /tmp
+      S3_ENDPOINT: ${S3_ENDPOINT:?S3_ENDPOINT is required}
+      S3_BUCKET: ${S3_BUCKET:?S3_BUCKET is required}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_PATH_STYLE: ${S3_PATH_STYLE:-true}
+      S3_ALLOW_INSECURE: "false"
+      S3_ACCESS_KEY_ID_FILE: /run/secrets/s3_access_key_id
+      S3_SECRET_ACCESS_KEY_FILE: /run/secrets/s3_secret_access_key
+      PRIVACY_EVIDENCE_KEYS_JSON_FILE: /run/secrets/privacy_evidence_keys
+      PRIVACY_EVIDENCE_ACTIVE_KEY_VERSION: ${PRIVACY_EVIDENCE_ACTIVE_KEY_VERSION:?active privacy key version is required}
+    secrets:
+      - export_worker_database_url
+      - privacy_evidence_keys
+      - s3_access_key_id
+      - s3_secret_access_key
+      - profiling_token
+    healthcheck:
+      test: ["CMD", "/export-worker", "healthcheck", "http://127.0.0.1:8093/readyz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  inbound-governance-worker:
+    <<: *go-worker-defaults
+    image: ${INBOUND_GOVERNANCE_WORKER_IMAGE:?INBOUND_GOVERNANCE_WORKER_IMAGE must be digest-pinned}
+    environment:
+      <<: *go-worker-environment
+      WORKER_HEALTH_ADDR: :8094
+      DATABASE_URL_FILE: /run/secrets/inbound_governance_worker_database_url
+      DATABASE_EXPECTED_ROLE: campaign_inbound_governance_worker
+      WORKER_ID: ${INBOUND_GOVERNANCE_WORKER_ID:-inbound-governance-worker-01}
+      INBOUND_CONTENT_KEYS_JSON_FILE: /run/secrets/inbound_content_keys
+      INBOUND_CONTENT_ACTIVE_KEY_VERSION: ${INBOUND_CONTENT_ACTIVE_KEY_VERSION:?active inbound key version is required}
+    secrets:
+      - inbound_governance_worker_database_url
+      - inbound_content_keys
+      - profiling_token
+    healthcheck:
+      test: ["CMD", "/inbound-governance-worker", "healthcheck", "http://127.0.0.1:8094/readyz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  metrics-worker:
+    <<: *go-worker-defaults
+    image: ${METRICS_WORKER_IMAGE:?METRICS_WORKER_IMAGE must be digest-pinned}
+    environment:
+      <<: *go-worker-environment
+      WORKER_HEALTH_ADDR: :8096
+      DATABASE_URL_FILE: /run/secrets/metrics_worker_database_url
+      DATABASE_EXPECTED_ROLE: campaign_metrics_worker
+      WORKER_ID: ${METRICS_WORKER_ID:-metrics-worker-01}
+    secrets:
+      - metrics_worker_database_url
+      - profiling_token
+    healthcheck:
+      test: ["CMD", "/metrics-worker", "healthcheck", "http://127.0.0.1:8096/readyz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  platform-governance-worker:
+    <<: *go-worker-defaults
+    image: ${PLATFORM_GOVERNANCE_WORKER_IMAGE:?PLATFORM_GOVERNANCE_WORKER_IMAGE must be digest-pinned}
+    environment:
+      <<: *go-worker-environment
+      WORKER_HEALTH_ADDR: :8095
+      DATABASE_URL_FILE: /run/secrets/platform_governance_worker_database_url
+      DATABASE_EXPECTED_ROLE: campaign_platform_governance_worker
+      WORKER_ID: ${PLATFORM_GOVERNANCE_WORKER_ID:-platform-governance-worker-01}
+      OBJECT_STORE_DRIVER: s3
+      OBJECT_STORE_TEMP_DIR: /tmp
+      S3_ENDPOINT: ${S3_ENDPOINT:?S3_ENDPOINT is required}
+      S3_BUCKET: ${S3_BUCKET:?S3_BUCKET is required}
+      S3_REGION: ${S3_REGION:-us-east-1}
+      S3_PATH_STYLE: ${S3_PATH_STYLE:-true}
+      S3_ALLOW_INSECURE: "false"
+      S3_ACCESS_KEY_ID_FILE: /run/secrets/s3_access_key_id
+      S3_SECRET_ACCESS_KEY_FILE: /run/secrets/s3_secret_access_key
+    secrets:
+      - platform_governance_worker_database_url
+      - s3_access_key_id
+      - s3_secret_access_key
+      - profiling_token
+    healthcheck:
+      test: ["CMD", "/platform-governance-worker", "healthcheck", "http://127.0.0.1:8095/readyz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  openwa-upstream:
+    <<: *service-defaults
+    image: ${OPENWA_UPSTREAM_IMAGE:?OPENWA_UPSTREAM_IMAGE must be digest-pinned}
+    shm_size: 1gb
+    tmpfs:
+      - /tmp:size=512m,nosuid
+    environment:
+      NODE_ENV: production
+      PORT: 2785
+      API_MASTER_KEY_FILE: /run/secrets/openwa_upstream_api_key
+      API_KEY_PEPPER_FILE: /run/secrets/openwa_api_key_pepper
+      ENGINE_TYPE: ${OPENWA_ENGINE_TYPE:?OPENWA_ENGINE_TYPE is required}
+      DATABASE_TYPE: sqlite
+      SESSION_DATA_PATH: /app/data/sessions
+      BAILEYS_AUTH_DIR: /app/data/baileys
+      PUPPETEER_HEADLESS: "true"
+      WEBHOOK_MEDIA_INLINE_MAX_BYTES: "0"
+    secrets:
+      - openwa_upstream_api_key
+      - openwa_api_key_pepper
+    configs:
+      - source: openwa_upstream_secret_entrypoint
+        target: /run/configs/openwa-upstream-secret-entrypoint.sh
+        mode: 0555
+    command: ["/bin/sh", "/run/configs/openwa-upstream-secret-entrypoint.sh"]
+    volumes:
+      - openwa-upstream-data:/app/data
+    networks:
+      - private
+      - egress
+
+  openwa-gateway:
+    <<: *service-defaults
+    image: ${OPENWA_GATEWAY_IMAGE:?OPENWA_GATEWAY_IMAGE must be digest-pinned}
+    shm_size: 1gb
+    tmpfs:
+      - /tmp:size=512m,nosuid
+    environment:
+      NODE_ENV: production
+      PORT: 2785
+      GATEWAY_PROVIDER_MODE: openwa
+      OPENWA_ENGINE: ${OPENWA_ENGINE:?OPENWA_ENGINE is required}
+      GATEWAY_POOL_ID: ${GATEWAY_POOL_ID:?GATEWAY_POOL_ID is required}
+      GATEWAY_POOL_VERSION: ${GATEWAY_POOL_VERSION:?GATEWAY_POOL_VERSION is required}
+      GATEWAY_NODE_ID: ${GATEWAY_NODE_ID:?GATEWAY_NODE_ID is required}
+      GATEWAY_NODE_VERSION: ${GATEWAY_NODE_VERSION:?GATEWAY_NODE_VERSION is required}
+      GATEWAY_ADAPTER_VERSION: ${GATEWAY_ADAPTER_VERSION:?GATEWAY_ADAPTER_VERSION is required}
+      GATEWAY_CONFIGURATION_VERSION: ${GATEWAY_CONFIGURATION_VERSION:?GATEWAY_CONFIGURATION_VERSION is required}
+      GATEWAY_CAPABILITIES: ${GATEWAY_CAPABILITIES:?GATEWAY_CAPABILITIES is required}
+      GATEWAY_INTERNAL_URL: http://openwa-gateway:2785
+      CONTROL_API_INTERNAL_URL: http://control-api:8080
+      OPENWA_UPSTREAM_URL: http://openwa-upstream:2785
+      OPENWA_ALLOW_INSECURE_INTERNAL: "true"
+      OPENWA_UPSTREAM_API_KEY_FILE: /run/secrets/openwa_upstream_api_key
+      OPENWA_WEBHOOK_SECRET_FILE: /run/secrets/openwa_webhook_secret
+      GATEWAY_COMMAND_SECRET_FILE: /run/secrets/gateway_command_secret
+      GATEWAY_COMMAND_SECRET_PREVIOUS_FILE: /run/secrets/gateway_command_secret_previous
+      GATEWAY_CALLBACK_SECRET_FILE: /run/secrets/gateway_callback_secret
+      GATEWAY_CALLBACK_SECRET_PREVIOUS_FILE: /run/secrets/gateway_callback_secret_previous
+      GATEWAY_RUNTIME_SECRET_FILE: /run/secrets/gateway_runtime_secret
+      MEDIA_DOWNLOAD_SECRET_FILE: /run/secrets/media_download_secret
+      PROFILING_TOKEN_FILE: /run/secrets/profiling_token
+      MEDIA_DOWNLOAD_BASE_URL: http://control-api:8080/api/v1/internal/media
+      CONTROL_API_CALLBACK_URL: http://control-api:8080/api/v1/internal/gateway/events
+      CONTROL_API_INBOUND_URL: http://control-api:8080/api/v1/internal/gateway/inbound
+      GATEWAY_SESSION_AUTHORITY_DIR: /data/gateway-session-authority
+      GATEWAY_EVENT_OUTBOX_DIR: /data/gateway-event-outbox
+      GATEWAY_INBOUND_OUTBOX_DIR: /data/gateway-inbound-outbox
+      GATEWAY_COMMAND_NONCE_DIR: /data/gateway-command-nonces
+      GATEWAY_IDEMPOTENCY_DIR: /data/gateway-idempotency
+    secrets:
+      - openwa_upstream_api_key
+      - openwa_webhook_secret
+      - gateway_command_secret
+      - gateway_command_secret_previous
+      - gateway_callback_secret
+      - gateway_callback_secret_previous
+      - gateway_runtime_secret
+      - media_download_secret
+      - profiling_token
+    volumes:
+      - openwa-gateway-data:/data
+    networks:
+      - private
+      - egress
+
+networks:
+  private:
+    driver: bridge
+    internal: true
+  egress:
+    driver: bridge
+
+volumes:
+  openwa-upstream-data:
+  openwa-gateway-data:
+
+secrets:
+  control_api_database_url: { file: "${CONTROL_API_DATABASE_URL_FILE:?required}" }
+  audience_worker_database_url: { file: "${AUDIENCE_WORKER_DATABASE_URL_FILE:?required}" }
+  campaign_worker_database_url: { file: "${CAMPAIGN_WORKER_DATABASE_URL_FILE:?required}" }
+  export_worker_database_url: { file: "${EXPORT_WORKER_DATABASE_URL_FILE:?required}" }
+  inbound_governance_worker_database_url: { file: "${INBOUND_GOVERNANCE_WORKER_DATABASE_URL_FILE:?required}" }
+  metrics_worker_database_url: { file: "${METRICS_WORKER_DATABASE_URL_FILE:?required}" }
+  platform_governance_worker_database_url: { file: "${PLATFORM_GOVERNANCE_WORKER_DATABASE_URL_FILE:?required}" }
+  bootstrap_admin_password: { file: "${BOOTSTRAP_ADMIN_PASSWORD_FILE:?required}" }
+  bootstrap_admin_totp: { file: "${BOOTSTRAP_ADMIN_TOTP_FILE:?required}" }
+  msisdn_encryption_key: { file: "${MSISDN_ENCRYPTION_KEY_FILE:?required}" }
+  msisdn_lookup_key: { file: "${MSISDN_LOOKUP_KEY_FILE:?required}" }
+  identity_secret_key: { file: "${IDENTITY_SECRET_KEY_FILE:?required}" }
+  inbound_content_keys: { file: "${INBOUND_CONTENT_KEYS_FILE:?required}" }
+  privacy_evidence_keys: { file: "${PRIVACY_EVIDENCE_KEYS_FILE:?required}" }
+  gateway_callback_secret: { file: "${GATEWAY_CALLBACK_SECRET_FILE:?required}" }
+  gateway_callback_secret_previous: { file: "${GATEWAY_CALLBACK_SECRET_PREVIOUS_FILE:?required}" }
+  gateway_command_secret: { file: "${GATEWAY_COMMAND_SECRET_FILE:?required}" }
+  gateway_command_secret_previous: { file: "${GATEWAY_COMMAND_SECRET_PREVIOUS_FILE:?required}" }
+  gateway_runtime_secret: { file: "${GATEWAY_RUNTIME_SECRET_FILE:?required}" }
+  gateway_runtime_secret_previous: { file: "${GATEWAY_RUNTIME_SECRET_PREVIOUS_FILE:?required}" }
+  media_download_secret: { file: "${MEDIA_DOWNLOAD_SECRET_FILE:?required}" }
+  profiling_token: { file: "${PROFILING_TOKEN_FILE:?required}" }
+  s3_access_key_id: { file: "${S3_ACCESS_KEY_ID_FILE:?required}" }
+  s3_secret_access_key: { file: "${S3_SECRET_ACCESS_KEY_FILE:?required}" }
+  openwa_upstream_api_key: { file: "${OPENWA_UPSTREAM_API_KEY_FILE:?required}" }
+  openwa_api_key_pepper: { file: "${OPENWA_API_KEY_PEPPER_FILE:?required}" }
+  openwa_webhook_secret: { file: "${OPENWA_WEBHOOK_SECRET_FILE:?required}" }
+
+configs:
+  openwa_upstream_secret_entrypoint:
+    file: ./openwa-upstream-secret-entrypoint.sh

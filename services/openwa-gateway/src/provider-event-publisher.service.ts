@@ -1,6 +1,7 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { ProviderEventOutboxService } from './provider-event-outbox.service';
 import { createHmac, randomUUID } from 'node:crypto';
+import { GatewayObservabilityService } from './observability.service';
 
 type ProviderEventType =
   | 'gateway.accepted'
@@ -29,7 +30,7 @@ export type ProviderMessageEvent = {
 // during a retry and never logs message content or recipient MSISDNs.
 @Injectable()
 export class ProviderEventPublisherService {
-  constructor(private readonly outbox: ProviderEventOutboxService) { this.outbox.setSender(event => this.deliver(event)); }
+  constructor(private readonly outbox: ProviderEventOutboxService, private readonly observability: GatewayObservabilityService) { this.outbox.setSender(event => this.deliver(event)); }
   configured(): boolean {
     return Boolean(process.env.CONTROL_API_CALLBACK_URL && process.env.GATEWAY_CALLBACK_SECRET);
   }
@@ -70,7 +71,8 @@ export class ProviderEventPublisherService {
       headers: {
         'content-type': 'application/json',
         'x-gateway-timestamp': timestamp,
-        'x-gateway-signature': `sha256=${signature}`
+        'x-gateway-signature': `sha256=${signature}`,
+        ...(this.observability.traceparent() ? { traceparent: this.observability.traceparent()! } : {})
       },
       body,
       signal: AbortSignal.timeout(timeoutMs)

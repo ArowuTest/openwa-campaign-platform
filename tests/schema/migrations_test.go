@@ -245,3 +245,53 @@ func TestTrustedAssetAndConsentReviewMigrationContainsTrustBoundaryControls(t *t
 		}
 	}
 }
+
+func TestPartitionReadinessMigrationIsGovernedAndFailClosed(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(migrationDirectory(t), "0066_partition_readiness_and_maintenance.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlText := string(content)
+	for _, required := range []string{
+		"CREATE TABLE high_volume_partition_policies",
+		"CREATE TABLE high_volume_partition_windows",
+		"CREATE TABLE high_volume_partition_events",
+		"high_volume_partition_events_immutable",
+		"create_governed_range_partition",
+		"parent relation is not declaratively partitioned",
+		"detach_governed_partition",
+		"record_governed_partition_archive",
+		"campaign_recipients_partition_time_idx",
+		"delivery_events_partition_time_idx",
+		"audit_events_partition_time_idx",
+		"high_volume_partition_readiness",
+		"REVOKE ALL ON FUNCTION create_governed_range_partition",
+	} {
+		if !strings.Contains(sqlText, required) {
+			t.Errorf("partition-readiness migration missing %q", required)
+		}
+	}
+	validation, err := os.ReadFile(filepath.Join(migrationDirectory(t), "..", "tests", "partition_maintenance.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"PARTITION BY RANGE", "create_governed_range_partition", "cross-partition query failed", "detach_governed_partition", "ROLLBACK;"} {
+		if !strings.Contains(string(validation), required) {
+			t.Errorf("partition validation script missing %q", required)
+		}
+	}
+}
+
+func TestMigrationsReferenceCanonicalRolesTable(t *testing.T) {
+	for _, file := range migrationFiles(t) {
+		content, err := os.ReadFile(file)
+		if err != nil {
+			t.Fatalf("read migration %s: %v", file, err)
+		}
+		for _, obsolete := range []string{"role_definitions", "internal_roles", "REFERENCES users(id)", "REFERENCES segment_definitions(id)", "REFERENCES user_accounts(id)"} {
+			if strings.Contains(string(content), obsolete) {
+				t.Errorf("migration %s references obsolete %s table; canonical table is roles", filepath.Base(file), obsolete)
+			}
+		}
+	}
+}

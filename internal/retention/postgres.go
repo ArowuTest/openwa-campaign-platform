@@ -488,7 +488,8 @@ func (e *PostgreSQLExecutor) Execute(ctx context.Context, job Job, now time.Time
 		if e.Objects == nil {
 			return nil, errors.New("object store is required")
 		}
-		if err := e.Objects.Delete(ctx, job.ObjectKey); err != nil {
+		alreadyAbsent, err := deleteRetentionObject(ctx, e.Objects, job.ObjectKey)
+		if err != nil {
 			return nil, err
 		}
 		res, err := e.DB.ExecContext(ctx, `UPDATE audience_imports SET source_deleted_at=$2,source_deletion_last_error=NULL,version=version+1,updated_at=$2 WHERE id=$1::uuid AND source_deleted_at IS NULL`, job.ObjectID, now)
@@ -502,7 +503,7 @@ func (e *PostgreSQLExecutor) Execute(ctx context.Context, job Job, now time.Time
 		if n == 0 {
 			return nil, ReviewRequiredError{Reason: "audience import source is absent or already deleted", Evidence: job.Evidence}
 		}
-		return map[string]any{"deletedAt": now, "objectKey": job.ObjectKey}, nil
+		return map[string]any{"deletedAt": now, "objectKey": job.ObjectKey, "objectAlreadyAbsent": alreadyAbsent}, nil
 	case ObjectExportObject:
 		if job.Action != ActionDelete {
 			return nil, ReviewRequiredError{Reason: "export object action requires review", Evidence: job.Evidence}
@@ -510,7 +511,8 @@ func (e *PostgreSQLExecutor) Execute(ctx context.Context, job Job, now time.Time
 		if e.Objects == nil {
 			return nil, errors.New("object store is required")
 		}
-		if err := e.Objects.Delete(ctx, job.ObjectKey); err != nil {
+		alreadyAbsent, err := deleteRetentionObject(ctx, e.Objects, job.ObjectKey)
+		if err != nil {
 			return nil, err
 		}
 		res, err := e.DB.ExecContext(ctx, `UPDATE export_requests SET status='EXPIRED',object_key=NULL,updated_at=$2,version=version+1 WHERE id=$1::uuid AND status IN ('READY','EXPIRING')`, job.ObjectID, now)
@@ -524,8 +526,16 @@ func (e *PostgreSQLExecutor) Execute(ctx context.Context, job Job, now time.Time
 		if n == 0 {
 			return nil, ReviewRequiredError{Reason: "export is absent or no longer eligible", Evidence: job.Evidence}
 		}
-		return map[string]any{"deletedAt": now, "objectKey": job.ObjectKey}, nil
+		return map[string]any{"deletedAt": now, "objectKey": job.ObjectKey, "objectAlreadyAbsent": alreadyAbsent}, nil
 	default:
 		return nil, ReviewRequiredError{Reason: fmt.Sprintf("%s requires governed review before %s", job.ObjectType, job.Action), Evidence: job.Evidence}
 	}
+}
+
+func deleteRetentionObject(ctx context.Context, objects storage.ObjectStore, key string) (bool, error) {
+	err := objects.Delete(ctx, key)
+	if errors.Is(err, storage.ErrNotFound) {
+		return true, nil
+	}
+	return false, err
 }

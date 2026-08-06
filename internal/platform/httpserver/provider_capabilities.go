@@ -21,7 +21,7 @@ func (s *Server) listProviderCapabilities(w http.ResponseWriter, r *http.Request
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+	httpx.WriteListAuto(w, http.StatusOK, items)
 }
 
 func (s *Server) createProviderCapability(w http.ResponseWriter, r *http.Request) {
@@ -188,5 +188,5 @@ func (s *Server) listProviderCapabilityEvents(w http.ResponseWriter, r *http.Req
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items})
+	httpx.WriteListAuto(w, http.StatusOK, items)
 }

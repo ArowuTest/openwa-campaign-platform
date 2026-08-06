@@ -1,10 +1,19 @@
 # Build checkpoint
 
-Current version: **0.8.27**
+Current version: **0.8.28**
 
-Branch: `work/backend-platform-governance`
+Branch: `work/backend-completion`
 
-This checkpoint extends `0.8.26` with shared platform governance, signed gateway runtime discovery, governed gateway-pool/node administration, maintenance and emergency controls, cross-domain retention execution, operational alert escalation and immutable incident timelines.
+This checkpoint extends `0.8.27` with deployment secret-file hardening and a deterministic runtime-registration fixture correction.
+
+Implemented code-level scope additionally includes:
+
+- fail-closed `NAME_FILE` loading for control-plane and worker secrets;
+- ambiguity rejection when both inline and file-backed values are configured;
+- deployed absolute-path, regular-file, restrictive-permission, non-empty, NUL and size validation;
+- documented Docker/Kubernetes secret-file mappings;
+- corrected runtime-registration test effective-time alignment.
+
 
 Implemented code-level scope includes:
 

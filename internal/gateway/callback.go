@@ -163,6 +163,31 @@ func VerifyCallback(secret []byte, timestampHeader, signatureHeader string, body
 	return nil
 }
 
+// VerifyCallbackAny supports a bounded dual-key rotation window. The active
+// secret should be first; previous secrets are verification-only and must be
+// removed after the operational overlap ends.
+func VerifyCallbackAny(secrets [][]byte, timestampHeader, signatureHeader string, body []byte, now time.Time, maximumSkew time.Duration) error {
+	var configured bool
+	var last error = ErrSignatureInvalid
+	for _, secret := range secrets {
+		if len(secret) < 32 {
+			continue
+		}
+		configured = true
+		if err := VerifyCallback(secret, timestampHeader, signatureHeader, body, now, maximumSkew); err == nil {
+			return nil
+		} else if !errors.Is(err, ErrSignatureInvalid) {
+			return err
+		} else {
+			last = err
+		}
+	}
+	if !configured {
+		return ErrCallbackSecretRequired
+	}
+	return last
+}
+
 func SignCallback(secret []byte, timestamp time.Time, body []byte) (string, string, error) {
 	if len(secret) < 32 {
 		return "", "", ErrCallbackSecretRequired

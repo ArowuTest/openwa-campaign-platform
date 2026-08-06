@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS delivery_exception_resolutions (
   action text NOT NULL CHECK (action IN ('CONFIRM_SENT','CONFIRM_DELIVERED','CONFIRM_READ','MARK_FAILED_PERMANENT','CONFIRM_NOT_SUBMITTED')),
   evidence_reference text NOT NULL CHECK (length(trim(evidence_reference)) >= 6),
   reason text NOT NULL CHECK (length(trim(reason)) >= 8),
-  actor_id uuid NOT NULL REFERENCES users(id),
+  actor_id uuid NOT NULL REFERENCES internal_users(id),
   resolved_at timestamptz NOT NULL,
   result_status text NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now()

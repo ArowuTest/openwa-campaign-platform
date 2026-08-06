@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"campaign-platform/internal/observability"
 )
 
 // S3Store implements the subset of the S3 API required by the platform. It is
@@ -125,6 +127,7 @@ func (s *S3Store) Put(ctx context.Context, key string, reader io.Reader, maxByte
 		temporary.Close()
 		return Metadata{}, err
 	}
+	observability.InjectTrace(request)
 	response, err := s.Client.Do(request)
 	closeErr := temporary.Close()
 	if errors.Is(closeErr, os.ErrClosed) {
@@ -165,6 +168,7 @@ func (s *S3Store) Open(ctx context.Context, key string) (ReadSeekCloser, Metadat
 	if err := s.sign(request, emptySHA256, now); err != nil {
 		return nil, Metadata{}, err
 	}
+	observability.InjectTrace(request)
 	response, err := s.Client.Do(request)
 	if err != nil {
 		return nil, Metadata{}, err
@@ -235,6 +239,7 @@ func (s *S3Store) Stat(ctx context.Context, key string) (Metadata, error) {
 	if err := s.sign(request, emptySHA256, now); err != nil {
 		return Metadata{}, err
 	}
+	observability.InjectTrace(request)
 	response, err := s.Client.Do(request)
 	if err != nil {
 		return Metadata{}, err
@@ -272,6 +277,7 @@ func (s *S3Store) Delete(ctx context.Context, key string) error {
 	if err := s.sign(request, emptySHA256, s.now()); err != nil {
 		return err
 	}
+	observability.InjectTrace(request)
 	response, err := s.Client.Do(request)
 	if err != nil {
 		return err

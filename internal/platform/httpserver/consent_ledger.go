@@ -134,7 +134,7 @@ func (s *Server) listConsentEvents(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": events})
+	httpx.WriteListAuto(w, http.StatusOK, events)
 }
 func (s *Server) writeConsentLedgerError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {

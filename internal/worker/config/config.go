@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"campaign-platform/internal/shared/envfile"
 )
 
 // AudienceConfig contains only the settings required by the audience validation
@@ -57,10 +59,14 @@ type AudienceConfig struct {
 }
 
 func LoadAudience() (AudienceConfig, error) {
+	environment := strings.ToLower(strings.TrimSpace(env("APP_ENV", "development")))
+	if err := resolveWorkerFiles(environment); err != nil {
+		return AudienceConfig{}, err
+	}
 	cfg := AudienceConfig{
-		Environment:         strings.ToLower(strings.TrimSpace(env("APP_ENV", "development"))),
+		Environment:         environment,
 		HealthAddr:          strings.TrimSpace(env("WORKER_HEALTH_ADDR", ":8091")),
-		DatabaseDriver:      strings.TrimSpace(env("POSTGRES_DRIVER", "pgx")),
+		DatabaseDriver:      strings.TrimSpace(env("POSTGRES_DRIVER", "postgres")),
 		DatabaseURL:         strings.TrimSpace(os.Getenv("DATABASE_URL")),
 		WorkerID:            strings.TrimSpace(env("WORKER_ID", hostname("audience-worker"))),
 		ObjectStoreDriver:   strings.ToLower(strings.TrimSpace(env("OBJECT_STORE_DRIVER", "filesystem"))),
@@ -297,6 +303,10 @@ func duration(key string, fallback time.Duration) (time.Duration, error) {
 	return parsed, nil
 }
 
+func resolveWorkerFiles(environment string) error {
+	return envfile.Resolve(environment, "DATABASE_URL", "MSISDN_ENCRYPTION_KEY_BASE64", "MSISDN_LOOKUP_KEY_BASE64", "GATEWAY_COMMAND_SECRET", "OPENWA_GATEWAY_API_KEY", "MEDIA_DOWNLOAD_SECRET", "INBOUND_CONTENT_KEYS_JSON", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY", "S3_SESSION_TOKEN", "PROFILING_TOKEN")
+}
+
 func env(key, fallback string) string {
 	if value, ok := os.LookupEnv(key); ok {
 		return value
@@ -371,10 +381,14 @@ type CampaignConfig struct {
 }
 
 func LoadCampaign() (CampaignConfig, error) {
+	environment := strings.ToLower(strings.TrimSpace(env("APP_ENV", "development")))
+	if err := resolveWorkerFiles(environment); err != nil {
+		return CampaignConfig{}, err
+	}
 	cfg := CampaignConfig{
-		Environment:          strings.ToLower(strings.TrimSpace(env("APP_ENV", "development"))),
+		Environment:          environment,
 		HealthAddr:           strings.TrimSpace(env("WORKER_HEALTH_ADDR", ":8092")),
-		DatabaseDriver:       strings.TrimSpace(env("POSTGRES_DRIVER", "pgx")),
+		DatabaseDriver:       strings.TrimSpace(env("POSTGRES_DRIVER", "postgres")),
 		DatabaseURL:          strings.TrimSpace(os.Getenv("DATABASE_URL")),
 		WorkerID:             strings.TrimSpace(env("WORKER_ID", hostname("campaign-worker"))),
 		MSISDNEncryptionKey:  strings.TrimSpace(os.Getenv("MSISDN_ENCRYPTION_KEY_BASE64")),
@@ -574,10 +588,14 @@ type MetricsConfig struct {
 }
 
 func LoadMetrics() (MetricsConfig, error) {
+	environment := strings.ToLower(strings.TrimSpace(env("APP_ENV", "development")))
+	if err := resolveWorkerFiles(environment); err != nil {
+		return MetricsConfig{}, err
+	}
 	cfg := MetricsConfig{
-		Environment:    strings.ToLower(strings.TrimSpace(env("APP_ENV", "development"))),
+		Environment:    environment,
 		HealthAddr:     strings.TrimSpace(env("WORKER_HEALTH_ADDR", ":8093")),
-		DatabaseDriver: strings.TrimSpace(env("POSTGRES_DRIVER", "pgx")),
+		DatabaseDriver: strings.TrimSpace(env("POSTGRES_DRIVER", "postgres")),
 		DatabaseURL:    strings.TrimSpace(os.Getenv("DATABASE_URL")),
 		WorkerID:       strings.TrimSpace(env("WORKER_ID", hostname("metrics-worker"))),
 	}
@@ -693,7 +711,7 @@ func LoadGovernance() (GovernanceConfig, error) {
 	cfg := GovernanceConfig{
 		Environment:             strings.ToLower(strings.TrimSpace(env("APP_ENV", "development"))),
 		HealthAddr:              strings.TrimSpace(env("WORKER_HEALTH_ADDR", ":8094")),
-		DatabaseDriver:          strings.TrimSpace(env("POSTGRES_DRIVER", "pgx")),
+		DatabaseDriver:          strings.TrimSpace(env("POSTGRES_DRIVER", "postgres")),
 		DatabaseURL:             strings.TrimSpace(os.Getenv("DATABASE_URL")),
 		WorkerID:                strings.TrimSpace(env("WORKER_ID", hostname("inbound-governance-worker"))),
 		InboundContentKeysJSON:  strings.TrimSpace(os.Getenv("INBOUND_CONTENT_KEYS_JSON")),
@@ -802,10 +820,14 @@ type PlatformGovernanceConfig struct {
 }
 
 func LoadPlatformGovernance() (PlatformGovernanceConfig, error) {
+	environment := strings.ToLower(strings.TrimSpace(env("APP_ENV", "development")))
+	if err := resolveWorkerFiles(environment); err != nil {
+		return PlatformGovernanceConfig{}, err
+	}
 	cfg := PlatformGovernanceConfig{
-		Environment:     strings.ToLower(strings.TrimSpace(env("APP_ENV", "development"))),
+		Environment:     environment,
 		HealthAddr:      strings.TrimSpace(env("WORKER_HEALTH_ADDR", ":8095")),
-		DatabaseDriver:  strings.TrimSpace(env("POSTGRES_DRIVER", "pgx")),
+		DatabaseDriver:  strings.TrimSpace(env("POSTGRES_DRIVER", "postgres")),
 		DatabaseURL:     strings.TrimSpace(os.Getenv("DATABASE_URL")),
 		WorkerID:        strings.TrimSpace(env("WORKER_ID", hostname("platform-governance-worker"))),
 		ObjectStoreRoot: strings.TrimSpace(env("OBJECT_STORE_ROOT", filepath.Join(os.TempDir(), "campaign-platform-objects"))),

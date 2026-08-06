@@ -78,11 +78,12 @@ type RuntimeRegistrationStore interface {
 }
 
 type RuntimeRegistrationService struct {
-	Store        RuntimeRegistrationStore
-	GatewayPools GatewayPoolStore
-	Secret       []byte
-	MaximumSkew  time.Duration
-	Clock        func() time.Time
+	Store           RuntimeRegistrationStore
+	GatewayPools    GatewayPoolStore
+	Secret          []byte
+	PreviousSecrets [][]byte
+	MaximumSkew     time.Duration
+	Clock           func() time.Time
 }
 
 func (s *RuntimeRegistrationService) now() time.Time {
@@ -157,6 +158,24 @@ func VerifyRuntimeReport(secret []byte, timestamp, nonce, signature string, raw 
 	}
 	digest := sha256.Sum256(raw)
 	return hex.EncodeToString(digest[:]), observed, nil
+}
+
+func verifyRuntimeReportAny(secrets [][]byte, timestamp, nonce, signature string, raw []byte, now time.Time, maximumSkew time.Duration) (string, time.Time, error) {
+	var configured bool
+	for _, secret := range secrets {
+		if len(secret) < 32 {
+			continue
+		}
+		configured = true
+		requestHash, observed, err := VerifyRuntimeReport(secret, timestamp, nonce, signature, raw, now, maximumSkew)
+		if err == nil {
+			return requestHash, observed, nil
+		}
+	}
+	if !configured {
+		return "", time.Time{}, ErrRuntimeAuthentication
+	}
+	return "", time.Time{}, ErrRuntimeAuthentication
 }
 
 func normalizeRuntimeCapabilities(values []Capability) ([]Capability, error) {
@@ -251,7 +270,7 @@ func (s *RuntimeRegistrationService) Register(ctx context.Context, pathNodeID, t
 	if maximumSkew <= 0 {
 		maximumSkew = 5 * time.Minute
 	}
-	requestHash, _, err := VerifyRuntimeReport(s.Secret, timestamp, nonce, signature, raw, now, maximumSkew)
+	requestHash, _, err := verifyRuntimeReportAny(append([][]byte{s.Secret}, s.PreviousSecrets...), timestamp, nonce, signature, raw, now, maximumSkew)
 	if err != nil {
 		return Node{}, err
 	}

@@ -53,7 +53,7 @@ func (s *Server) listRetentionPolicies(w http.ResponseWriter, r *http.Request) {
 		s.writeRetentionError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, 200, map[string]any{"items": v, "count": len(v)})
+	httpx.WriteListAuto(w, 200, v)
 }
 func (s *Server) getRetentionPolicy(w http.ResponseWriter, r *http.Request) {
 	a, ok := s.requireRetention(w, r)
@@ -149,7 +149,7 @@ func (s *Server) listRetentionPolicyEvents(w http.ResponseWriter, r *http.Reques
 		s.writeRetentionError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, 200, map[string]any{"items": v, "count": len(v)})
+	httpx.WriteListAuto(w, 200, v)
 }
 func (s *Server) listRetentionJobs(w http.ResponseWriter, r *http.Request) {
 	a, ok := s.requireRetention(w, r)
@@ -171,7 +171,7 @@ func (s *Server) listRetentionJobs(w http.ResponseWriter, r *http.Request) {
 		s.writeRetentionError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, 200, map[string]any{"items": v, "count": len(v)})
+	httpx.WriteListAuto(w, 200, v)
 }
 
 func validRetentionPolicyStatus(v retention.Status) bool {
@@ -248,7 +248,7 @@ func (s *Server) listAlertPolicies(w http.ResponseWriter, r *http.Request) {
 		s.writeOperationsAlertError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, 200, map[string]any{"items": v, "count": len(v)})
+	httpx.WriteListAuto(w, 200, v)
 }
 func (s *Server) createAlertPolicy(w http.ResponseWriter, r *http.Request) {
 	a, ok := s.requireAlertPolicies(w, r)
@@ -332,7 +332,7 @@ func (s *Server) listAlertPolicyEvents(w http.ResponseWriter, r *http.Request) {
 		s.writeOperationsAlertError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, 200, map[string]any{"items": v, "count": len(v)})
+	httpx.WriteListAuto(w, 200, v)
 }
 func (s *Server) listOperationalAlerts(w http.ResponseWriter, r *http.Request) {
 	a, ok := s.requireAlertPolicies(w, r)
@@ -355,7 +355,7 @@ func (s *Server) listOperationalAlerts(w http.ResponseWriter, r *http.Request) {
 		s.writeOperationsAlertError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, 200, map[string]any{"items": v, "count": len(v)})
+	httpx.WriteListAuto(w, 200, v)
 }
 func (s *Server) acknowledgeOperationalAlert(w http.ResponseWriter, r *http.Request) {
 	a, ok := s.requireAlertPolicies(w, r)
@@ -384,7 +384,7 @@ func (s *Server) listOperationalAlertEvents(w http.ResponseWriter, r *http.Reque
 		s.writeOperationsAlertError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, 200, map[string]any{"items": v, "count": len(v)})
+	httpx.WriteListAuto(w, 200, v)
 }
 func (s *Server) evaluateOperationalAlerts(w http.ResponseWriter, r *http.Request) {
 	if !s.requirePlatformPolicyStepUp(w, r, "alert.evaluate") {
@@ -426,7 +426,7 @@ func (s *Server) listOperationalNotifications(w http.ResponseWriter, r *http.Req
 		s.writeOperationsAlertError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, 200, map[string]any{"items": v, "count": len(v)})
+	httpx.WriteListAuto(w, 200, v)
 }
 
 func validAlertPolicyStatus(v operations.AlertPolicyStatus) bool {
@@ -474,7 +474,7 @@ func (s *Server) getOperationsIncidentTimeline(w http.ResponseWriter, r *http.Re
 		s.writeOperationsAlertError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, 200, map[string]any{"items": v, "count": len(v)})
+	httpx.WriteListAuto(w, 200, v)
 }
 func (s *Server) writeOperationsAlertError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {

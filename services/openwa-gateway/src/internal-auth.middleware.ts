@@ -2,17 +2,18 @@ import { Injectable, NestMiddleware, UnauthorizedException } from '@nestjs/commo
 import type { NextFunction, Request, Response } from 'express';
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { GatewayIdentityService } from './gateway-identity.service';
+import { CommandReplayService } from './command-replay.service';
 
 type RawRequest = Request & { rawBody?: Buffer };
 
 @Injectable()
 export class InternalAuthMiddleware implements NestMiddleware {
-  private readonly seenNonces = new Map<string, number>();
-  constructor(private readonly identity: GatewayIdentityService) {}
+  constructor(private readonly identity: GatewayIdentityService, private readonly replay: CommandReplayService) {}
 
-  use(request: RawRequest, _response: Response, next: NextFunction) {
-    const secret = process.env.GATEWAY_COMMAND_SECRET ?? '';
-    if (Buffer.byteLength(secret) < 32) {
+  async use(request: RawRequest, _response: Response, next: NextFunction): Promise<void> {
+    const secrets = [process.env.GATEWAY_COMMAND_SECRET ?? '', process.env.GATEWAY_COMMAND_SECRET_PREVIOUS ?? '']
+      .filter(secret => Buffer.byteLength(secret) >= 32);
+    if (!secrets.length) {
       if (process.env.NODE_ENV === 'production') throw new UnauthorizedException('gateway command signing is not configured');
       next(); return;
     }
@@ -25,15 +26,16 @@ export class InternalAuthMiddleware implements NestMiddleware {
     const windowSeconds = boundedInteger(process.env.GATEWAY_COMMAND_REPLAY_WINDOW_SECONDS, 300, 30, 900);
     if (!Number.isInteger(parsedTimestamp) || Math.abs(now - parsedTimestamp) > windowSeconds) throw new UnauthorizedException('gateway command timestamp is outside the replay window');
     if (!/^[A-Za-z0-9_-]{16,128}$/.test(nonce)) throw new UnauthorizedException('gateway command nonce is invalid');
-    this.expireNonces(now - windowSeconds);
-    if (this.seenNonces.has(nonce)) throw new UnauthorizedException('gateway command nonce was already used');
 
     const bodyHash = createHash('sha256').update(request.rawBody ?? Buffer.alloc(0)).digest('hex');
     const canonical = [request.method.toUpperCase(), request.originalUrl, timestamp, nonce, bodyHash].join('\n');
-    const expected = `sha256=${createHmac('sha256', secret).update(canonical).digest('hex')}`;
-    if (!safeEqual(expected, signature)) throw new UnauthorizedException('invalid gateway command signature');
+    const valid = secrets.some(secret => safeEqual(`sha256=${createHmac('sha256', secret).update(canonical).digest('hex')}`, signature));
+    if (!valid) throw new UnauthorizedException('invalid gateway command signature');
     if (request.path.startsWith('/v1/sessions')) this.assertTargetIdentity(request);
-    this.seenNonces.set(nonce, now);
+
+    // Persist only after authentication succeeds. Atomic exclusive creation on a
+    // shared durable volume makes replay rejection restart-safe and multi-process safe.
+    await this.replay.claim(nonce, createHash('sha256').update(canonical).digest('hex'), now, parsedTimestamp + windowSeconds);
     next();
   }
 
@@ -46,8 +48,6 @@ export class InternalAuthMiddleware implements NestMiddleware {
     if ((request.header('x-gateway-target-engine') ?? '').toUpperCase() !== expected.engine) throw new UnauthorizedException('gateway engine target does not match runtime identity');
     if (request.header('x-gateway-target-adapter-version') !== expected.adapterVersion) throw new UnauthorizedException('gateway adapter target does not match runtime identity');
   }
-
-  private expireNonces(threshold: number) { for (const [nonce, seenAt] of this.seenNonces) if (seenAt < threshold) this.seenNonces.delete(nonce); }
 }
 
 function safeEqual(left: string, right: string): boolean {

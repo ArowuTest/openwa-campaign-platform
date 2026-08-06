@@ -111,8 +111,8 @@ CREATE FUNCTION prevent_audience_import_rollback_event_mutation() RETURNS trigge
 BEGIN RAISE EXCEPTION 'audience import rollback events are append-only'; END $$;
 CREATE TRIGGER audience_import_rollback_events_append_only BEFORE UPDATE OR DELETE ON audience_import_rollback_events FOR EACH ROW EXECUTE FUNCTION prevent_audience_import_rollback_event_mutation();
 
-UPDATE role_definitions SET permissions=(SELECT ARRAY(SELECT DISTINCT unnest(permissions || ARRAY['audience.import_mapping.write','audience.import_mapping.approve','audience.import.rollback']))) WHERE code='SUPER_ADMIN';
-UPDATE role_definitions SET permissions=(SELECT ARRAY(SELECT DISTINCT unnest(permissions || ARRAY['audience.import_mapping.write']))) WHERE code='CAMPAIGN_OPERATOR';
-UPDATE role_definitions SET permissions=(SELECT ARRAY(SELECT DISTINCT unnest(permissions || ARRAY['audience.import_mapping.approve','audience.import.rollback']))) WHERE code='COMPLIANCE_REVIEWER';
+UPDATE roles SET permissions=(SELECT ARRAY(SELECT DISTINCT unnest(permissions || ARRAY['audience.import_mapping.write','audience.import_mapping.approve','audience.import.rollback']))) WHERE code='SUPER_ADMIN';
+UPDATE roles SET permissions=(SELECT ARRAY(SELECT DISTINCT unnest(permissions || ARRAY['audience.import_mapping.write']))) WHERE code='CAMPAIGN_OPERATOR';
+UPDATE roles SET permissions=(SELECT ARRAY(SELECT DISTINCT unnest(permissions || ARRAY['audience.import_mapping.approve','audience.import.rollback']))) WHERE code='COMPLIANCE_REVIEWER';
 
 COMMIT;

@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"campaign-platform/internal/observability"
 )
 
 type HTTPGateway struct {
@@ -89,6 +91,7 @@ func (g *HTTPGateway) Send(ctx context.Context, request GatewayRequest) (Gateway
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
 	}
+	observability.InjectTrace(httpRequest)
 	response, err := client.Do(httpRequest)
 	if err != nil {
 		return GatewayResult{}, GatewayError{Code: "GATEWAY_TRANSPORT_UNKNOWN", Safety: FailureOutcomeUnknown, Err: err}

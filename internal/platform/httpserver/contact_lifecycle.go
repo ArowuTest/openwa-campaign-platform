@@ -38,7 +38,7 @@ func (s *Server) listContactLifecycleEvents(w http.ResponseWriter, r *http.Reque
 		writeContactLifecycleError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": out})
+	httpx.WriteListAuto(w, http.StatusOK, out)
 }
 
 func (s *Server) transitionContactLifecycle(w http.ResponseWriter, r *http.Request) {

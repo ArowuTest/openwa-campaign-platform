@@ -17,6 +17,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"campaign-platform/internal/observability"
 )
 
 type HTTPSessionGateway struct {
@@ -94,6 +96,7 @@ func (g *HTTPSessionGateway) request(ctx context.Context, node Node, method, pat
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
 	}
+	observability.InjectTrace(req)
 	resp, err := client.Do(req)
 	if err != nil {
 		return SessionGatewayResult{}, fmt.Errorf("invoke gateway session operation: %w", err)

@@ -52,7 +52,7 @@ func (s *Server) listSenderPools(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": v, "count": len(v)})
+	httpx.WriteListAuto(w, http.StatusOK, v)
 }
 
 type senderPoolRequest struct {
@@ -120,7 +120,7 @@ func (s *Server) listSenderNodes(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, 200, map[string]any{"items": v, "count": len(v)})
+	httpx.WriteListAuto(w, 200, v)
 }
 
 type senderNodeRequest struct {
@@ -183,7 +183,7 @@ func (s *Server) listSenderSessions(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, 200, map[string]any{"items": v, "count": len(v)})
+	httpx.WriteListAuto(w, 200, v)
 }
 
 func (s *Server) getSenderSessionHealth(w http.ResponseWriter, r *http.Request) {

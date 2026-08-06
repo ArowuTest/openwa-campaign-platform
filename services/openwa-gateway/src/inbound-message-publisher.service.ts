@@ -1,6 +1,7 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { createHmac } from 'node:crypto';
 import { InboundMessageOutboxService } from './inbound-message-outbox.service';
+import { GatewayObservabilityService } from './observability.service';
 
 export type InboundMessageEvent = {
   schemaVersion: '1.0';
@@ -16,7 +17,7 @@ export type InboundMessageEvent = {
 
 @Injectable()
 export class InboundMessagePublisherService {
-  constructor(private readonly outbox: InboundMessageOutboxService) { this.outbox.setSender(event => this.deliver(event)); }
+  constructor(private readonly outbox: InboundMessageOutboxService, private readonly observability: GatewayObservabilityService) { this.outbox.setSender(event => this.deliver(event)); }
 
   async publish(event: InboundMessageEvent): Promise<void> {
     validateInbound(event);
@@ -34,7 +35,7 @@ export class InboundMessagePublisherService {
     const signature = createHmac('sha256', secret).update(timestamp).update('.').update(body).digest('hex');
     const response = await fetch(target, {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-gateway-timestamp': timestamp, 'x-gateway-signature': `sha256=${signature}` },
+      headers: { 'content-type': 'application/json', 'x-gateway-timestamp': timestamp, 'x-gateway-signature': `sha256=${signature}`, ...(this.observability.traceparent() ? { traceparent: this.observability.traceparent()! } : {}) },
       body,
       redirect: 'manual',
       signal: AbortSignal.timeout(boundedInteger(process.env.CALLBACK_TIMEOUT_MS, 5_000, 250, 30_000))

@@ -1,7 +1,7 @@
 BEGIN;
 
 ALTER TABLE segments
-  ADD COLUMN IF NOT EXISTS updated_by uuid REFERENCES users(id),
+  ADD COLUMN IF NOT EXISTS updated_by uuid REFERENCES internal_users(id),
   ADD COLUMN IF NOT EXISTS version bigint NOT NULL DEFAULT 1 CHECK (version > 0);
 
 UPDATE segments SET version=greatest(version,definition_version);
@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS segment_definition_versions (
   description text,
   definition jsonb NOT NULL,
   status text NOT NULL CHECK (status IN ('DRAFT','ACTIVE','ARCHIVED')),
-  changed_by uuid NOT NULL REFERENCES users(id),
+  changed_by uuid NOT NULL REFERENCES internal_users(id),
   reason text NOT NULL CHECK (length(trim(reason)) > 0),
   created_at timestamptz NOT NULL,
   PRIMARY KEY(segment_id,version)

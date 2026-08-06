@@ -41,7 +41,7 @@ func (s *Server) listGatewayPools(w http.ResponseWriter, r *http.Request) {
 		s.writeSenderError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
+	httpx.WriteListAuto(w, http.StatusOK, items)
 }
 func (s *Server) getGatewayPool(w http.ResponseWriter, r *http.Request) {
 	admin, ok := s.requireGatewayPools(w, r)
@@ -137,7 +137,7 @@ func (s *Server) listGatewayPoolEvents(w http.ResponseWriter, r *http.Request) {
 		s.writeSenderError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
+	httpx.WriteListAuto(w, http.StatusOK, items)
 }
 
 func (s *Server) getGatewayNode(w http.ResponseWriter, r *http.Request) {
@@ -195,7 +195,7 @@ func (s *Server) listGatewayRuntimeEvents(w http.ResponseWriter, r *http.Request
 		s.writeSenderError(w, r, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"items": items, "count": len(items)})
+	httpx.WriteListAuto(w, http.StatusOK, items)
 }
 func (s *Server) registerGatewayRuntime(w http.ResponseWriter, r *http.Request) {
 	if s.deps.GatewayRuntime == nil {

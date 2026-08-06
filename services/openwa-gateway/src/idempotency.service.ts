@@ -1,6 +1,6 @@
 import { ConflictException, Injectable, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { SendRequest, SendResult } from './provider/messaging-provider';
 
@@ -57,10 +57,11 @@ export class IdempotencyService implements OnModuleInit {
     return promise;
   }
 
-  async clearUnknown(idempotencyKey: string): Promise<void> {
+  async reconcileUnknown(idempotencyKey: string, expectedFingerprint: string, result: SendResult): Promise<void> {
     const stored = await this.read(idempotencyKey);
-    if (!stored || stored.state !== 'UNKNOWN') throw new ConflictException('only unresolved idempotency records may be cleared');
-    await rm(this.path(idempotencyKey), { force: true });
+    if (!stored || stored.state !== 'UNKNOWN') throw new ConflictException('only unresolved idempotency records may be reconciled');
+    if (stored.fingerprint !== expectedFingerprint) throw new ConflictException('reconciliation evidence does not match the original submission');
+    await this.replace(idempotencyKey, { ...stored, state: 'COMPLETED', completedAt: new Date().toISOString(), result: { ...result, duplicate: false } });
   }
 
   private async create(key: string, entry: StoredEntry) {
@@ -87,8 +88,13 @@ export class IdempotencyService implements OnModuleInit {
 
 function requestFingerprint(request: SendRequest): string {
   const canonical = JSON.stringify({
+    provider: request.provider,
+    engine: request.engine,
     gatewayPoolId: request.gatewayPoolId,
+    gatewayPoolVersion: request.gatewayPoolVersion,
+    gatewayAdapterVersion: request.gatewayAdapterVersion,
     sessionId: request.sessionId,
+    routeReference: request.routeReference,
     recipientMsisdn: request.recipientMsisdn,
     messageType: request.messageType,
     body: request.body ?? '',

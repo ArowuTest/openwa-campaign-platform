@@ -15,6 +15,15 @@ import (
 
 const testGatewaySecret = "01234567890123456789012345678901"
 
+func validGatewayRequest(now time.Time) GatewayRequest {
+	return GatewayRequest{
+		IdempotencyKey: "1234567890123456", Provider: "OPENWA", Engine: "WHATSAPP_WEB_JS",
+		GatewayPoolID: "pool-1", GatewayPoolVersion: 1, GatewayAdapterVersion: "0.13.0",
+		GatewayNodeID: "node-1", GatewayNodeVersion: 1, SessionID: "s", SessionLeaseVersion: 1,
+		SessionConfigurationVersion: 1, AuthorityExpiresAt: now.Add(10 * time.Minute), RouteReference: "campaign:recipient",
+		RecipientE164: "+2348012345678", MessageType: "text", Body: "hello",
+	}
+}
 func TestHTTPGatewaySignsCommandAndParsesAcceptance(t *testing.T) {
 	clock := func() time.Time { return time.Date(2026, 8, 4, 8, 0, 0, 0, time.UTC) }
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -36,7 +45,7 @@ func TestHTTPGatewaySignsCommandAndParsesAcceptance(t *testing.T) {
 	}))
 	defer server.Close()
 	gateway := &HTTPGateway{BaseURL: server.URL, CommandSecret: testGatewaySecret, Client: server.Client(), Clock: clock, Nonce: func() (string, error) { return "fixed-nonce-1234567890", nil }}
-	result, err := gateway.Send(context.Background(), GatewayRequest{IdempotencyKey: "1234567890123456", SessionID: "s", RecipientE164: "+2348012345678", MessageType: "text", Body: "hello"})
+	result, err := gateway.Send(context.Background(), validGatewayRequest(clock()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +56,7 @@ func TestHTTPGatewaySignsCommandAndParsesAcceptance(t *testing.T) {
 func TestHTTPGatewayTreatsAmbiguousServerErrorAsUnknown(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { http.Error(w, "failed", http.StatusInternalServerError) }))
 	defer server.Close()
-	_, err := (&HTTPGateway{BaseURL: server.URL, CommandSecret: testGatewaySecret, Client: server.Client()}).Send(context.Background(), GatewayRequest{IdempotencyKey: "1234567890123456", SessionID: "s", RecipientE164: "+2348012345678", MessageType: "text", Body: "hello"})
+	_, err := (&HTTPGateway{BaseURL: server.URL, CommandSecret: testGatewaySecret, Client: server.Client()}).Send(context.Background(), validGatewayRequest(time.Now().UTC()))
 	var gatewayErr GatewayError
 	if !errors.As(err, &gatewayErr) || gatewayErr.Safety != FailureOutcomeUnknown {
 		t.Fatalf("expected unknown, got %v", err)
@@ -59,14 +68,14 @@ func TestHTTPGatewayTreatsServiceUnavailableAsSafeRetry(t *testing.T) {
 		http.Error(w, "draining", http.StatusServiceUnavailable)
 	}))
 	defer server.Close()
-	_, err := (&HTTPGateway{BaseURL: server.URL, CommandSecret: testGatewaySecret, Client: server.Client()}).Send(context.Background(), GatewayRequest{IdempotencyKey: "1234567890123456", SessionID: "s", RecipientE164: "+2348012345678", MessageType: "text", Body: "hello"})
+	_, err := (&HTTPGateway{BaseURL: server.URL, CommandSecret: testGatewaySecret, Client: server.Client()}).Send(context.Background(), validGatewayRequest(time.Now().UTC()))
 	var gatewayErr GatewayError
 	if !errors.As(err, &gatewayErr) || gatewayErr.Safety != FailureSafeToRetry || gatewayErr.RetryAfter != 7*time.Second {
 		t.Fatalf("expected safe retry, got %v", err)
 	}
 }
 func TestHTTPGatewayFailsClosedWithoutSigningSecret(t *testing.T) {
-	_, err := (&HTTPGateway{BaseURL: "https://gateway.example"}).Send(context.Background(), GatewayRequest{IdempotencyKey: "1234567890123456", SessionID: "s", RecipientE164: "+2348012345678", MessageType: "text", Body: "hello"})
+	_, err := (&HTTPGateway{BaseURL: "https://gateway.example"}).Send(context.Background(), validGatewayRequest(time.Now().UTC()))
 	var gatewayErr GatewayError
 	if !errors.As(err, &gatewayErr) || gatewayErr.Code != "GATEWAY_COMMAND_SIGNING_INVALID" || gatewayErr.Safety != FailurePermanent {
 		t.Fatalf("expected fail-closed signing error, got %v", err)

@@ -27,7 +27,7 @@ External organisations do not receive portal access in the initial release. They
 
 ## Current checkpoint
 
-Version `0.8.24` is a backend-hardening checkpoint based on `0.8.23`. It is pre-production and must not be represented as deployment-certified.
+Version `0.8.25` is a transport trust-boundary and consent-evidence hardening checkpoint based on `0.8.24`. It is pre-production and must not be represented as deployment-certified.
 
 The repository includes:
 
@@ -38,9 +38,13 @@ The repository includes:
 - Multi-pool routing across separately governed OpenWA `WHATSAPP_WEB_JS` and `BAILEYS` gateway pools.
 - Versioned pacing policies, route capacity reservations and campaign admission forecasting.
 - Exact provider-capability definition and gateway-version evidence frozen into campaigns, routes and controlled test sends.
-- Runtime provider, engine, adapter, capability, session and gateway revalidation before submission.
+- Runtime provider, engine, adapter, capability, gateway-node, session-lease and route-fence revalidation before submission.
+- Canonical governed sender lifecycle with control-plane pairing, drain, recovery, logout and retirement operations.
+- Trusted malware-scanned message/evidence assets with derived checksum, type and size evidence.
+- Organisation-, source- and campaign-scoped consent reviews with independent approval, expiry, revocation and superseding revisions.
+- Durable signed inbound-message forwarding and protected opt-out correlation.
 - Monotonic delivery evidence, signed callbacks, reconciliation and governed operational reporting.
-- PostgreSQL migrations through `0059_backend_hardening_and_provider_binding.sql`.
+- PostgreSQL migrations through `0061_trusted_assets_and_consent_review_governance.sql`.
 - An SRS traceability catalogue containing 398 granular requirement records.
 - Imported OpenWA source under the repository's governed third-party-source model; see `UPSTREAM.md` and `THIRD_PARTY_NOTICES.md`.
 

@@ -9,7 +9,7 @@ import (
 
 type consentReviewGateStub struct{ err error }
 
-func (s consentReviewGateStub) ValidateCampaignReview(context.Context, string, string, string, time.Time) error {
+func (s consentReviewGateStub) ValidateCampaignReview(context.Context, string, string, string, string, time.Time) error {
 	return s.err
 }
 

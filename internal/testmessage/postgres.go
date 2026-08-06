@@ -99,13 +99,15 @@ func scanSend(row interface{ Scan(...any) error }) (Send, error) {
 	var v Send
 	var status string
 	var values []byte
-	var lease, completed sql.NullTime
+	var authority, lease, completed sql.NullTime
 	var owner, providerID, failure sql.NullString
 	if err := row.Scan(
 		&v.ID, &v.CampaignID, &v.MessageVersionID, &v.MessageContentHash, &v.TestRecipientID,
 		&v.GatewayPoolID, &v.GatewayPoolVersion, &v.SenderPoolID, &v.Provider, &v.Engine,
 		&v.ProviderAdapterVersion, &v.ProviderDefinitionID, &v.ProviderDefinitionVersion,
-		&v.SenderSessionID, &values, &status, &providerID, &failure,
+		&v.SenderSessionID, &v.GatewayNodeID, &v.GatewayNodeVersion, &v.SessionLeaseVersion,
+		&v.SessionConfigurationVersion, &authority, &v.RouteReference,
+		&values, &status, &providerID, &failure,
 		&v.CreatedBy, &v.Reason, &v.IdempotencyKey, &v.AttemptCount, &owner,
 		&v.LeaseVersion, &lease, &v.CreatedAt, &v.UpdatedAt, &completed,
 	); err != nil {
@@ -117,6 +119,9 @@ func scanSend(row interface{ Scan(...any) error }) (Send, error) {
 	}
 	if v.VariableValues == nil {
 		v.VariableValues = map[string]string{}
+	}
+	if authority.Valid {
+		v.AuthorityExpiresAt = authority.Time
 	}
 	if owner.Valid {
 		v.LeaseOwner = owner.String
@@ -138,7 +143,7 @@ func scanSend(row interface{ Scan(...any) error }) (Send, error) {
 	return v, nil
 }
 
-const sendSelect = `SELECT id::text,campaign_id::text,message_version_id::text,message_content_hash,test_recipient_id::text,gateway_pool_id::text,coalesce(gateway_pool_version,0),coalesce(sender_pool_id::text,''),provider,engine,coalesce(provider_adapter_version,''),coalesce(provider_capability_definition_id::text,''),coalesce(provider_capability_definition_version,0),sender_session_id::text,variable_values,status,provider_message_id,failure_code,created_by::text,reason,idempotency_key,attempt_count,lease_owner,lease_version,lease_expires_at,created_at,updated_at,completed_at FROM test_message_sends`
+const sendSelect = `SELECT id::text,campaign_id::text,message_version_id::text,message_content_hash,test_recipient_id::text,gateway_pool_id::text,coalesce(gateway_pool_version,0),coalesce(sender_pool_id::text,''),provider,engine,coalesce(provider_adapter_version,''),coalesce(provider_capability_definition_id::text,''),coalesce(provider_capability_definition_version,0),sender_session_id::text,coalesce(gateway_node_id::text,''),coalesce(gateway_node_version,0),coalesce(session_lease_version,0),coalesce(session_configuration_version,0),authority_expires_at,coalesce(route_reference,''),variable_values,status,provider_message_id,failure_code,created_by::text,reason,idempotency_key,attempt_count,lease_owner,lease_version,lease_expires_at,created_at,updated_at,completed_at FROM test_message_sends`
 
 func (r *PostgreSQLRepository) CreateSend(ctx context.Context, v Send) (Send, error) {
 	if r == nil || r.DB == nil {
@@ -148,7 +153,7 @@ func (r *PostgreSQLRepository) CreateSend(ctx context.Context, v Send) (Send, er
 	if err != nil {
 		return Send{}, fmt.Errorf("encode test-message variable values: %w", err)
 	}
-	_, err = r.DB.ExecContext(ctx, `INSERT INTO test_message_sends(id,campaign_id,message_version_id,message_content_hash,test_recipient_id,gateway_pool_id,gateway_pool_version,sender_pool_id,provider,engine,provider_adapter_version,provider_capability_definition_id,provider_capability_definition_version,sender_session_id,variable_values,status,created_by,reason,idempotency_key,created_at,updated_at) VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5::uuid,$6::uuid,$7,NULLIF($8,'')::uuid,$9,$10,$11,$12::uuid,$13,$14::uuid,$15::jsonb,$16,$17::uuid,$18,$19,$20,$20) ON CONFLICT (idempotency_key) DO NOTHING`, v.ID, v.CampaignID, v.MessageVersionID, v.MessageContentHash, v.TestRecipientID, v.GatewayPoolID, v.GatewayPoolVersion, v.SenderPoolID, v.Provider, v.Engine, v.ProviderAdapterVersion, v.ProviderDefinitionID, v.ProviderDefinitionVersion, v.SenderSessionID, values, v.Status, v.CreatedBy, v.Reason, v.IdempotencyKey, v.CreatedAt)
+	_, err = r.DB.ExecContext(ctx, `INSERT INTO test_message_sends(id,campaign_id,message_version_id,message_content_hash,test_recipient_id,gateway_pool_id,gateway_pool_version,sender_pool_id,provider,engine,provider_adapter_version,provider_capability_definition_id,provider_capability_definition_version,sender_session_id,gateway_node_id,gateway_node_version,session_lease_version,session_configuration_version,authority_expires_at,route_reference,variable_values,status,created_by,reason,idempotency_key,created_at,updated_at) VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5::uuid,$6::uuid,$7,NULLIF($8,'')::uuid,$9,$10,$11,$12::uuid,$13,$14::uuid,$15::uuid,$16,$17,$18,$19,$20,$21::jsonb,$22,$23::uuid,$24,$25,$26,$26) ON CONFLICT (idempotency_key) DO NOTHING`, v.ID, v.CampaignID, v.MessageVersionID, v.MessageContentHash, v.TestRecipientID, v.GatewayPoolID, v.GatewayPoolVersion, v.SenderPoolID, v.Provider, v.Engine, v.ProviderAdapterVersion, v.ProviderDefinitionID, v.ProviderDefinitionVersion, v.SenderSessionID, v.GatewayNodeID, v.GatewayNodeVersion, v.SessionLeaseVersion, v.SessionConfigurationVersion, v.AuthorityExpiresAt, v.RouteReference, values, v.Status, v.CreatedBy, v.Reason, v.IdempotencyKey, v.CreatedAt)
 	if err != nil {
 		return Send{}, fmt.Errorf("create test-message send: %w", err)
 	}
@@ -167,7 +172,7 @@ func sameSendRequest(a, b Send) bool {
 		a.TestRecipientID != b.TestRecipientID || a.GatewayPoolID != b.GatewayPoolID || a.GatewayPoolVersion != b.GatewayPoolVersion || a.SenderPoolID != b.SenderPoolID ||
 		a.Provider != b.Provider || a.Engine != b.Engine || a.ProviderAdapterVersion != b.ProviderAdapterVersion ||
 		a.ProviderDefinitionID != b.ProviderDefinitionID || a.ProviderDefinitionVersion != b.ProviderDefinitionVersion ||
-		a.SenderSessionID != b.SenderSessionID || a.CreatedBy != b.CreatedBy || a.Reason != b.Reason {
+		a.SenderSessionID != b.SenderSessionID || a.RouteReference != b.RouteReference || a.CreatedBy != b.CreatedBy || a.Reason != b.Reason {
 		return false
 	}
 	if len(a.VariableValues) != len(b.VariableValues) {
@@ -232,7 +237,7 @@ func (r *PostgreSQLRepository) ClaimSends(ctx context.Context, owner string, now
 	if limit <= 0 || limit > 100 {
 		limit = 20
 	}
-	rows, err := r.DB.QueryContext(ctx, `WITH c AS (SELECT id FROM test_message_sends WHERE (status='PENDING' AND (attempt_count=0 OR updated_at<=$1-interval '30 seconds')) OR (status='PROCESSING' AND lease_expires_at<=$1) ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT $2) UPDATE test_message_sends t SET status='PROCESSING',lease_owner=$3,lease_version=t.lease_version+1,lease_expires_at=$4,attempt_count=t.attempt_count+1,updated_at=$1 FROM c WHERE t.id=c.id RETURNING t.id::text,t.campaign_id::text,t.message_version_id::text,t.message_content_hash,t.test_recipient_id::text,t.gateway_pool_id::text,coalesce(t.gateway_pool_version,0),coalesce(t.sender_pool_id::text,''),t.provider,t.engine,coalesce(t.provider_adapter_version,''),coalesce(t.provider_capability_definition_id::text,''),coalesce(t.provider_capability_definition_version,0),t.sender_session_id::text,t.variable_values,t.status,t.provider_message_id,t.failure_code,t.created_by::text,t.reason,t.idempotency_key,t.attempt_count,t.lease_owner,t.lease_version,t.lease_expires_at,t.created_at,t.updated_at,t.completed_at`, now, limit, owner, now.Add(lease))
+	rows, err := r.DB.QueryContext(ctx, `WITH c AS (SELECT id FROM test_message_sends WHERE (status='PENDING' AND (attempt_count=0 OR updated_at<=$1-interval '30 seconds')) OR (status='PROCESSING' AND lease_expires_at<=$1) ORDER BY created_at,id FOR UPDATE SKIP LOCKED LIMIT $2) UPDATE test_message_sends t SET status='PROCESSING',lease_owner=$3,lease_version=t.lease_version+1,lease_expires_at=$4,attempt_count=t.attempt_count+1,updated_at=$1 FROM c WHERE t.id=c.id RETURNING t.id::text,t.campaign_id::text,t.message_version_id::text,t.message_content_hash,t.test_recipient_id::text,t.gateway_pool_id::text,coalesce(t.gateway_pool_version,0),coalesce(t.sender_pool_id::text,''),t.provider,t.engine,coalesce(t.provider_adapter_version,''),coalesce(t.provider_capability_definition_id::text,''),coalesce(t.provider_capability_definition_version,0),t.sender_session_id::text,coalesce(t.gateway_node_id::text,''),coalesce(t.gateway_node_version,0),coalesce(t.session_lease_version,0),coalesce(t.session_configuration_version,0),t.authority_expires_at,coalesce(t.route_reference,''),t.variable_values,t.status,t.provider_message_id,t.failure_code,t.created_by::text,t.reason,t.idempotency_key,t.attempt_count,t.lease_owner,t.lease_version,t.lease_expires_at,t.created_at,t.updated_at,t.completed_at`, now, limit, owner, now.Add(lease))
 	if err != nil {
 		return nil, fmt.Errorf("claim test-message sends: %w", err)
 	}
@@ -290,14 +295,18 @@ func (r *PostgreSQLRepository) ValidateTestRoute(ctx context.Context, req RouteR
 		return RouteEvidence{}, ErrInvalid
 	}
 
-	var gatewayAdapter, definitionAdapter, definitionID, minimumGatewayVersion string
-	var gatewayVersion, definitionVersion int64
+	var gatewayAdapter, definitionAdapter, definitionID, minimumGatewayVersion, gatewayNodeID string
+	var gatewayVersion, definitionVersion, gatewayNodeVersion, sessionLeaseVersion, sessionConfigurationVersion int64
+	var authorityExpiresAt time.Time
 	var gatewayCapsJSON, definitionCapsJSON []byte
 	err := r.DB.QueryRowContext(ctx, `
 SELECT g.version,g.adapter_version,g.capabilities,pd.adapter_version,pd.id::text,pd.version,
-       coalesce(pd.minimum_gateway_version,''),to_json(pd.capabilities)
+       coalesce(pd.minimum_gateway_version,''),to_json(pd.capabilities),
+       sn.id::text,sn.governance_version,s.governance_version,sl.version,sl.expires_at
 FROM campaigns c
 JOIN sender_sessions s ON s.id=$1::uuid
+JOIN sender_nodes sn ON sn.id=s.node_id
+JOIN sender_session_leases sl ON sl.session_id=s.id AND sl.worker_node_id=sn.id
 JOIN gateway_pools g ON g.id=s.gateway_pool_id
 LEFT JOIN sender_pools sp ON sp.id=s.sender_pool_id
 LEFT JOIN LATERAL (
@@ -319,6 +328,9 @@ WHERE c.id=$2::uuid
   AND ($6='' OR sp.status='ACTIVE')
   AND g.provider=$4 AND g.engine=$5
   AND g.status='ACTIVE' AND s.status IN ('READY','BUSY')
+  AND sn.status='READY' AND NOT sn.draining AND sn.last_heartbeat_at > $7 - interval '90 seconds'
+  AND s.last_heartbeat_at > $7 - interval '90 seconds'
+  AND sl.expires_at > $7
   AND pd.provider=$4 AND pd.channel='WHATSAPP' AND pd.engine=$5
   AND pd.status='ACTIVE'
   AND pd.effective_from <= $7
@@ -339,7 +351,8 @@ WHERE c.id=$2::uuid
   AND pd.adapter_version=g.adapter_version
 LIMIT 1`, req.SessionID, req.CampaignID, req.GatewayPoolID, req.Provider, req.Engine, req.SenderPoolID, req.At.UTC()).Scan(
 		&gatewayVersion, &gatewayAdapter, &gatewayCapsJSON, &definitionAdapter, &definitionID, &definitionVersion,
-		&minimumGatewayVersion, &definitionCapsJSON,
+		&minimumGatewayVersion, &definitionCapsJSON, &gatewayNodeID, &gatewayNodeVersion,
+		&sessionConfigurationVersion, &sessionLeaseVersion, &authorityExpiresAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return RouteEvidence{}, ErrInvalid
@@ -364,7 +377,16 @@ LIMIT 1`, req.SessionID, req.CampaignID, req.GatewayPoolID, req.Provider, req.En
 	if !containsCapabilities(gatewayCapabilities, req.RequiredCapabilities) || !containsCapabilities(definitionCapabilities, req.RequiredCapabilities) {
 		return RouteEvidence{}, ErrInvalid
 	}
-	return RouteEvidence{GatewayPoolVersion: gatewayVersion, AdapterVersion: gatewayAdapter, ProviderDefinitionID: definitionID, ProviderDefinitionVersion: definitionVersion}, nil
+	if strings.TrimSpace(gatewayNodeID) == "" || gatewayNodeVersion <= 0 || sessionConfigurationVersion <= 0 || sessionLeaseVersion <= 0 || !authorityExpiresAt.After(req.At) {
+		return RouteEvidence{}, ErrInvalid
+	}
+	return RouteEvidence{
+		GatewayPoolVersion: gatewayVersion, AdapterVersion: gatewayAdapter,
+		ProviderDefinitionID: definitionID, ProviderDefinitionVersion: definitionVersion,
+		GatewayNodeID: gatewayNodeID, GatewayNodeVersion: gatewayNodeVersion,
+		SessionLeaseVersion: sessionLeaseVersion, SessionConfigurationVersion: sessionConfigurationVersion,
+		AuthorityExpiresAt: authorityExpiresAt.UTC(),
+	}, nil
 }
 
 func containsCapabilities(available, required []string) bool {

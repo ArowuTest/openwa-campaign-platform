@@ -73,7 +73,8 @@ WHERE cr.id=$1::uuid AND cr.campaign_id=$2::uuid AND cr.contact_id=$3::uuid AND 
 	if err != nil {
 		return Material{}, fmt.Errorf("assign sender: %w", err)
 	}
-	route, err := l.loadGovernedRoute(ctx, recipient.ID, sessionID, mappedType, now)
+	routeReference := recipient.CampaignID + ":" + recipient.ID
+	route, err := l.loadGovernedRoute(ctx, recipient.ID, sessionID, mappedType, routeReference, now)
 	if err != nil {
 		return Material{}, err
 	}
@@ -124,7 +125,15 @@ WHERE cr.id=$1::uuid AND cr.campaign_id=$2::uuid AND cr.contact_id=$3::uuid AND 
 			return Material{}, fmt.Errorf("resolve media object: %w", err)
 		}
 	}
-	return Material{SenderPoolID: selection.SenderPoolID, Provider: route.Provider, Engine: route.Engine, GatewayPoolID: route.GatewayPoolID, SessionID: sessionID, RecipientE164: e164, MessageType: mappedType, Body: body, MediaObjectURL: mediaURL, ClientReference: recipient.ID}, nil
+	return Material{
+		SenderPoolID: selection.SenderPoolID, Provider: route.Provider, Engine: route.Engine,
+		GatewayPoolID: route.GatewayPoolID, GatewayPoolVersion: route.GatewayPoolVersion,
+		GatewayAdapterVersion: route.AdapterVersion, GatewayNodeID: route.GatewayNodeID,
+		GatewayNodeVersion: route.GatewayNodeVersion, SessionID: sessionID,
+		SessionLeaseVersion: route.SessionLeaseVersion, SessionConfigurationVersion: route.SessionConfigurationVersion,
+		AuthorityExpiresAt: route.AuthorityExpiresAt, RouteReference: routeReference,
+		RecipientE164: e164, MessageType: mappedType, Body: body, MediaObjectURL: mediaURL, ClientReference: recipient.ID,
+	}, nil
 }
 
 type allocationRouteSelection struct {
@@ -178,6 +187,12 @@ WHERE cr.id=$1::uuid`
 type governedRouteEvidence struct {
 	SessionID                       string
 	SessionSenderPoolID             string
+	SessionConfigurationVersion     int64
+	GatewayNodeID                   string
+	GatewayNodeVersion              int64
+	GatewayNodeStatus               string
+	SessionLeaseVersion             int64
+	SessionLeaseExpiresAt           time.Time
 	GatewayPoolID                   string
 	GatewayPoolVersion              int64
 	GatewayProvider                 string
@@ -208,14 +223,23 @@ type governedRouteEvidence struct {
 }
 
 type governedRoute struct {
-	GatewayPoolID string
-	Provider      string
-	Engine        string
+	GatewayPoolID               string
+	GatewayPoolVersion          int64
+	Provider                    string
+	Engine                      string
+	AdapterVersion              string
+	GatewayNodeID               string
+	GatewayNodeVersion          int64
+	SessionLeaseVersion         int64
+	SessionConfigurationVersion int64
+	AuthorityExpiresAt          time.Time
 }
 
-func (l *PostgreSQLMaterialLoader) loadGovernedRoute(ctx context.Context, recipientID, sessionID, messageType string, at time.Time) (governedRoute, error) {
+func (l *PostgreSQLMaterialLoader) loadGovernedRoute(ctx context.Context, recipientID, sessionID, messageType, routeReference string, at time.Time) (governedRoute, error) {
 	const query = `
-SELECT ss.id::text,coalesce(ss.sender_pool_id::text,''),ss.gateway_pool_id::text,gp.version,gp.provider,gp.engine,gp.adapter_version,gp.status,gp.capabilities,
+SELECT ss.id::text,coalesce(ss.sender_pool_id::text,''),ss.governance_version,coalesce(ss.node_id::text,''),
+       coalesce(sn.governance_version,0),coalesce(sn.status,''),coalesce(sl.version,0),sl.expires_at,
+       ss.gateway_pool_id::text,gp.version,gp.provider,gp.engine,gp.adapter_version,gp.status,gp.capabilities,
        CASE WHEN sh.routing_plan_id IS NULL THEN coalesce(cp.transport_session_id::text,'') ELSE '' END,
        CASE WHEN sh.routing_plan_id IS NULL THEN coalesce(cp.transport_sender_pool_id::text,'') ELSE coalesce(rp.sender_pool_id::text,'') END,
        CASE WHEN sh.routing_plan_id IS NULL THEN coalesce(cp.gateway_pool_id,'') ELSE coalesce(rp.gateway_pool_id::text,'') END,
@@ -236,6 +260,8 @@ LEFT JOIN campaign_routing_plan_pools rp
   ON rp.routing_plan_id=sh.routing_plan_id
  AND rp.sender_pool_id=sh.assigned_sender_pool_id
 JOIN sender_sessions ss ON ss.id=$1::uuid
+JOIN sender_nodes sn ON sn.id=ss.node_id
+JOIN sender_session_leases sl ON sl.session_id=ss.id AND sl.worker_node_id=ss.node_id
 JOIN gateway_pools gp ON gp.id=ss.gateway_pool_id
 LEFT JOIN provider_capability_definitions pd ON pd.id=(CASE WHEN sh.routing_plan_id IS NULL THEN cp.provider_capability_definition_id ELSE rp.provider_capability_definition_id END)
 WHERE cr.id=$2::uuid`
@@ -243,7 +269,10 @@ WHERE cr.id=$2::uuid`
 	var gatewayCapsJSON, requiredJSON []byte
 	var effectiveFrom, effectiveTo sql.NullTime
 	if err := l.DB.QueryRowContext(ctx, query, sessionID, recipientID).Scan(
-		&evidence.SessionID, &evidence.SessionSenderPoolID, &evidence.GatewayPoolID, &evidence.GatewayPoolVersion,
+		&evidence.SessionID, &evidence.SessionSenderPoolID, &evidence.SessionConfigurationVersion,
+		&evidence.GatewayNodeID, &evidence.GatewayNodeVersion, &evidence.GatewayNodeStatus,
+		&evidence.SessionLeaseVersion, &evidence.SessionLeaseExpiresAt,
+		&evidence.GatewayPoolID, &evidence.GatewayPoolVersion,
 		&evidence.GatewayProvider, &evidence.GatewayEngine, &evidence.GatewayAdapterVersion, &evidence.GatewayStatus, &gatewayCapsJSON,
 		&evidence.ExpectedSessionID, &evidence.ExpectedSenderPoolID, &evidence.ExpectedGatewayPoolID, &evidence.ExpectedGatewayPoolVersion,
 		&evidence.ExpectedProvider, &evidence.ExpectedEngine, &evidence.ExpectedAdapterVersion,
@@ -273,10 +302,69 @@ WHERE cr.id=$2::uuid`
 	if err := validateGovernedRouteEvidence(evidence, messageType, at.UTC()); err != nil {
 		return governedRoute{}, PermanentMaterialError{Err: err}
 	}
-	return governedRoute{GatewayPoolID: evidence.GatewayPoolID, Provider: evidence.GatewayProvider, Engine: evidence.GatewayEngine}, nil
+	authorityExpiry := evidence.SessionLeaseExpiresAt.UTC()
+	if maximum := at.UTC().Add(5 * time.Minute); authorityExpiry.After(maximum) {
+		authorityExpiry = maximum
+	}
+	route := governedRoute{
+		GatewayPoolID: evidence.GatewayPoolID, GatewayPoolVersion: evidence.GatewayPoolVersion,
+		Provider: evidence.GatewayProvider, Engine: evidence.GatewayEngine, AdapterVersion: evidence.GatewayAdapterVersion,
+		GatewayNodeID: evidence.GatewayNodeID, GatewayNodeVersion: evidence.GatewayNodeVersion,
+		SessionLeaseVersion: evidence.SessionLeaseVersion, SessionConfigurationVersion: evidence.SessionConfigurationVersion,
+		AuthorityExpiresAt: authorityExpiry,
+	}
+	if err := l.persistGatewayAuthority(ctx, sessionID, routeReference, route, at.UTC()); err != nil {
+		return governedRoute{}, fmt.Errorf("persist gateway authority: %w", err)
+	}
+	return route, nil
+}
+
+func (l *PostgreSQLMaterialLoader) persistGatewayAuthority(ctx context.Context, sessionID, routeReference string, route governedRoute, now time.Time) error {
+	const query = `
+WITH authority AS (
+  INSERT INTO gateway_session_authorities(
+    session_id,gateway_pool_id,owner_node_id,session_lease_version,session_configuration_version,
+    gateway_node_version,authority_expires_at,route_reference,updated_at
+  ) VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5,$6,$7,$8,$9)
+  ON CONFLICT(session_id) DO UPDATE SET
+    gateway_pool_id=excluded.gateway_pool_id,owner_node_id=excluded.owner_node_id,
+    session_lease_version=excluded.session_lease_version,
+    session_configuration_version=excluded.session_configuration_version,
+    gateway_node_version=excluded.gateway_node_version,authority_expires_at=excluded.authority_expires_at,
+    route_reference=excluded.route_reference,updated_at=excluded.updated_at
+  WHERE excluded.session_lease_version > gateway_session_authorities.session_lease_version
+     OR (excluded.session_lease_version = gateway_session_authorities.session_lease_version
+         AND excluded.session_configuration_version = gateway_session_authorities.session_configuration_version
+         AND excluded.owner_node_id = gateway_session_authorities.owner_node_id
+         AND excluded.gateway_pool_id = gateway_session_authorities.gateway_pool_id
+         AND excluded.gateway_node_version >= gateway_session_authorities.gateway_node_version)
+  RETURNING session_id
+)
+INSERT INTO gateway_session_authority_events(
+  session_id,owner_node_id,session_lease_version,session_configuration_version,gateway_node_version,
+  authority_expires_at,route_reference,event_type,evidence,occurred_at
+)
+SELECT session_id,$3::uuid,$4,$5,$6,$7,$8,'ISSUED',jsonb_build_object('source','DISPATCH','issuedAt',$9),$9
+FROM authority`
+	result, err := l.DB.ExecContext(ctx, query, sessionID, route.GatewayPoolID, route.GatewayNodeID, route.SessionLeaseVersion, route.SessionConfigurationVersion, route.GatewayNodeVersion, route.AuthorityExpiresAt, routeReference, now)
+	if err != nil {
+		return err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if rows != 1 {
+		return errors.New("gateway authority was rejected as stale or conflicting")
+	}
+	return nil
 }
 
 func validateGovernedRouteEvidence(e governedRouteEvidence, messageType string, at time.Time) error {
+	if e.SessionConfigurationVersion <= 0 || e.GatewayNodeID == "" || e.GatewayNodeVersion <= 0 ||
+		e.GatewayNodeStatus != "READY" || e.SessionLeaseVersion <= 0 || !e.SessionLeaseExpiresAt.After(at) {
+		return errors.New("assigned session has no current fenced gateway authority")
+	}
 	if e.ProviderDefinitionID == "" || e.ProviderDefinitionVersion <= 0 {
 		return errors.New("route has no frozen provider capability definition")
 	}

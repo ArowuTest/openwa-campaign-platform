@@ -100,7 +100,7 @@ export class OpenWAProvider implements MessagingProvider {
     const secret = requiredSecret('OPENWA_WEBHOOK_SECRET');
     const path = `/api/sessions/${encodeURIComponent(sessionId)}/webhooks`;
     const existing = await this.request<Array<{ id?: string; url?: string; active?: boolean; events?: string[] }>>('GET', path);
-    const events = ['message.sent', 'message.ack', 'message.failed'];
+    const events = ['message.sent', 'message.ack', 'message.failed', 'message.received'];
     const match = Array.isArray(existing) ? existing.find(item => item?.url === target) : undefined;
     if (match?.id) {
       await this.request('PUT', `${path}/${encodeURIComponent(match.id)}`, { url: target, events, secret, active: true, retryCount: 5 });

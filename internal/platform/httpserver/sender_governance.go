@@ -126,6 +126,12 @@ func (s *Server) listSenderNodes(w http.ResponseWriter, r *http.Request) {
 type senderNodeRequest struct {
 	Name            string `json:"name"`
 	PublicIP        string `json:"publicIp"`
+	InternalURL     string `json:"internalUrl"`
+	GatewayPoolID   string `json:"gatewayPoolId"`
+	Provider        string `json:"provider"`
+	Engine          string `json:"engine"`
+	AdapterVersion  string `json:"adapterVersion"`
+	BootID          string `json:"bootId"`
 	Status          string `json:"status"`
 	BuildVersion    string `json:"buildVersion"`
 	Capacity        int    `json:"capacity"`
@@ -145,7 +151,7 @@ func (s *Server) registerSenderNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actor, _ := s.senderActor(r)
-	v, err := s.deps.SenderGovernance.RegisterNode(r.Context(), sender.Node{Name: in.Name, PublicIP: in.PublicIP, Status: in.Status, BuildVersion: in.BuildVersion, Capacity: in.Capacity, QueueDepth: in.QueueDepth, Draining: in.Draining}, actor, in.Reason)
+	v, err := s.deps.SenderGovernance.RegisterNode(r.Context(), sender.Node{Name: in.Name, PublicIP: in.PublicIP, InternalURL: in.InternalURL, GatewayPoolID: in.GatewayPoolID, Provider: in.Provider, Engine: in.Engine, AdapterVersion: in.AdapterVersion, BootID: in.BootID, Status: in.Status, BuildVersion: in.BuildVersion, Capacity: in.Capacity, QueueDepth: in.QueueDepth, Draining: in.Draining}, actor, in.Reason)
 	if err != nil {
 		s.writeSenderError(w, r, err)
 		return
@@ -161,7 +167,7 @@ func (s *Server) heartbeatSenderNode(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, 400, "INVALID_JSON", "The node heartbeat is invalid.", nil)
 		return
 	}
-	v, err := s.deps.SenderGovernance.Store.HeartbeatNode(r.Context(), r.PathValue("id"), in.ExpectedVersion, sender.Node{Status: strings.ToUpper(in.Status), BuildVersion: in.BuildVersion, Capacity: in.Capacity, QueueDepth: in.QueueDepth, Draining: in.Draining}, time.Now().UTC())
+	v, err := s.deps.SenderGovernance.Store.HeartbeatNode(r.Context(), r.PathValue("id"), in.ExpectedVersion, sender.Node{InternalURL: in.InternalURL, GatewayPoolID: in.GatewayPoolID, Provider: in.Provider, Engine: in.Engine, AdapterVersion: in.AdapterVersion, BootID: in.BootID, Status: strings.ToUpper(in.Status), BuildVersion: in.BuildVersion, Capacity: in.Capacity, QueueDepth: in.QueueDepth, Draining: in.Draining}, time.Now().UTC())
 	if err != nil {
 		s.writeSenderError(w, r, err)
 		return
@@ -195,6 +201,8 @@ func (s *Server) getSenderSessionHealth(w http.ResponseWriter, r *http.Request) 
 type senderSessionRequest struct {
 	NodeID                string        `json:"nodeId"`
 	PoolID                string        `json:"poolId"`
+	GatewayPoolID         string        `json:"gatewayPoolId"`
+	StateVolumeReference  string        `json:"stateVolumeReference"`
 	MSISDN                string        `json:"msisdn"`
 	EngineType            string        `json:"engineType"`
 	EngineVersion         string        `json:"engineVersion"`
@@ -227,7 +235,7 @@ func (s *Server) registerSenderSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actor, _ := s.senderActor(r)
-	v, err := s.deps.SenderGovernance.RegisterSession(r.Context(), sender.GovernedSession{NodeID: in.NodeID, PoolID: in.PoolID, MaskedMSISDN: sharedcrypto.Mask(msisdn), EngineType: in.EngineType, EngineVersion: in.EngineVersion, Status: in.Status, SafeMessagesPerMinute: in.SafeMessagesPerMinute, SafeDailyCapacity: in.SafeDailyCapacity, InFlightLimit: in.InFlightLimit}, cipher, actor, in.Reason)
+	v, err := s.deps.SenderGovernance.RegisterSession(r.Context(), sender.GovernedSession{NodeID: in.NodeID, PoolID: in.PoolID, GatewayPoolID: in.GatewayPoolID, StateVolumeReference: in.StateVolumeReference, MaskedMSISDN: sharedcrypto.Mask(msisdn), EngineType: in.EngineType, EngineVersion: in.EngineVersion, Status: in.Status, SafeMessagesPerMinute: in.SafeMessagesPerMinute, SafeDailyCapacity: in.SafeDailyCapacity, InFlightLimit: in.InFlightLimit}, cipher, actor, in.Reason)
 	if err != nil {
 		s.writeSenderError(w, r, err)
 		return
@@ -313,4 +321,194 @@ func (s *Server) writeSenderError(w http.ResponseWriter, r *http.Request, err er
 	default:
 		httpx.WriteError(w, r, 422, "SENDER_GOVERNANCE_INVALID", err.Error(), nil)
 	}
+}
+
+type senderLifecycleRequest struct {
+	ExpectedVersion int64  `json:"expectedVersion"`
+	Reason          string `json:"reason"`
+	PhoneNumber     string `json:"phoneNumber,omitempty"`
+}
+
+func (s *Server) requireSenderLifecycle(w http.ResponseWriter, r *http.Request) (*sender.SessionLifecycleService, bool) {
+	if s.deps.SenderSessionLifecycle == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "SENDER_LIFECYCLE_UNAVAILABLE", "Governed sender-session lifecycle is unavailable.", nil)
+		return nil, false
+	}
+	return s.deps.SenderSessionLifecycle, true
+}
+func decodeSenderLifecycle(w http.ResponseWriter, r *http.Request) (senderLifecycleRequest, bool) {
+	var input senderLifecycleRequest
+	if err := httpx.DecodeJSON(w, r, 64<<10, &input); err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The sender lifecycle request is invalid.", nil)
+		return senderLifecycleRequest{}, false
+	}
+	return input, true
+}
+func senderLifecycleActor(r *http.Request) string {
+	p, _ := identity.PrincipalFromContext(r.Context())
+	return p.User.ID
+}
+func (s *Server) createGatewaySenderSession(w http.ResponseWriter, r *http.Request) {
+	lifecycle, ok := s.requireSenderLifecycle(w, r)
+	if !ok {
+		return
+	}
+	input, ok := decodeSenderLifecycle(w, r)
+	if !ok {
+		return
+	}
+	entity, gatewayResult, err := lifecycle.Create(r.Context(), r.PathValue("id"), input.ExpectedVersion, senderLifecycleActor(r), input.Reason)
+	if err != nil {
+		s.writeSenderError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"session": entity, "gateway": gatewayResult})
+}
+func (s *Server) getGatewaySenderSessionHealth(w http.ResponseWriter, r *http.Request) {
+	lifecycle, ok := s.requireSenderLifecycle(w, r)
+	if !ok {
+		return
+	}
+	result, err := lifecycle.Health(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.writeSenderError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, result)
+}
+func (s *Server) getGatewaySenderSessionQR(w http.ResponseWriter, r *http.Request) {
+	if !s.requireSenderStepUp(w, r) {
+		return
+	}
+	lifecycle, ok := s.requireSenderLifecycle(w, r)
+	if !ok {
+		return
+	}
+	result, err := lifecycle.QR(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.writeSenderError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, result)
+}
+func (s *Server) getGatewaySenderSessionPairingCode(w http.ResponseWriter, r *http.Request) {
+	if !s.requireSenderStepUp(w, r) {
+		return
+	}
+	lifecycle, ok := s.requireSenderLifecycle(w, r)
+	if !ok {
+		return
+	}
+	input, ok := decodeSenderLifecycle(w, r)
+	if !ok {
+		return
+	}
+	result, err := lifecycle.PairingCode(r.Context(), r.PathValue("id"), input.PhoneNumber)
+	if err != nil {
+		s.writeSenderError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, result)
+}
+func (s *Server) startGatewaySenderSession(w http.ResponseWriter, r *http.Request) {
+	lifecycle, ok := s.requireSenderLifecycle(w, r)
+	if !ok {
+		return
+	}
+	input, ok := decodeSenderLifecycle(w, r)
+	if !ok {
+		return
+	}
+	entity, result, err := lifecycle.Start(r.Context(), r.PathValue("id"), input.ExpectedVersion, senderLifecycleActor(r), input.Reason)
+	if err != nil {
+		s.writeSenderError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"session": entity, "gateway": result})
+}
+func (s *Server) drainGatewaySenderSession(w http.ResponseWriter, r *http.Request) {
+	lifecycle, ok := s.requireSenderLifecycle(w, r)
+	if !ok {
+		return
+	}
+	input, ok := decodeSenderLifecycle(w, r)
+	if !ok {
+		return
+	}
+	entity, err := lifecycle.Drain(r.Context(), r.PathValue("id"), input.ExpectedVersion, senderLifecycleActor(r), input.Reason)
+	if err != nil {
+		s.writeSenderError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, entity)
+}
+func (s *Server) resumeGatewaySenderSession(w http.ResponseWriter, r *http.Request) {
+	lifecycle, ok := s.requireSenderLifecycle(w, r)
+	if !ok {
+		return
+	}
+	input, ok := decodeSenderLifecycle(w, r)
+	if !ok {
+		return
+	}
+	entity, err := lifecycle.Resume(r.Context(), r.PathValue("id"), input.ExpectedVersion, senderLifecycleActor(r), input.Reason)
+	if err != nil {
+		s.writeSenderError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, entity)
+}
+func (s *Server) stopGatewaySenderSession(w http.ResponseWriter, r *http.Request) {
+	lifecycle, ok := s.requireSenderLifecycle(w, r)
+	if !ok {
+		return
+	}
+	input, ok := decodeSenderLifecycle(w, r)
+	if !ok {
+		return
+	}
+	entity, result, err := lifecycle.Stop(r.Context(), r.PathValue("id"), input.ExpectedVersion, senderLifecycleActor(r), input.Reason)
+	if err != nil {
+		s.writeSenderError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"session": entity, "gateway": result})
+}
+func (s *Server) logoutGatewaySenderSession(w http.ResponseWriter, r *http.Request) {
+	if !s.requireSenderStepUp(w, r) {
+		return
+	}
+	lifecycle, ok := s.requireSenderLifecycle(w, r)
+	if !ok {
+		return
+	}
+	input, ok := decodeSenderLifecycle(w, r)
+	if !ok {
+		return
+	}
+	entity, result, err := lifecycle.Logout(r.Context(), r.PathValue("id"), input.ExpectedVersion, senderLifecycleActor(r), input.Reason)
+	if err != nil {
+		s.writeSenderError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"session": entity, "gateway": result})
+}
+func (s *Server) deleteGatewaySenderSession(w http.ResponseWriter, r *http.Request) {
+	if !s.requireSenderStepUp(w, r) {
+		return
+	}
+	lifecycle, ok := s.requireSenderLifecycle(w, r)
+	if !ok {
+		return
+	}
+	input, ok := decodeSenderLifecycle(w, r)
+	if !ok {
+		return
+	}
+	entity, err := lifecycle.Delete(r.Context(), r.PathValue("id"), input.ExpectedVersion, senderLifecycleActor(r), input.Reason)
+	if err != nil {
+		s.writeSenderError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, entity)
 }

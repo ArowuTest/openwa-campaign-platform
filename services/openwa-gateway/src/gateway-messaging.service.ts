@@ -1,18 +1,23 @@
-import { Inject, Injectable, NotImplementedException } from '@nestjs/common';
+import { Inject, Injectable, NotImplementedException, ServiceUnavailableException } from '@nestjs/common';
 import { IdempotencyService } from './idempotency.service';
 import { SessionPipelineService } from './session-pipeline.service';
 import { MESSAGING_PROVIDER } from './provider/provider.token';
 import type { MessagingProvider, SendRequest, SendResult, SessionHealth, SessionRecord } from './provider/messaging-provider';
+import { SessionAuthorityService } from './session-authority.service';
 
 @Injectable()
 export class GatewayMessagingService {
   constructor(
     @Inject(MESSAGING_PROVIDER) private readonly provider: MessagingProvider,
     private readonly idempotency: IdempotencyService,
-    private readonly pipelines: SessionPipelineService
+    private readonly pipelines: SessionPipelineService,
+    private readonly authorities: SessionAuthorityService
   ) {}
 
-  send(request: SendRequest): Promise<SendResult> {
+  async send(request: SendRequest): Promise<SendResult> {
+    await this.authorities.validate(request);
+    const health = await this.provider.health(request.sessionId);
+    if (!health.ready || health.status !== 'READY') throw new ServiceUnavailableException('session is not ready for governed submission');
     return this.pipelines.run(request.sessionId, () =>
       this.idempotency.execute(request, () => this.provider.send(request))
     );

@@ -50,34 +50,40 @@ type Recipient struct {
 }
 
 type Send struct {
-	ID                        string            `json:"id"`
-	CampaignID                string            `json:"campaignId"`
-	MessageVersionID          string            `json:"messageVersionId"`
-	MessageContentHash        string            `json:"messageContentHash"`
-	TestRecipientID           string            `json:"testRecipientId"`
-	GatewayPoolID             string            `json:"gatewayPoolId"`
-	GatewayPoolVersion        int64             `json:"gatewayPoolVersion"`
-	SenderPoolID              string            `json:"senderPoolId,omitempty"`
-	Provider                  string            `json:"provider"`
-	Engine                    string            `json:"engine"`
-	ProviderAdapterVersion    string            `json:"providerAdapterVersion"`
-	ProviderDefinitionID      string            `json:"providerDefinitionId"`
-	ProviderDefinitionVersion int64             `json:"providerDefinitionVersion"`
-	SenderSessionID           string            `json:"senderSessionId"`
-	VariableValues            map[string]string `json:"variableValues"`
-	Status                    SendStatus        `json:"status"`
-	ProviderMessageID         string            `json:"providerMessageId,omitempty"`
-	FailureCode               string            `json:"failureCode,omitempty"`
-	CreatedBy                 string            `json:"createdBy"`
-	Reason                    string            `json:"reason"`
-	IdempotencyKey            string            `json:"idempotencyKey"`
-	AttemptCount              int               `json:"attemptCount"`
-	LeaseOwner                string            `json:"leaseOwner,omitempty"`
-	LeaseVersion              int64             `json:"leaseVersion"`
-	LeaseExpiresAt            *time.Time        `json:"leaseExpiresAt,omitempty"`
-	CreatedAt                 time.Time         `json:"createdAt"`
-	UpdatedAt                 time.Time         `json:"updatedAt"`
-	CompletedAt               *time.Time        `json:"completedAt,omitempty"`
+	ID                          string            `json:"id"`
+	CampaignID                  string            `json:"campaignId"`
+	MessageVersionID            string            `json:"messageVersionId"`
+	MessageContentHash          string            `json:"messageContentHash"`
+	TestRecipientID             string            `json:"testRecipientId"`
+	GatewayPoolID               string            `json:"gatewayPoolId"`
+	GatewayPoolVersion          int64             `json:"gatewayPoolVersion"`
+	SenderPoolID                string            `json:"senderPoolId,omitempty"`
+	Provider                    string            `json:"provider"`
+	Engine                      string            `json:"engine"`
+	ProviderAdapterVersion      string            `json:"providerAdapterVersion"`
+	ProviderDefinitionID        string            `json:"providerDefinitionId"`
+	ProviderDefinitionVersion   int64             `json:"providerDefinitionVersion"`
+	SenderSessionID             string            `json:"senderSessionId"`
+	GatewayNodeID               string            `json:"gatewayNodeId"`
+	GatewayNodeVersion          int64             `json:"gatewayNodeVersion"`
+	SessionLeaseVersion         int64             `json:"sessionLeaseVersion"`
+	SessionConfigurationVersion int64             `json:"sessionConfigurationVersion"`
+	AuthorityExpiresAt          time.Time         `json:"authorityExpiresAt"`
+	RouteReference              string            `json:"routeReference"`
+	VariableValues              map[string]string `json:"variableValues"`
+	Status                      SendStatus        `json:"status"`
+	ProviderMessageID           string            `json:"providerMessageId,omitempty"`
+	FailureCode                 string            `json:"failureCode,omitempty"`
+	CreatedBy                   string            `json:"createdBy"`
+	Reason                      string            `json:"reason"`
+	IdempotencyKey              string            `json:"idempotencyKey"`
+	AttemptCount                int               `json:"attemptCount"`
+	LeaseOwner                  string            `json:"leaseOwner,omitempty"`
+	LeaseVersion                int64             `json:"leaseVersion"`
+	LeaseExpiresAt              *time.Time        `json:"leaseExpiresAt,omitempty"`
+	CreatedAt                   time.Time         `json:"createdAt"`
+	UpdatedAt                   time.Time         `json:"updatedAt"`
+	CompletedAt                 *time.Time        `json:"completedAt,omitempty"`
 }
 
 var (
@@ -112,10 +118,15 @@ type RouteRequirements struct {
 }
 
 type RouteEvidence struct {
-	GatewayPoolVersion        int64
-	AdapterVersion            string
-	ProviderDefinitionID      string
-	ProviderDefinitionVersion int64
+	GatewayPoolVersion          int64
+	AdapterVersion              string
+	ProviderDefinitionID        string
+	ProviderDefinitionVersion   int64
+	GatewayNodeID               string
+	GatewayNodeVersion          int64
+	SessionLeaseVersion         int64
+	SessionConfigurationVersion int64
+	AuthorityExpiresAt          time.Time
 }
 
 type RouteValidator interface {
@@ -253,14 +264,27 @@ func (s *Service) Schedule(ctx context.Context, campaignID, messageVersionID, re
 	if err != nil {
 		return Send{}, err
 	}
-	if routeEvidence.GatewayPoolVersion <= 0 || strings.TrimSpace(routeEvidence.AdapterVersion) == "" || strings.TrimSpace(routeEvidence.ProviderDefinitionID) == "" || routeEvidence.ProviderDefinitionVersion <= 0 {
+	if routeEvidence.GatewayPoolVersion <= 0 || strings.TrimSpace(routeEvidence.AdapterVersion) == "" || strings.TrimSpace(routeEvidence.ProviderDefinitionID) == "" || routeEvidence.ProviderDefinitionVersion <= 0 ||
+		strings.TrimSpace(routeEvidence.GatewayNodeID) == "" || routeEvidence.GatewayNodeVersion <= 0 || routeEvidence.SessionLeaseVersion <= 0 ||
+		routeEvidence.SessionConfigurationVersion <= 0 || !routeEvidence.AuthorityExpiresAt.After(now) {
 		return Send{}, ErrInvalid
 	}
 	ident, err := id.New()
 	if err != nil {
 		return Send{}, err
 	}
-	send := Send{ID: ident, CampaignID: campaignID, MessageVersionID: messageVersionID, MessageContentHash: v.ContentHash, TestRecipientID: recipientID, GatewayPoolID: gatewayPoolID, GatewayPoolVersion: routeEvidence.GatewayPoolVersion, SenderPoolID: strings.TrimSpace(senderPoolID), Provider: provider, Engine: engine, ProviderAdapterVersion: routeEvidence.AdapterVersion, ProviderDefinitionID: routeEvidence.ProviderDefinitionID, ProviderDefinitionVersion: routeEvidence.ProviderDefinitionVersion, SenderSessionID: sessionID, VariableValues: values, Status: SendPending, CreatedBy: actor, Reason: strings.TrimSpace(reason), IdempotencyKey: strings.TrimSpace(idempotency), LeaseVersion: 0, CreatedAt: now, UpdatedAt: now}
+	send := Send{
+		ID: ident, CampaignID: campaignID, MessageVersionID: messageVersionID, MessageContentHash: v.ContentHash,
+		TestRecipientID: recipientID, GatewayPoolID: gatewayPoolID, GatewayPoolVersion: routeEvidence.GatewayPoolVersion,
+		SenderPoolID: strings.TrimSpace(senderPoolID), Provider: provider, Engine: engine,
+		ProviderAdapterVersion: routeEvidence.AdapterVersion, ProviderDefinitionID: routeEvidence.ProviderDefinitionID,
+		ProviderDefinitionVersion: routeEvidence.ProviderDefinitionVersion, SenderSessionID: sessionID,
+		GatewayNodeID: routeEvidence.GatewayNodeID, GatewayNodeVersion: routeEvidence.GatewayNodeVersion,
+		SessionLeaseVersion: routeEvidence.SessionLeaseVersion, SessionConfigurationVersion: routeEvidence.SessionConfigurationVersion,
+		AuthorityExpiresAt: routeEvidence.AuthorityExpiresAt, RouteReference: "test:" + campaignID + ":" + strings.TrimSpace(idempotency),
+		VariableValues: values, Status: SendPending, CreatedBy: actor, Reason: strings.TrimSpace(reason),
+		IdempotencyKey: strings.TrimSpace(idempotency), LeaseVersion: 0, CreatedAt: now, UpdatedAt: now,
+	}
 	return s.Repository.CreateSend(ctx, send)
 }
 func testMessageCapability(messageType message.Type) (string, error) {

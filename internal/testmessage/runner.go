@@ -77,7 +77,16 @@ func (p *Processor) Process(ctx context.Context, send Send) error {
 	if err != nil {
 		return p.finish(ctx, send, SendFailed, "", "MESSAGE_RENDER_FAILED", now)
 	}
-	material := dispatch.Material{SenderPoolID: send.SenderPoolID, Provider: send.Provider, Engine: send.Engine, GatewayPoolID: send.GatewayPoolID, SessionID: send.SenderSessionID, RecipientE164: e164, MessageType: strings.ToLower(string(version.Type)), Body: rendered.Body, ClientReference: "test-send:" + send.ID}
+	material := dispatch.Material{
+		SenderPoolID: send.SenderPoolID, Provider: send.Provider, Engine: send.Engine,
+		GatewayPoolID: send.GatewayPoolID, GatewayPoolVersion: routeEvidence.GatewayPoolVersion,
+		GatewayAdapterVersion: routeEvidence.AdapterVersion, GatewayNodeID: routeEvidence.GatewayNodeID,
+		GatewayNodeVersion: routeEvidence.GatewayNodeVersion, SessionID: send.SenderSessionID,
+		SessionLeaseVersion: routeEvidence.SessionLeaseVersion, SessionConfigurationVersion: routeEvidence.SessionConfigurationVersion,
+		AuthorityExpiresAt: routeEvidence.AuthorityExpiresAt, RouteReference: send.RouteReference,
+		RecipientE164: e164, MessageType: strings.ToLower(string(version.Type)), Body: rendered.Body,
+		ClientReference: "test-send:" + send.ID,
+	}
 	if version.Type == message.TypeImageCaption {
 		material.MessageType = "image"
 	}
@@ -105,7 +114,16 @@ func (p *Processor) Process(ctx context.Context, send Send) error {
 			return p.finish(ctx, send, SendPending, "", "PACING_WAIT_FAILED", now)
 		}
 	}
-	result, err := p.Gateway.Send(ctx, dispatch.GatewayRequest{IdempotencyKey: "test:" + send.IdempotencyKey, GatewayPoolID: send.GatewayPoolID, SessionID: send.SenderSessionID, RecipientE164: e164, MessageType: material.MessageType, Body: material.Body, MediaURL: material.MediaObjectURL, ClientReference: material.ClientReference})
+	result, err := p.Gateway.Send(ctx, dispatch.GatewayRequest{
+		IdempotencyKey: "test:" + send.IdempotencyKey, Provider: send.Provider, Engine: send.Engine,
+		GatewayPoolID: send.GatewayPoolID, GatewayPoolVersion: routeEvidence.GatewayPoolVersion,
+		GatewayAdapterVersion: routeEvidence.AdapterVersion, GatewayNodeID: routeEvidence.GatewayNodeID,
+		GatewayNodeVersion: routeEvidence.GatewayNodeVersion, SessionID: send.SenderSessionID,
+		SessionLeaseVersion: routeEvidence.SessionLeaseVersion, SessionConfigurationVersion: routeEvidence.SessionConfigurationVersion,
+		AuthorityExpiresAt: routeEvidence.AuthorityExpiresAt, RouteReference: send.RouteReference,
+		RecipientE164: e164, MessageType: material.MessageType, Body: material.Body,
+		MediaURL: material.MediaObjectURL, ClientReference: material.ClientReference,
+	})
 	if err != nil {
 		var ge dispatch.GatewayError
 		if !errors.As(err, &ge) {

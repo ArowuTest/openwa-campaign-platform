@@ -11,6 +11,12 @@ func validGovernedRouteEvidence() governedRouteEvidence {
 	return governedRouteEvidence{
 		SessionID:                       "session-1",
 		SessionSenderPoolID:             "sender-pool-1",
+		SessionConfigurationVersion:     4,
+		GatewayNodeID:                   "node-1",
+		GatewayNodeVersion:              9,
+		GatewayNodeStatus:               "READY",
+		SessionLeaseVersion:             12,
+		SessionLeaseExpiresAt:           now.Add(10 * time.Minute),
 		GatewayPoolID:                   "gateway-1",
 		GatewayPoolVersion:              7,
 		GatewayProvider:                 "OPENWA",

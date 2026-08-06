@@ -32,6 +32,12 @@ import (
 	"campaign-platform/internal/storage"
 )
 
+type httpReviewEvidenceResolver struct{}
+
+func (httpReviewEvidenceResolver) ResolveConsentEvidence(_ context.Context, id string) (consent.EvidenceAsset, error) {
+	return consent.EvidenceAsset{ID: id, ObjectKey: "evidence/" + id}, nil
+}
+
 func testServer(t *testing.T) (http.Handler, string) {
 	t.Helper()
 	registry, err := audiencefilter.NewRegistry(audiencefilter.DefaultDefinitions()...)
@@ -107,10 +113,10 @@ func TestOrganisationAndConsentReviewWorkflow(t *testing.T) {
 		"channel":                  "WHATSAPP",
 		"consentSource":            "Registration form",
 		"wordingVersion":           "v1",
-		"evidenceObjectKeys":       []string{},
 		"privacyNoticeReviewed":    true,
 		"optOutProcessReviewed":    true,
 		"sampleRecordsReviewed":    true,
+		"sampleReviewNotes":        "Reviewed 20 randomly selected records; identifiers were not retained.",
 		"permittedCountries":       []string{"NG"},
 		"permittedMessageCategory": "Entertainment",
 		"restrictions":             "One campaign only",
@@ -198,12 +204,27 @@ func TestCampaignTransitionsResolveSnapshotAndMessageEvidenceServerSide(t *testi
 		t.Fatal(err)
 	}
 	consents := consent.NewService(consent.NewMemoryRepository())
-	review, err := consents.Create(context.Background(), consent.CreateInput{OrganisationID: org.ID, Name: "Reviewed source", Channel: "WHATSAPP", ConsentSource: "form", WordingVersion: "v1", PrivacyNoticeReviewed: true, OptOutProcessReviewed: true, SampleRecordsReviewed: true})
+	consents.Evidence = httpReviewEvidenceResolver{}
+	from := time.Now().UTC().Add(-30 * 24 * time.Hour)
+	to := time.Now().UTC().Add(-24 * time.Hour)
+	review, err := consents.Create(context.Background(), consent.CreateInput{
+		OrganisationID: org.ID, Scope: consent.ReviewScopeSource, SourceSystem: "registration", Name: "Reviewed source",
+		PurposeDescription: "Event notifications", PurposeCode: "EVENT_NOTIFICATION", Channel: "WHATSAPP",
+		ConsentSource: "form", CollectionMethod: "WEB_FORM", CollectionPeriodFrom: &from, CollectionPeriodTo: &to,
+		ControllerRole: "CONTROLLER", WordingVersion: "v1", ExactConsentWording: "I agree to event notifications.",
+		PrivacyNoticeVersion: "privacy-v1", EvidenceAssetIDs: []string{"asset-1"}, PrivacyNoticeReviewed: true,
+		OptOutProcessReviewed: true, SampleRecordsReviewed: true, SampleReviewNotes: "Reviewed 20 randomly selected records; identifiers were not retained.", PermittedCountries: []string{"NG"},
+		PermittedMessageCategory: "EVENT_NOTIFICATION", CreatedBy: "review-maker",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	review, err = consents.Submit(context.Background(), review.ID, consent.SubmitInput{ActorID: "review-submitter", ExpectedVersion: review.Version, Reason: "evidence complete"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	expires := time.Now().UTC().Add(24 * time.Hour)
-	review, err = consents.Decide(context.Background(), review.ID, consent.DecisionInput{ReviewerID: "privacy-reviewer", Decision: consent.StatusApproved, ExpiresAt: &expires, ExpectedVersion: review.Version})
+	review, err = consents.Decide(context.Background(), review.ID, consent.DecisionInput{ReviewerID: "privacy-reviewer", Decision: consent.StatusApproved, ExpiresAt: &expires, Reason: "consent approved", ExpectedVersion: review.Version})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -3,15 +3,72 @@
   "$id": "provider-inbound-message.schema.json",
   "title": "ProviderInboundMessageV1",
   "type": "object",
-  "required": ["schemaVersion", "eventId", "sessionId", "clientReference", "messageText", "occurredAt"],
+  "required": [
+    "schemaVersion",
+    "eventId",
+    "sessionId",
+    "messageText",
+    "occurredAt"
+  ],
   "properties": {
-    "schemaVersion": { "const": "1.0" },
-    "eventId": { "type": "string", "minLength": 1, "maxLength": 200 },
-    "sessionId": { "type": "string", "minLength": 1, "maxLength": 200 },
-    "clientReference": { "type": "string", "minLength": 1, "maxLength": 200 },
-    "providerMessageId": { "type": "string", "minLength": 1, "maxLength": 500 },
-    "messageText": { "type": "string", "minLength": 1, "maxLength": 4096 },
-    "occurredAt": { "type": "string", "format": "date-time" }
+    "schemaVersion": {
+      "const": "1.0"
+    },
+    "eventId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "sessionId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "clientReference": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "providerMessageId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "messageText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 4096
+    },
+    "occurredAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "quotedProviderMessageId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500
+    },
+    "senderMsisdn": {
+      "type": "string",
+      "pattern": "^\\+[1-9]\\d{7,14}$"
+    }
   },
-  "additionalProperties": false
+  "additionalProperties": false,
+  "anyOf": [
+    {
+      "required": [
+        "clientReference"
+      ]
+    },
+    {
+      "required": [
+        "quotedProviderMessageId"
+      ]
+    },
+    {
+      "required": [
+        "senderMsisdn"
+      ]
+    }
+  ]
 }

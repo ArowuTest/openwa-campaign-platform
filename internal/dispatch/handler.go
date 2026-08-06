@@ -18,16 +18,24 @@ type JobPayload struct {
 }
 
 type Material struct {
-	SenderPoolID    string
-	Provider        string
-	Engine          string
-	GatewayPoolID   string
-	SessionID       string
-	RecipientE164   string
-	MessageType     string
-	Body            string
-	MediaObjectURL  string
-	ClientReference string
+	SenderPoolID                string
+	Provider                    string
+	Engine                      string
+	GatewayPoolID               string
+	GatewayPoolVersion          int64
+	GatewayAdapterVersion       string
+	GatewayNodeID               string
+	GatewayNodeVersion          int64
+	SessionID                   string
+	SessionLeaseVersion         int64
+	SessionConfigurationVersion int64
+	AuthorityExpiresAt          time.Time
+	RouteReference              string
+	RecipientE164               string
+	MessageType                 string
+	Body                        string
+	MediaObjectURL              string
+	ClientReference             string
 }
 
 type MaterialLoader interface {
@@ -54,14 +62,24 @@ type FinalEligibility interface {
 }
 
 type GatewayRequest struct {
-	IdempotencyKey  string
-	GatewayPoolID   string
-	SessionID       string
-	RecipientE164   string
-	MessageType     string
-	Body            string
-	MediaURL        string
-	ClientReference string
+	IdempotencyKey              string
+	Provider                    string
+	Engine                      string
+	GatewayPoolID               string
+	GatewayPoolVersion          int64
+	GatewayAdapterVersion       string
+	GatewayNodeID               string
+	GatewayNodeVersion          int64
+	SessionID                   string
+	SessionLeaseVersion         int64
+	SessionConfigurationVersion int64
+	AuthorityExpiresAt          time.Time
+	RouteReference              string
+	RecipientE164               string
+	MessageType                 string
+	Body                        string
+	MediaURL                    string
+	ClientReference             string
 }
 
 type GatewayResult struct {
@@ -169,7 +187,16 @@ func (h *Handler) Handle(ctx context.Context, job jobs.Job) error {
 	if _, _, err = h.Ledger.ApplyEvent(ctx, recipient.ID, delivery.Event{DeduplicationKey: "submitting:" + attemptKey, Type: delivery.EventSubmitting, OccurredAt: now}); err != nil {
 		return err
 	}
-	result, sendErr := h.Gateway.Send(ctx, GatewayRequest{IdempotencyKey: recipient.IdempotencyKey, GatewayPoolID: material.GatewayPoolID, SessionID: material.SessionID, RecipientE164: material.RecipientE164, MessageType: material.MessageType, Body: material.Body, MediaURL: material.MediaObjectURL, ClientReference: material.ClientReference})
+	result, sendErr := h.Gateway.Send(ctx, GatewayRequest{
+		IdempotencyKey: recipient.IdempotencyKey, Provider: material.Provider, Engine: material.Engine,
+		GatewayPoolID: material.GatewayPoolID, GatewayPoolVersion: material.GatewayPoolVersion,
+		GatewayAdapterVersion: material.GatewayAdapterVersion, GatewayNodeID: material.GatewayNodeID,
+		GatewayNodeVersion: material.GatewayNodeVersion, SessionID: material.SessionID,
+		SessionLeaseVersion: material.SessionLeaseVersion, SessionConfigurationVersion: material.SessionConfigurationVersion,
+		AuthorityExpiresAt: material.AuthorityExpiresAt, RouteReference: material.RouteReference,
+		RecipientE164: material.RecipientE164, MessageType: material.MessageType, Body: material.Body,
+		MediaURL: material.MediaObjectURL, ClientReference: material.ClientReference,
+	})
 	if sendErr != nil {
 		var gatewayErr GatewayError
 		if !errors.As(sendErr, &gatewayErr) {
@@ -221,7 +248,11 @@ func terminalWithoutSend(status delivery.Status) bool {
 	}
 }
 func validateMaterial(v Material) error {
-	if strings.TrimSpace(v.GatewayPoolID) == "" || strings.TrimSpace(v.SessionID) == "" || !strings.HasPrefix(v.RecipientE164, "+") {
+	if strings.TrimSpace(v.Provider) == "" || strings.TrimSpace(v.Engine) == "" || strings.TrimSpace(v.GatewayPoolID) == "" ||
+		v.GatewayPoolVersion <= 0 || strings.TrimSpace(v.GatewayAdapterVersion) == "" || strings.TrimSpace(v.GatewayNodeID) == "" ||
+		v.GatewayNodeVersion <= 0 || strings.TrimSpace(v.SessionID) == "" || v.SessionLeaseVersion <= 0 ||
+		v.SessionConfigurationVersion <= 0 || v.AuthorityExpiresAt.IsZero() || strings.TrimSpace(v.RouteReference) == "" ||
+		!strings.HasPrefix(v.RecipientE164, "+") {
 		return errors.New("dispatch material requires session and E.164 recipient")
 	}
 	if v.MessageType == "text" && strings.TrimSpace(v.Body) == "" {

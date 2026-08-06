@@ -2,6 +2,7 @@ import { BadRequestException, Controller, Headers, Post, Req, UnauthorizedExcept
 import type { Request } from 'express';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { ProviderEventPublisherService } from './provider-event-publisher.service';
+import { InboundMessagePublisherService } from './inbound-message-publisher.service';
 
 type RawRequest = Request & { rawBody?: Buffer };
 type OpenWAEnvelope = {
@@ -15,7 +16,7 @@ type OpenWAEnvelope = {
 
 @Controller('/internal/openwa')
 export class OpenWAWebhookController {
-  constructor(private readonly publisher: ProviderEventPublisherService) {}
+  constructor(private readonly publisher: ProviderEventPublisherService, private readonly inbound: InboundMessagePublisherService) {}
 
   @Post('/events')
   async ingest(
@@ -27,6 +28,10 @@ export class OpenWAWebhookController {
     verifyOpenWASignature(raw, signature, process.env.OPENWA_WEBHOOK_SECRET ?? '');
     const envelope = request.body as OpenWAEnvelope;
     validateEnvelope(envelope, headerIdempotencyKey);
+    if (String(envelope.event ?? '') === 'message.received') {
+      await this.inbound.publish(mapInbound(envelope, String(envelope.idempotencyKey || headerIdempotencyKey)));
+      return { accepted: true, ignored: false, inbound: true };
+    }
     const mapped = mapEvent(envelope);
     if (!mapped) return { accepted: true, ignored: true };
     await this.publisher.publish(this.publisher.create({
@@ -74,6 +79,33 @@ function mapEvent(envelope: OpenWAEnvelope): {
     return { eventType: 'message.failed_permanent', providerMessageId, clientReference, occurredAt, errorCode: 'OPENWA_MESSAGE_FAILED', errorDetail: 'OpenWA reported a failed outbound message' };
   }
   return null;
+}
+
+function mapInbound(envelope: OpenWAEnvelope, eventId: string) {
+  const data = envelope.data ?? {};
+  const quoted = objectValue(data.quotedMessage);
+  const senderMsisdn = senderE164(data.senderPhone ?? data.author ?? data.from);
+  const body = String(data.body ?? '').trim();
+  if (!body || body.length > 4096) throw new BadRequestException('OpenWA inbound message body is invalid');
+  const providerMessageId = cleanId(data.id ?? data.messageId);
+  const quotedProviderMessageId = cleanId(quoted?.id);
+  const clientReference = cleanId(data.clientReference);
+  if (!clientReference && !quotedProviderMessageId && !senderMsisdn) throw new BadRequestException('OpenWA inbound message has no safe recipient correlation evidence');
+  return {
+    schemaVersion: '1.0' as const, eventId, sessionId: String(envelope.sessionId), clientReference,
+    providerMessageId, quotedProviderMessageId, senderMsisdn, messageText: body,
+    occurredAt: eventTime(envelope.timestamp, data.timestamp)
+  };
+}
+function objectValue(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
+}
+function senderE164(value: unknown): string | undefined {
+  let text = String(value ?? '').trim();
+  if (!text) return undefined;
+  if (text.startsWith('+')) return /^\+[1-9]\d{7,14}$/.test(text) ? text : undefined;
+  text = text.split('@')[0].replace(/\D/g, '');
+  return /^[1-9]\d{7,14}$/.test(text) ? `+${text}` : undefined;
 }
 
 function verifyOpenWASignature(raw: Buffer, signature: string | undefined, secret: string) {

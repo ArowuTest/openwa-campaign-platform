@@ -30,6 +30,12 @@ type Node struct {
 	ID              string     `json:"id"`
 	Name            string     `json:"name"`
 	PublicIP        string     `json:"publicIp,omitempty"`
+	InternalURL     string     `json:"internalUrl,omitempty"`
+	GatewayPoolID   string     `json:"gatewayPoolId,omitempty"`
+	Provider        string     `json:"provider,omitempty"`
+	Engine          string     `json:"engine,omitempty"`
+	AdapterVersion  string     `json:"adapterVersion,omitempty"`
+	BootID          string     `json:"bootId,omitempty"`
 	Status          string     `json:"status"`
 	BuildVersion    string     `json:"buildVersion,omitempty"`
 	Capacity        int        `json:"capacity"`
@@ -43,9 +49,11 @@ type GovernedSession struct {
 	ID                    string     `json:"id"`
 	NodeID                string     `json:"nodeId,omitempty"`
 	PoolID                string     `json:"poolId,omitempty"`
+	GatewayPoolID         string     `json:"gatewayPoolId,omitempty"`
 	MaskedMSISDN          string     `json:"maskedMsisdn"`
 	EngineType            string     `json:"engineType"`
 	EngineVersion         string     `json:"engineVersion,omitempty"`
+	StateVolumeReference  string     `json:"stateVolumeReference,omitempty"`
 	Status                Status     `json:"status"`
 	SafeMessagesPerMinute int        `json:"safeMessagesPerMinute"`
 	SafeDailyCapacity     int64      `json:"safeDailyCapacity"`
@@ -77,6 +85,7 @@ type GovernanceStore interface {
 	CreatePool(context.Context, Pool, string, string) (Pool, error)
 	UpdatePool(context.Context, string, int64, Pool, string, string) (Pool, error)
 	ListNodes(context.Context) ([]Node, error)
+	GetNode(context.Context, string) (Node, error)
 	RegisterNode(context.Context, Node, string, string) (Node, error)
 	HeartbeatNode(context.Context, string, int64, Node, time.Time) (Node, error)
 	ListSessions(context.Context) ([]GovernedSession, error)
@@ -130,12 +139,30 @@ func (s *GovernanceService) UpdatePool(ctx context.Context, id string, expected 
 
 func (s *GovernanceService) RegisterNode(ctx context.Context, value Node, actor, reason string) (Node, error) {
 	value.Name = strings.TrimSpace(value.Name)
+	value.InternalURL = strings.TrimRight(strings.TrimSpace(value.InternalURL), "/")
+	value.GatewayPoolID = strings.TrimSpace(value.GatewayPoolID)
+	value.Provider = strings.ToUpper(strings.TrimSpace(value.Provider))
+	value.Engine = strings.ToUpper(strings.TrimSpace(value.Engine))
+	value.AdapterVersion = strings.TrimSpace(value.AdapterVersion)
+	value.BootID = strings.TrimSpace(value.BootID)
 	value.Status = strings.ToUpper(strings.TrimSpace(value.Status))
 	if value.Name == "" || actor == "" || strings.TrimSpace(reason) == "" {
 		return Node{}, errors.New("name, actor and reason are required")
 	}
 	if value.Status == "" {
-		value.Status = "READY"
+		value.Status = "OFFLINE"
+	}
+	if value.Status != "READY" && value.Status != "DRAINING" && value.Status != "UNHEALTHY" && value.Status != "OFFLINE" {
+		return Node{}, errors.New("invalid node status")
+	}
+	if value.InternalURL != "" && !strings.HasPrefix(value.InternalURL, "https://") && !strings.HasPrefix(value.InternalURL, "http://") {
+		return Node{}, errors.New("node internal URL must be HTTP or HTTPS")
+	}
+	if value.Provider != "" && value.Provider != "OPENWA" {
+		return Node{}, errors.New("initial release supports OPENWA sender nodes")
+	}
+	if value.Engine != "" && value.Engine != "WHATSAPP_WEB_JS" && value.Engine != "BAILEYS" {
+		return Node{}, errors.New("invalid OpenWA engine")
 	}
 	if value.Capacity < 0 || value.Capacity > 1000 {
 		return Node{}, errors.New("node capacity is invalid")
@@ -150,7 +177,10 @@ func (s *GovernanceService) RegisterSession(ctx context.Context, value GovernedS
 		return GovernedSession{}, errors.New("sender identity, engine, actor and reason are required")
 	}
 	if value.Status == "" {
-		value.Status = StatusReady
+		value.Status = StatusNew
+	}
+	if value.Status != StatusNew {
+		return GovernedSession{}, errors.New("new sender sessions must begin in NEW state")
 	}
 	if value.SafeMessagesPerMinute <= 0 || value.SafeDailyCapacity <= 0 || value.InFlightLimit <= 0 || value.InFlightLimit > 100 {
 		return GovernedSession{}, errors.New("session capacity limits are invalid")
@@ -166,11 +196,47 @@ func (s *GovernanceService) TransitionSession(ctx context.Context, id string, ex
 		return GovernedSession{}, errors.New("use the governed quarantine operation")
 	}
 	switch status {
-	case StatusReady, StatusBusy, StatusPaused, StatusDisconnected, StatusRestricted, StatusQuarantined, StatusRetired:
+	case StatusNew, StatusPairing, StatusConnecting, StatusReady, StatusBusy, StatusDraining, StatusPaused, StatusDisconnected, StatusRecovering, StatusRecoveryFail, StatusRestricted, StatusQuarantined, StatusRetired:
 	default:
 		return GovernedSession{}, fmt.Errorf("invalid sender status %q", status)
 	}
+	current, err := s.Store.GetSession(ctx, id)
+	if err != nil {
+		return GovernedSession{}, err
+	}
+	if current.Version != expected {
+		return GovernedSession{}, ErrSenderConflict
+	}
+	if !AllowedSessionTransition(current.Status, status) {
+		return GovernedSession{}, fmt.Errorf("sender transition %s -> %s is not permitted", current.Status, status)
+	}
 	return s.Store.TransitionSession(ctx, id, expected, status, actor, reason)
+}
+
+// AllowedSessionTransition is the canonical sender-session state machine. Both
+// memory and PostgreSQL implementations call through the service, and the
+// database migration mirrors these states so a newly registered or unpaired
+// account can never be allocated as READY.
+func AllowedSessionTransition(from, to Status) bool {
+	if from == to {
+		return true
+	}
+	allowed := map[Status]map[Status]bool{
+		StatusNew:          {StatusPairing: true, StatusRetired: true},
+		StatusPairing:      {StatusConnecting: true, StatusPaused: true, StatusDisconnected: true, StatusRestricted: true, StatusRetired: true},
+		StatusConnecting:   {StatusReady: true, StatusDisconnected: true, StatusRestricted: true, StatusRecovering: true},
+		StatusReady:        {StatusBusy: true, StatusDraining: true, StatusPaused: true, StatusDisconnected: true, StatusRestricted: true, StatusQuarantined: true, StatusRetired: true},
+		StatusBusy:         {StatusReady: true, StatusDraining: true, StatusPaused: true, StatusDisconnected: true, StatusRestricted: true, StatusQuarantined: true},
+		StatusDraining:     {StatusPaused: true, StatusReady: true, StatusDisconnected: true, StatusPairing: true, StatusRetired: true},
+		StatusPaused:       {StatusConnecting: true, StatusReady: true, StatusRecovering: true, StatusDisconnected: true, StatusPairing: true, StatusRetired: true},
+		StatusDisconnected: {StatusConnecting: true, StatusRecovering: true, StatusPairing: true, StatusRestricted: true, StatusRetired: true},
+		StatusRecovering:   {StatusConnecting: true, StatusReady: true, StatusRecoveryFail: true, StatusRestricted: true},
+		StatusRecoveryFail: {StatusRecovering: true, StatusPairing: true, StatusRetired: true},
+		StatusRestricted:   {StatusRecovering: true, StatusPaused: true, StatusPairing: true, StatusRetired: true},
+		StatusQuarantined:  {StatusReady: true, StatusRetired: true},
+		StatusRetired:      {},
+	}
+	return allowed[from][to]
 }
 
 func (s *GovernanceService) QuarantineSession(ctx context.Context, id string, expected int64, actor, reason string) (GovernedSession, error) {

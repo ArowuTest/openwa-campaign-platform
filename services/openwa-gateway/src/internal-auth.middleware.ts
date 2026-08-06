@@ -1,12 +1,14 @@
 import { Injectable, NestMiddleware, UnauthorizedException } from '@nestjs/common';
 import type { NextFunction, Request, Response } from 'express';
 import { createHash, createHmac, timingSafeEqual } from 'node:crypto';
+import { GatewayIdentityService } from './gateway-identity.service';
 
 type RawRequest = Request & { rawBody?: Buffer };
 
 @Injectable()
 export class InternalAuthMiddleware implements NestMiddleware {
   private readonly seenNonces = new Map<string, number>();
+  constructor(private readonly identity: GatewayIdentityService) {}
 
   use(request: RawRequest, _response: Response, next: NextFunction) {
     const secret = process.env.GATEWAY_COMMAND_SECRET ?? '';
@@ -30,8 +32,19 @@ export class InternalAuthMiddleware implements NestMiddleware {
     const canonical = [request.method.toUpperCase(), request.originalUrl, timestamp, nonce, bodyHash].join('\n');
     const expected = `sha256=${createHmac('sha256', secret).update(canonical).digest('hex')}`;
     if (!safeEqual(expected, signature)) throw new UnauthorizedException('invalid gateway command signature');
+    if (request.path.startsWith('/v1/sessions')) this.assertTargetIdentity(request);
     this.seenNonces.set(nonce, now);
     next();
+  }
+
+  private assertTargetIdentity(request: Request) {
+    const expected = this.identity.describe();
+    const nodeVersion = Number.parseInt(request.header('x-gateway-target-node-version') ?? '', 10);
+    if (request.header('x-gateway-target-node-id') !== expected.nodeId || nodeVersion !== expected.nodeVersion) throw new UnauthorizedException('gateway node target does not match runtime identity');
+    if (request.header('x-gateway-target-pool-id') !== expected.gatewayPoolId) throw new UnauthorizedException('gateway pool target does not match runtime identity');
+    if ((request.header('x-gateway-target-provider') ?? '').toUpperCase() !== expected.provider) throw new UnauthorizedException('gateway provider target does not match runtime identity');
+    if ((request.header('x-gateway-target-engine') ?? '').toUpperCase() !== expected.engine) throw new UnauthorizedException('gateway engine target does not match runtime identity');
+    if (request.header('x-gateway-target-adapter-version') !== expected.adapterVersion) throw new UnauthorizedException('gateway adapter target does not match runtime identity');
   }
 
   private expireNonces(threshold: number) { for (const [nonce, seenAt] of this.seenNonces) if (seenAt < threshold) this.seenNonces.delete(nonce); }

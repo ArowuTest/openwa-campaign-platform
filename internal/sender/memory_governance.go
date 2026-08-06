@@ -76,6 +76,16 @@ func (m *MemoryGovernanceStore) ListNodes(context.Context) ([]Node, error) {
 	}
 	return out, nil
 }
+func (m *MemoryGovernanceStore) GetNode(_ context.Context, id string) (Node, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	v, ok := m.nodes[id]
+	if !ok {
+		return Node{}, ErrSenderNotFound
+	}
+	return v, nil
+}
+
 func (m *MemoryGovernanceStore) RegisterNode(_ context.Context, v Node, _, _ string) (Node, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -96,6 +106,24 @@ func (m *MemoryGovernanceStore) HeartbeatNode(_ context.Context, id string, e in
 	}
 	cur.Status = v.Status
 	cur.BuildVersion = v.BuildVersion
+	if v.InternalURL != "" {
+		cur.InternalURL = v.InternalURL
+	}
+	if v.GatewayPoolID != "" {
+		cur.GatewayPoolID = v.GatewayPoolID
+	}
+	if v.Provider != "" {
+		cur.Provider = v.Provider
+	}
+	if v.Engine != "" {
+		cur.Engine = v.Engine
+	}
+	if v.AdapterVersion != "" {
+		cur.AdapterVersion = v.AdapterVersion
+	}
+	if v.BootID != "" {
+		cur.BootID = v.BootID
+	}
 	cur.Capacity = v.Capacity
 	cur.QueueDepth = v.QueueDepth
 	cur.Draining = v.Draining
@@ -140,6 +168,9 @@ func (m *MemoryGovernanceStore) TransitionSession(_ context.Context, id string, 
 		return GovernedSession{}, ErrSenderNotFound
 	}
 	if cur.Version != e {
+		return GovernedSession{}, ErrSenderConflict
+	}
+	if !AllowedSessionTransition(cur.Status, status) {
 		return GovernedSession{}, ErrSenderConflict
 	}
 	if status == StatusQuarantined && (cur.Status == StatusRetired || cur.Status == StatusQuarantined) {

@@ -31,6 +31,7 @@ const (
 )
 
 type Media struct {
+	AssetID    string `json:"assetId"`
 	ObjectKey  string `json:"objectKey"`
 	SHA256     string `json:"sha256"`
 	MediaType  string `json:"mediaType"`
@@ -69,6 +70,7 @@ type Input struct {
 	Type           Type
 	Body           string
 	Media          *Media
+	MediaAssetID   string
 	Links          []Link
 	Variables      []Variable
 	CreatedBy      string

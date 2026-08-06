@@ -32,12 +32,28 @@ type HTTPGateway struct {
 }
 
 func (g *HTTPGateway) Send(ctx context.Context, request GatewayRequest) (GatewayResult, error) {
+	now := time.Now().UTC()
+	if g.Clock != nil {
+		now = g.Clock().UTC()
+	}
+	if err := validateGatewayRequest(request, now); err != nil {
+		return GatewayResult{}, GatewayError{Code: "GATEWAY_REQUEST_INVALID", Safety: FailurePermanent, Err: err}
+	}
 	base, err := url.Parse(strings.TrimSpace(g.BaseURL))
 	if err != nil || base.Scheme == "" || base.Host == "" {
 		return GatewayResult{}, GatewayError{Code: "GATEWAY_CONFIGURATION_INVALID", Safety: FailurePermanent, Err: errors.New("valid gateway base URL is required")}
 	}
 	base.Path = strings.TrimRight(base.Path, "/") + "/v1/messages"
-	payload := map[string]any{"idempotencyKey": request.IdempotencyKey, "gatewayPoolId": request.GatewayPoolID, "sessionId": request.SessionID, "recipientMsisdn": request.RecipientE164, "messageType": request.MessageType, "body": emptyAsNil(request.Body), "mediaUrl": emptyAsNil(request.MediaURL), "clientReference": emptyAsNil(request.ClientReference)}
+	payload := map[string]any{
+		"idempotencyKey": request.IdempotencyKey, "provider": request.Provider, "engine": request.Engine,
+		"gatewayPoolId": request.GatewayPoolID, "gatewayPoolVersion": request.GatewayPoolVersion,
+		"gatewayAdapterVersion": request.GatewayAdapterVersion, "gatewayNodeId": request.GatewayNodeID,
+		"gatewayNodeVersion": request.GatewayNodeVersion, "sessionId": request.SessionID,
+		"sessionLeaseVersion": request.SessionLeaseVersion, "sessionConfigurationVersion": request.SessionConfigurationVersion,
+		"authorityExpiresAt": request.AuthorityExpiresAt.UTC().Format(time.RFC3339Nano), "routeReference": request.RouteReference,
+		"recipientMsisdn": request.RecipientE164, "messageType": request.MessageType, "body": emptyAsNil(request.Body),
+		"mediaUrl": emptyAsNil(request.MediaURL), "clientReference": emptyAsNil(request.ClientReference),
+	}
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return GatewayResult{}, GatewayError{Code: "GATEWAY_REQUEST_INVALID", Safety: FailurePermanent, Err: err}
@@ -53,10 +69,6 @@ func (g *HTTPGateway) Send(ctx context.Context, request GatewayRequest) (Gateway
 	}
 	if len([]byte(secret)) < 32 {
 		return GatewayResult{}, GatewayError{Code: "GATEWAY_COMMAND_SIGNING_INVALID", Safety: FailurePermanent, Err: errors.New("gateway command secret must contain at least 32 bytes")}
-	}
-	now := time.Now().UTC()
-	if g.Clock != nil {
-		now = g.Clock().UTC()
 	}
 	nonce, err := randomNonce()
 	if g.Nonce != nil {
@@ -117,6 +129,25 @@ func (g *HTTPGateway) Send(ctx context.Context, request GatewayRequest) (Gateway
 		return GatewayResult{}, GatewayError{Code: nonEmpty(decoded.ErrorCode, "GATEWAY_REJECTED"), Safety: FailurePermanent, Err: errors.New(redactedGatewayError([]byte(decoded.ErrorDetail)))}
 	}
 	return GatewayResult{Accepted: true, ProviderMessageID: decoded.ProviderMessageID, AcceptedAt: decoded.AcceptedAt, RawStatusCode: fmt.Sprintf("HTTP_%d", response.StatusCode)}, nil
+}
+
+func validateGatewayRequest(request GatewayRequest, now time.Time) error {
+	if strings.ToUpper(strings.TrimSpace(request.Provider)) != "OPENWA" {
+		return errors.New("gateway request provider must be OPENWA")
+	}
+	engine := strings.ToUpper(strings.TrimSpace(request.Engine))
+	if engine != "WHATSAPP_WEB_JS" && engine != "BAILEYS" {
+		return errors.New("gateway request engine is invalid")
+	}
+	if strings.TrimSpace(request.GatewayPoolID) == "" || request.GatewayPoolVersion <= 0 || strings.TrimSpace(request.GatewayAdapterVersion) == "" ||
+		strings.TrimSpace(request.GatewayNodeID) == "" || request.GatewayNodeVersion <= 0 || strings.TrimSpace(request.SessionID) == "" ||
+		request.SessionLeaseVersion <= 0 || request.SessionConfigurationVersion <= 0 || strings.TrimSpace(request.RouteReference) == "" {
+		return errors.New("gateway request authority evidence is incomplete")
+	}
+	if !request.AuthorityExpiresAt.After(now) {
+		return errors.New("gateway request authority has expired")
+	}
+	return nil
 }
 
 func signedCommandCanonical(method, requestURI, timestamp, nonce string, body []byte) string {

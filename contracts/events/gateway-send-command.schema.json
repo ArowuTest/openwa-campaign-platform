@@ -7,6 +7,16 @@
   "required": [
     "idempotencyKey",
     "gatewayPoolId",
+    "routeReference",
+    "authorityExpiresAt",
+    "sessionConfigurationVersion",
+    "sessionLeaseVersion",
+    "gatewayNodeVersion",
+    "gatewayNodeId",
+    "gatewayAdapterVersion",
+    "gatewayPoolVersion",
+    "engine",
+    "provider",
     "sessionId",
     "recipientMsisdn",
     "messageType",
@@ -50,6 +60,49 @@
     "gatewayPoolId": {
       "type": "string",
       "pattern": "^[A-Za-z0-9:_-]{1,128}$"
+    },
+    "provider": {
+      "const": "OPENWA"
+    },
+    "engine": {
+      "enum": [
+        "WHATSAPP_WEB_JS",
+        "BAILEYS"
+      ]
+    },
+    "gatewayPoolVersion": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "gatewayAdapterVersion": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "gatewayNodeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9:_-]{1,128}$"
+    },
+    "gatewayNodeVersion": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "sessionLeaseVersion": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "sessionConfigurationVersion": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "authorityExpiresAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "routeReference": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._:-]{1,200}$"
     }
   }
 }

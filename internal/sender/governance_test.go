@@ -6,6 +6,21 @@ import (
 	"time"
 )
 
+func registerReadySession(t *testing.T, ctx context.Context, svc *GovernanceService, store *MemoryGovernanceStore, value GovernedSession) GovernedSession {
+	t.Helper()
+	value.Status = StatusNew
+	session, err := svc.RegisterSession(ctx, value, []byte("cipher"), "actor", "approved sender")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, status := range []Status{StatusPairing, StatusConnecting, StatusReady} {
+		session, err = svc.TransitionSession(ctx, session.ID, session.Version, status, "actor", "complete sender lifecycle")
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	return session
+}
 func TestGovernedSenderCapacityAndConflicts(t *testing.T) {
 	ctx := context.Background()
 	store := NewMemoryGovernanceStore()
@@ -18,10 +33,7 @@ func TestGovernedSenderCapacityAndConflicts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s, err := svc.RegisterSession(ctx, GovernedSession{NodeID: n.ID, PoolID: p.ID, MaskedMSISDN: "+234 801 *** 1234", EngineType: "openwa", Status: StatusReady, SafeMessagesPerMinute: 50, SafeDailyCapacity: 5000, InFlightLimit: 2}, []byte("cipher"), "actor", "approved sender")
-	if err != nil {
-		t.Fatal(err)
-	}
+	s := registerReadySession(t, ctx, svc, store, GovernedSession{NodeID: n.ID, PoolID: p.ID, MaskedMSISDN: "+234 801 *** 1234", EngineType: "openwa", SafeMessagesPerMinute: 50, SafeDailyCapacity: 5000, InFlightLimit: 2})
 	now := time.Now().UTC()
 	s, err = store.HeartbeatSession(ctx, s.ID, s.Version, GovernedSession{Status: StatusReady, EngineVersion: "test", SafeMessagesPerMinute: 50, SafeDailyCapacity: 5000, InFlightLimit: 2, SentToday: 500}, now)
 	if err != nil {
@@ -49,7 +61,7 @@ func TestQuarantineExcludesCapacityAndHeartbeatCannotReinstate(t *testing.T) {
 	svc := &GovernanceService{Store: store}
 	pool, _ := svc.CreatePool(ctx, Pool{Name: "Quarantine pool", MaxMessagesPerMinute: 100, DailyCapacity: 1000}, "actor", "approved pool")
 	node, _ := svc.RegisterNode(ctx, Node{Name: "worker-q", Status: "READY", Capacity: 1}, "actor", "approved node")
-	session, _ := svc.RegisterSession(ctx, GovernedSession{NodeID: node.ID, PoolID: pool.ID, MaskedMSISDN: "+234 ***", EngineType: "openwa", Status: StatusReady, SafeMessagesPerMinute: 25, SafeDailyCapacity: 500, InFlightLimit: 1}, []byte("cipher"), "actor", "approved sender")
+	session := registerReadySession(t, ctx, svc, store, GovernedSession{NodeID: node.ID, PoolID: pool.ID, MaskedMSISDN: "+234 ***", EngineType: "openwa", SafeMessagesPerMinute: 25, SafeDailyCapacity: 500, InFlightLimit: 1})
 	now := time.Now().UTC()
 	node, _ = store.HeartbeatNode(ctx, node.ID, node.Version, Node{Status: "READY", Capacity: 1}, now)
 	session, _ = store.HeartbeatSession(ctx, session.ID, session.Version, GovernedSession{Status: StatusReady, SafeMessagesPerMinute: 25, SafeDailyCapacity: 500, InFlightLimit: 1}, now)
@@ -95,7 +107,15 @@ func TestHealthAssessmentRecommendsDrainAndQuarantine(t *testing.T) {
 	ctx := context.Background()
 	store := NewMemoryGovernanceStore()
 	svc := &GovernanceService{Store: store}
-	session, err := svc.RegisterSession(ctx, GovernedSession{MaskedMSISDN: "+234 ***", EngineType: "openwa", Status: StatusDisconnected, SafeMessagesPerMinute: 10, SafeDailyCapacity: 100, InFlightLimit: 1, SentToday: 95}, []byte("cipher"), "actor", "approved sender")
+	session, err := svc.RegisterSession(ctx, GovernedSession{MaskedMSISDN: "+234 ***", EngineType: "openwa", Status: StatusNew, SafeMessagesPerMinute: 10, SafeDailyCapacity: 100, InFlightLimit: 1, SentToday: 95}, []byte("cipher"), "actor", "approved sender")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err = svc.TransitionSession(ctx, session.ID, session.Version, StatusPairing, "actor", "begin sender pairing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err = svc.TransitionSession(ctx, session.ID, session.Version, StatusDisconnected, "actor", "pairing connection lost")
 	if err != nil {
 		t.Fatal(err)
 	}

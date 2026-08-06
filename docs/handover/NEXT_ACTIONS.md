@@ -1,8 +1,19 @@
-# Next actions after 0.8.24
+# Next actions
 
-1. Execute migrations `0001` through `0059` against production-like PostgreSQL and retain migration, locking and rollback/recovery evidence.
-2. Run `EXPLAIN (ANALYZE, BUFFERS)` and endurance tests for recipient claims, keyset evidence reads, reporting, reconciliation, routing reservations and provider activation.
-3. Complete the remaining repository-wide API pagination, idempotency and concurrency audit and reconcile every affected SRS requirement with code and test evidence.
-4. Build and contract-test both retained OpenWA engines, then execute genuine pairing, media, callback, reconnect and unknown-outcome scenarios.
-5. Complete Hostinger deployment automation, secret rotation, backup/restore, disaster recovery and operational runbooks.
-6. Begin production frontend integration only against the reviewed, stable API surface; do not mark `1.0.0` until the release gates pass.
+## Next backend package — 0.8.26
+
+1. Complete secure export list/detail/download authorisation, immutable render criteria, revocation, expiry, download audit and production-quality XLSX/PDF output.
+2. Add safe streaming XLSX audience import with worksheet, formula, external-link, archive-size and row/column controls.
+3. Add privacy/data-subject cases for access, correction, objection, restriction, deletion/anonymisation, portability and legal-hold conflicts.
+4. Enforce governed small-cohort privacy thresholds and complete report audience-waterfall evidence.
+5. Expand contact lifecycle/provenance and sensitive-operation audit search.
+6. Add a production S3/MinIO-compatible object-store adapter with streaming, checksums, version evidence and short-lived signed access.
+
+## External gates retained
+
+- production-like PostgreSQL migration and concurrency validation;
+- dependency-resolved gateway build and real OpenWA sessions;
+- target-volume performance and endurance evidence;
+- Hostinger deployment, backup, restore and disaster-recovery proof;
+- security assessment and operational key management;
+- production frontend completion.

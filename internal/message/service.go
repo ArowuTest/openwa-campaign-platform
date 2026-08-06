@@ -27,9 +27,25 @@ type Repository interface {
 	Approve(context.Context, string, string, string, time.Time) (Version, error)
 }
 
+type TrustedAsset struct {
+	ID        string
+	ObjectKey string
+	SHA256    string
+	MediaType string
+	Size      int64
+}
+type AssetResolver interface {
+	ResolveMessageAsset(context.Context, string) (TrustedAsset, error)
+}
+type LinkPolicyProvider interface {
+	AllowedDestinationHosts(context.Context) ([]string, string, error)
+}
+
 type Service struct {
-	repository Repository
-	clock      func() time.Time
+	repository   Repository
+	clock        func() time.Time
+	Assets       AssetResolver
+	LinkPolicies LinkPolicyProvider
 }
 
 func NewService(repository Repository) *Service {
@@ -39,6 +55,25 @@ func NewService(repository Repository) *Service {
 func (s *Service) CreateDraft(ctx context.Context, input Input) (Version, error) {
 	if s == nil || s.repository == nil {
 		return Version{}, errors.New("message repository is required")
+	}
+	if strings.TrimSpace(input.MediaAssetID) != "" {
+		if s.Assets == nil {
+			return Version{}, errors.New("trusted message asset resolver is required")
+		}
+		asset, err := s.Assets.ResolveMessageAsset(ctx, input.MediaAssetID)
+		if err != nil {
+			return Version{}, err
+		}
+		input.Media = &Media{AssetID: asset.ID, ObjectKey: asset.ObjectKey, SHA256: asset.SHA256, MediaType: asset.MediaType, Size: asset.Size, ScanStatus: "CLEAN"}
+	} else if input.Media != nil && s.Assets != nil {
+		return Version{}, errors.New("direct media metadata is not accepted; use a trusted media asset")
+	}
+	if s.LinkPolicies != nil {
+		hosts, _, err := s.LinkPolicies.AllowedDestinationHosts(ctx)
+		if err != nil {
+			return Version{}, err
+		}
+		input.AllowedHosts = hosts
 	}
 	return s.repository.CreateDraft(ctx, input, s.clock())
 }

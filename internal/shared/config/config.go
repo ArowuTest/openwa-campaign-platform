@@ -42,6 +42,7 @@ type Config struct {
 	InboundContentActiveKey   string
 	InboundRetentionDays      int
 	GatewayCallbackSecret     string
+	GatewayCommandSecret      string
 	GatewayCallbackMaxSkew    time.Duration
 	MediaDownloadSecret       string
 	ObjectStoreRoot           string
@@ -52,6 +53,7 @@ type Config struct {
 	AllowedNetworkCIDRs       []netip.Prefix
 	TrustedProxyCIDRs         []netip.Prefix
 	OptOutKeywords            []string
+	MessageAllowedHosts       []string
 }
 
 // Load parses configuration without silently replacing malformed values with
@@ -60,6 +62,7 @@ type Config struct {
 func Load() (Config, error) {
 	environment := strings.ToLower(strings.TrimSpace(envOrDefault("APP_ENV", "development")))
 	callbackSecret := strings.TrimSpace(os.Getenv("GATEWAY_CALLBACK_SECRET"))
+	commandSecret := strings.TrimSpace(os.Getenv("GATEWAY_COMMAND_SECRET"))
 	mediaDownloadSecret := strings.TrimSpace(os.Getenv("MEDIA_DOWNLOAD_SECRET"))
 	objectStoreRoot := strings.TrimSpace(os.Getenv("OBJECT_STORE_ROOT"))
 	if objectStoreRoot == "" && environment == "development" {
@@ -67,6 +70,9 @@ func Load() (Config, error) {
 	}
 	if callbackSecret == "" && environment == "development" {
 		callbackSecret = "development-gateway-callback-secret-change-me"
+	}
+	if commandSecret == "" && environment == "development" {
+		commandSecret = "development-gateway-command-secret-change-me"
 	}
 	if mediaDownloadSecret == "" && environment == "development" {
 		mediaDownloadSecret = "development-media-download-secret-change-me"
@@ -141,6 +147,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	messageAllowedHosts, err := stringListEnv("MESSAGE_ALLOWED_HOSTS", nil)
+	if err != nil {
+		return Config{}, err
+	}
 
 	cfg := Config{
 		Environment:               environment,
@@ -169,6 +179,7 @@ func Load() (Config, error) {
 		InboundContentActiveKey:   strings.TrimSpace(envOrDefault("INBOUND_CONTENT_ACTIVE_KEY_VERSION", "v1")),
 		InboundRetentionDays:      inboundRetentionDays,
 		GatewayCallbackSecret:     callbackSecret,
+		GatewayCommandSecret:      commandSecret,
 		GatewayCallbackMaxSkew:    callbackSkew,
 		MediaDownloadSecret:       mediaDownloadSecret,
 		ObjectStoreRoot:           objectStoreRoot,
@@ -179,6 +190,7 @@ func Load() (Config, error) {
 		AllowedNetworkCIDRs:       allowedNetworks,
 		TrustedProxyCIDRs:         trustedProxies,
 		OptOutKeywords:            optOutKeywords,
+		MessageAllowedHosts:       messageAllowedHosts,
 	}
 	if cfg.BootstrapAdminPassword == "" && environment == "development" {
 		cfg.BootstrapAdminPassword = "development-only-password-change-me"
@@ -231,6 +243,9 @@ func (c Config) Validate() error {
 	}
 	if len(c.GatewayCallbackSecret) > 0 && len(c.GatewayCallbackSecret) < 32 {
 		return errors.New("GATEWAY_CALLBACK_SECRET must contain at least 32 characters")
+	}
+	if len(c.GatewayCommandSecret) > 0 && len(c.GatewayCommandSecret) < 32 {
+		return errors.New("GATEWAY_COMMAND_SECRET must contain at least 32 characters")
 	}
 	if len(c.MediaDownloadSecret) > 0 && len(c.MediaDownloadSecret) < 32 {
 		return errors.New("MEDIA_DOWNLOAD_SECRET must contain at least 32 characters")

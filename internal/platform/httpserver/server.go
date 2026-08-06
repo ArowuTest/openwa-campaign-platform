@@ -80,6 +80,7 @@ type Dependencies struct {
 	AudienceMaterialisations *materialisation.MaterialisationService
 	Releases                 *orchestration.ReleaseService
 	SenderGovernance         *sender.GovernanceService
+	SenderSessionLifecycle   *sender.SessionLifecycleService
 	PacingPolicies           *sender.PacingAdministration
 	ProviderCapabilities     *provider.Service
 	DeliveryMetrics          *delivery.MetricsService
@@ -99,6 +100,7 @@ type Dependencies struct {
 	GatewayCallbackMaxSkew   time.Duration
 	GatewayCallbackMaxBody   int64
 	MediaObjects             storage.ObjectStore
+	TrustedAssets            *storage.TrustedAssetService
 	MediaDownloadSecret      []byte
 	ReadinessChecks          []ReadinessCheck
 	NetworkPolicy            NetworkPolicy
@@ -141,6 +143,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/auth/logout", s.require("", s.logout))
 	mux.Handle("GET /api/v1/auth/me", s.require("", s.me))
 	mux.Handle("GET /api/v1/filter-definitions", s.require("audience.read", s.listFilterDefinitions))
+	mux.Handle("POST /api/v1/assets", s.require("", s.uploadTrustedAsset))
+	mux.Handle("GET /api/v1/assets/{id}", s.require("", s.getTrustedAsset))
+	mux.Handle("POST /api/v1/assets/{id}/revoke", s.require("security.admin", s.revokeTrustedAsset))
 	mux.Handle("GET /api/v1/admin/users", s.require("identity.admin", s.listInternalUsers))
 	mux.Handle("POST /api/v1/admin/users", s.require("identity.admin", s.createInternalUser))
 	mux.Handle("PUT /api/v1/admin/users/{id}", s.require("identity.admin", s.updateInternalUser))
@@ -179,7 +184,11 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/organisation-policies/{id}/decision", s.require("organisation.approve", s.decideOrganisationPolicy))
 	mux.Handle("GET /api/v1/consent-reviews", s.require("consent.read", s.listConsentReviews))
 	mux.Handle("POST /api/v1/consent-reviews", s.require("consent.write", s.createConsentReview))
+	mux.Handle("GET /api/v1/consent-reviews/{id}", s.require("consent.read", s.getConsentReview))
+	mux.Handle("POST /api/v1/consent-reviews/{id}/submit", s.require("consent.write", s.submitConsentReview))
 	mux.Handle("POST /api/v1/consent-reviews/{id}/decision", s.require("consent.review", s.decideConsentReview))
+	mux.Handle("POST /api/v1/consent-reviews/{id}/revoke", s.require("consent.review", s.revokeConsentReview))
+	mux.Handle("POST /api/v1/consent-reviews/{id}/revisions", s.require("consent.write", s.createConsentReviewRevision))
 	mux.Handle("POST /api/v1/consent-grants", s.require("consent.write", s.createConsentGrant))
 	mux.Handle("POST /api/v1/consent-grants/{id}/withdraw", s.require("consent.write", s.withdrawConsentGrant))
 	mux.Handle("POST /api/v1/suppressions", s.require("consent.write", s.createSuppression))
@@ -302,6 +311,16 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/sender-sessions/{id}/transition", s.require("sender.operate", s.transitionSenderSession))
 	mux.Handle("POST /api/v1/sender-sessions/{id}/quarantine", s.require("sender.operate", s.quarantineSenderSession))
 	mux.Handle("POST /api/v1/sender-sessions/{id}/reinstate", s.require("sender.admin", s.reinstateSenderSession))
+	mux.Handle("POST /api/v1/sender-sessions/{id}/gateway/create", s.require("sender.admin", s.createGatewaySenderSession))
+	mux.Handle("GET /api/v1/sender-sessions/{id}/gateway/health", s.require("sender.read", s.getGatewaySenderSessionHealth))
+	mux.Handle("GET /api/v1/sender-sessions/{id}/pairing/qr", s.require("sender.admin", s.getGatewaySenderSessionQR))
+	mux.Handle("POST /api/v1/sender-sessions/{id}/pairing/code", s.require("sender.admin", s.getGatewaySenderSessionPairingCode))
+	mux.Handle("POST /api/v1/sender-sessions/{id}/start", s.require("sender.operate", s.startGatewaySenderSession))
+	mux.Handle("POST /api/v1/sender-sessions/{id}/drain", s.require("sender.operate", s.drainGatewaySenderSession))
+	mux.Handle("POST /api/v1/sender-sessions/{id}/resume", s.require("sender.operate", s.resumeGatewaySenderSession))
+	mux.Handle("POST /api/v1/sender-sessions/{id}/stop", s.require("sender.operate", s.stopGatewaySenderSession))
+	mux.Handle("POST /api/v1/sender-sessions/{id}/logout", s.require("sender.admin", s.logoutGatewaySenderSession))
+	mux.Handle("DELETE /api/v1/sender-sessions/{id}", s.require("sender.admin", s.deleteGatewaySenderSession))
 	mux.Handle("POST /api/v1/internal/sender-sessions/{id}/heartbeat", s.require("sender.operate", s.heartbeatSenderSession))
 
 	var handler http.Handler = mux
@@ -343,7 +362,10 @@ func (s *Server) ingestGatewayInboundMessage(w http.ResponseWriter, r *http.Requ
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "GATEWAY_INBOUND_REJECTED", "The inbound message evidence is invalid.", map[string]any{"detail": err.Error()})
 		return
 	}
-	result, err := s.deps.OptOutProcessor.Process(r.Context(), event.ClientReference, event.EventID, event.MessageText, "gateway:"+event.EventID)
+	result, err := s.deps.OptOutProcessor.ProcessInbound(r.Context(), consent.InboundEventReference{
+		ClientReference: event.ClientReference, QuotedProviderMessageID: event.QuotedProviderMessageID, SenderMSISDN: event.SenderMSISDN,
+		SessionID: event.SessionID, ProviderMessageID: event.ProviderMessageID,
+	}, event.EventID, event.MessageText, "gateway:"+event.SessionID+":"+event.EventID)
 	if errors.Is(err, delivery.ErrRecipientNotFound) {
 		httpx.WriteError(w, r, http.StatusNotFound, "CAMPAIGN_RECIPIENT_NOT_FOUND", "The inbound message referenced an unknown campaign recipient.", nil)
 		return
@@ -1153,6 +1175,8 @@ func (s *Server) createConsentReview(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The consent-review request is invalid.", map[string]any{"detail": err.Error()})
 		return
 	}
+	principal, _ := identity.PrincipalFromContext(r.Context())
+	input.CreatedBy = principal.User.ID
 	entity, err := s.deps.ConsentReviews.Create(r.Context(), input)
 	if err != nil {
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "CONSENT_REVIEW_INVALID", "The consent review could not be created.", map[string]any{"detail": err.Error()})
@@ -1872,20 +1896,10 @@ func (s *Server) previewAudienceImport(w http.ResponseWriter, r *http.Request) {
 func (s *Server) resolveCampaignEvidence(ctx context.Context, current campaign.Campaign, input *campaign.TransitionInput) error {
 	now := time.Now().UTC()
 	verifyConsent := func() error {
-		review, err := s.deps.ConsentReviews.Get(ctx, current.ConsentReviewID)
-		if err != nil {
-			return err
+		if s.deps.ConsentReviews == nil {
+			return errors.New("consent review service is unavailable")
 		}
-		if review.OrganisationID != current.OrganisationID || review.Status != consent.StatusApproved {
-			return errors.New("campaign consent review is not approved for the selected organisation")
-		}
-		if review.ExpiresAt == nil || !review.ExpiresAt.After(now) {
-			return errors.New("campaign consent review is expired")
-		}
-		if review.Channel != "WHATSAPP" {
-			return errors.New("campaign consent channel is not WHATSAPP")
-		}
-		return nil
+		return s.deps.ConsentReviews.ValidateCampaignReview(ctx, current.ConsentReviewID, current.ID, current.OrganisationID, current.Transport.Channel, now)
 	}
 	verifySnapshot := func(identifier string) error {
 		if s.deps.Snapshots == nil {
@@ -1919,6 +1933,29 @@ func (s *Server) resolveCampaignEvidence(ctx context.Context, current campaign.C
 		}
 		if approvedRequired && version.Status != message.StatusApproved {
 			return errors.New("message version has not been approved")
+		}
+		if version.Type != message.TypeText {
+			if s.deps.TrustedAssets == nil || strings.TrimSpace(version.Media.AssetID) == "" {
+				return errors.New("approved media message is not bound to a trusted asset")
+			}
+			maximum := int64(0)
+			if s.deps.ProviderCapabilities != nil && strings.TrimSpace(current.Transport.ProviderDefinitionID) != "" {
+				definition, definitionErr := s.deps.ProviderCapabilities.Get(ctx, current.Transport.ProviderDefinitionID)
+				if definitionErr != nil {
+					return definitionErr
+				}
+				if definition.Version != current.Transport.ProviderDefinitionVersion {
+					return errors.New("campaign provider capability version changed; material reapproval is required")
+				}
+				maximum = definition.MaximumAttachmentBytes
+			}
+			asset, assetErr := s.deps.TrustedAssets.ResolveClean(ctx, version.Media.AssetID, storage.AssetPurposeMessageMedia, maximum)
+			if assetErr != nil {
+				return assetErr
+			}
+			if asset.ObjectKey != version.Media.ObjectKey || asset.SHA256 != version.Media.SHA256 || asset.Size != version.Media.Size || asset.MediaType != version.Media.MediaType {
+				return errors.New("approved message media no longer matches trusted asset evidence")
+			}
 		}
 		input.MessageVersionID = version.ID
 		input.MessageContentHash = version.ContentHash
@@ -1975,10 +2012,9 @@ func (s *Server) resolveCampaignEvidence(ctx context.Context, current campaign.C
 type createMessageVersionRequest struct {
 	Type         message.Type       `json:"type"`
 	Body         string             `json:"body"`
-	Media        *message.Media     `json:"media"`
+	MediaAssetID string             `json:"mediaAssetId"`
 	Links        []message.Link     `json:"links"`
 	Variables    []message.Variable `json:"variables"`
-	AllowedHosts []string           `json:"allowedHosts"`
 }
 
 func (s *Server) listMessageVersions(w http.ResponseWriter, r *http.Request) {
@@ -2023,7 +2059,7 @@ func (s *Server) createMessageVersion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	principal, _ := identity.PrincipalFromContext(r.Context())
-	created, err := s.deps.Messages.CreateDraft(r.Context(), message.Input{CampaignID: campaignEntity.ID, Type: input.Type, Body: input.Body, Media: input.Media, Links: input.Links, Variables: input.Variables, CreatedBy: principal.User.ID, IdempotencyKey: idempotencyKey, AllowedHosts: input.AllowedHosts})
+	created, err := s.deps.Messages.CreateDraft(r.Context(), message.Input{CampaignID: campaignEntity.ID, Type: input.Type, Body: input.Body, MediaAssetID: input.MediaAssetID, Links: input.Links, Variables: input.Variables, CreatedBy: principal.User.ID, IdempotencyKey: idempotencyKey})
 	if errors.Is(err, message.ErrIdempotencyConflict) {
 		httpx.WriteError(w, r, http.StatusConflict, "IDEMPOTENCY_CONFLICT", "The idempotency key was already used with different message content.", nil)
 		return

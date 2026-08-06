@@ -376,6 +376,57 @@ paths:
         '404': { description: Campaign recipient reference not found }
         '409': { description: Inbound event identifier reused with different evidence }
         '422': { $ref: '#/components/responses/ValidationError' }
+  /assets:
+    post:
+      operationId: uploadTrustedAsset
+      summary: Upload and malware-scan a governed message or evidence asset
+      parameters:
+        - name: purpose
+          in: query
+          required: true
+          schema: { type: string, enum: [MESSAGE_MEDIA, CONSENT_EVIDENCE, CAMPAIGN_EVIDENCE] }
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        '201': { description: Trusted asset accepted and clean }
+        '422': { description: Asset rejected or malware scan failed }
+  /assets/{id}:
+    get:
+      operationId: getTrustedAsset
+      summary: Get derived trusted-asset metadata
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Trusted asset metadata }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /assets/{id}/revoke:
+    post:
+      operationId: revokeTrustedAsset
+      summary: Revoke a trusted asset so it cannot be used by future approvals
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedVersion, reason]
+              properties:
+                expectedVersion: { type: integer, format: int64, minimum: 1 }
+                reason: { type: string, minLength: 8 }
+      responses:
+        '200': { description: Asset revoked }
+        '403': { description: Recent MFA step-up required }
+        '409': { description: Optimistic version conflict }
   /filter-definitions:
     get:
       operationId: listFilterDefinitions
@@ -667,7 +718,80 @@ paths:
           application/json:
             schema: { $ref: '#/components/schemas/CreateConsentReview' }
       responses:
-        '201': { description: Consent review created in pending state }
+        '201': { description: Consent review created in DRAFT state }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /consent-reviews/{id}:
+    get:
+      operationId: getConsentReview
+      summary: Get a governed consent review and its evidence lineage
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Consent review }
+        '404': { $ref: '#/components/responses/NotFound' }
+  /consent-reviews/{id}/submit:
+    post:
+      operationId: submitConsentReview
+      summary: Submit a complete draft consent review for independent decision
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedVersion, reason]
+              properties:
+                expectedVersion: { type: integer, format: int64, minimum: 1 }
+                reason: { type: string, minLength: 5 }
+      responses:
+        '200': { description: Review submitted }
+        '409': { description: Optimistic version conflict }
+        '422': { $ref: '#/components/responses/ValidationError' }
+  /consent-reviews/{id}/revoke:
+    post:
+      operationId: revokeConsentReview
+      summary: Revoke an approved consent review with elevated evidence
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedVersion, reason]
+              properties:
+                expectedVersion: { type: integer, format: int64, minimum: 1 }
+                reason: { type: string, minLength: 8 }
+      responses:
+        '200': { description: Review revoked }
+        '403': { description: Recent MFA step-up required }
+        '409': { description: Optimistic version conflict }
+  /consent-reviews/{id}/revisions:
+    post:
+      operationId: createConsentReviewRevision
+      summary: Supersede an approved review with a new governed draft revision
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedVersion, reason, review]
+              properties:
+                expectedVersion: { type: integer, format: int64, minimum: 1 }
+                reason: { type: string, minLength: 8 }
+                review: { $ref: '#/components/schemas/CreateConsentReview' }
+      responses:
+        '201': { description: Revision created }
+        '409': { description: Optimistic version conflict }
         '422': { $ref: '#/components/responses/ValidationError' }
   /consent-reviews/{id}/decision:
     post:
@@ -1745,6 +1869,108 @@ paths:
         '400': { description: Invalid request }
         '401': { description: Authentication required }
         '403': { description: Permission denied }
+  /sender-sessions/{id}:
+    delete:
+      operationId: deleteGatewaySenderSession
+      summary: Delete and retire an inactive governed gateway session
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SenderLifecycleAction' }
+      responses:
+        '200': { description: Session deleted and retired }
+        '403': { description: Recent MFA step-up required }
+        '409': { description: Session owns work or changed concurrently }
+  /sender-sessions/{id}/gateway/create:
+    post:
+      operationId: createGatewaySenderSession
+      summary: Create the concrete gateway session for a governed sender
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/SenderLifecycleAction' } } }
+      responses: { '200': { description: Gateway session created } }
+  /sender-sessions/{id}/gateway/health:
+    get:
+      operationId: getGatewaySenderSessionHealth
+      summary: Read concrete gateway health for the governed session owner
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses: { '200': { description: Gateway session health } }
+  /sender-sessions/{id}/pairing/qr:
+    get:
+      operationId: getGatewaySenderSessionQR
+      summary: Obtain QR pairing material for a session in pairing state; technical administration and recent MFA required
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: QR pairing material }
+        '403': { description: Technical-administrator permission or recent MFA step-up required }
+  /sender-sessions/{id}/pairing/code:
+    post:
+      operationId: getGatewaySenderSessionPairingCode
+      summary: Obtain a pairing code for a governed session; technical administration and recent MFA required
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [phoneNumber]
+              properties: { phoneNumber: { type: string, pattern: '^\\+?[0-9]{8,15}$' } }
+      responses:
+        '200': { description: Pairing code material }
+        '403': { description: Technical-administrator permission or recent MFA step-up required }
+  /sender-sessions/{id}/start:
+    post:
+      operationId: startGatewaySenderSession
+      summary: Start a paired or recoverable gateway session
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SenderLifecycleAction' } } } }
+      responses: { '200': { description: Session start accepted; readiness awaits heartbeat } }
+  /sender-sessions/{id}/drain:
+    post:
+      operationId: drainGatewaySenderSession
+      summary: Drain a ready or busy session from new allocation
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SenderLifecycleAction' } } } }
+      responses: { '200': { description: Session draining } }
+  /sender-sessions/{id}/resume:
+    post:
+      operationId: resumeGatewaySenderSession
+      summary: Resume a paused or drained session through connecting state
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SenderLifecycleAction' } } } }
+      responses: { '200': { description: Session resume accepted } }
+  /sender-sessions/{id}/stop:
+    post:
+      operationId: stopGatewaySenderSession
+      summary: Stop a session after validating its canonical transition
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SenderLifecycleAction' } } } }
+      responses: { '200': { description: Session stopped } }
+  /sender-sessions/{id}/logout:
+    post:
+      operationId: logoutGatewaySenderSession
+      summary: Clear authentication only after active-work and MFA checks
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SenderLifecycleAction' } } } }
+      responses:
+        '200': { description: Session logged out and returned to pairing }
+        '403': { description: Recent MFA step-up required }
+        '409': { description: Session owns work or changed concurrently }
   /sender-sessions/{id}/health:
     get:
       operationId: getSenderSessionHealth
@@ -2087,29 +2313,62 @@ components:
         reason: { type: string, minLength: 1 }
     CreateConsentReview:
       type: object
-      required: [organisationId, name, channel, consentSource, wordingVersion]
+      additionalProperties: false
+      required: [organisationId, name, channel, consentSource, scope]
       properties:
         organisationId: { type: string, format: uuid }
+        scope: { type: string, enum: [ORGANISATION, SOURCE, CAMPAIGN] }
+        campaignId: { type: string, format: uuid }
+        sourceSystem: { type: string }
         name: { type: string }
         purposeDescription: { type: string }
+        purposeCode: { type: string }
         channel: { type: string, enum: [WHATSAPP] }
         consentSource: { type: string }
+        collectionMethod: { type: string }
+        collectionPeriodFrom: { type: string, format: date-time }
+        collectionPeriodTo: { type: string, format: date-time }
+        controllerRole: { type: string }
         wordingVersion: { type: string }
-        evidenceObjectKeys: { type: array, items: { type: string } }
+        exactConsentWording: { type: string }
+        privacyNoticeVersion: { type: string }
+        evidenceAssetIds: { type: array, uniqueItems: true, items: { type: string, format: uuid } }
+        externalEvidenceReferences:
+          type: array
+          uniqueItems: true
+          items:
+            type: object
+            additionalProperties: false
+            required: [reference, sha256Checksum]
+            properties:
+              reference: { type: string, minLength: 1, maxLength: 1000 }
+              sha256Checksum: { type: string, pattern: '^[0-9a-f]{64}$' }
         privacyNoticeReviewed: { type: boolean }
         optOutProcessReviewed: { type: boolean }
         sampleRecordsReviewed: { type: boolean }
-        permittedCountries: { type: array, items: { type: string } }
+        sampleReviewNotes: { type: string, maxLength: 2000, description: Aggregate review notes only; must not contain sample MSISDNs or email addresses. }
+        permittedCountries: { type: array, uniqueItems: true, items: { type: string, minLength: 2, maxLength: 2 } }
         permittedMessageCategory: { type: string }
+        permittedPartnerOrganisations: { type: array, uniqueItems: true, items: { type: string } }
         restrictions: { type: string }
     ConsentReviewDecision:
       type: object
-      required: [reviewerId, decision]
+      additionalProperties: false
+      required: [decision, expectedVersion, reason]
       properties:
-        reviewerId: { type: string, format: uuid }
         decision: { type: string, enum: [APPROVED, REJECTED] }
+        approvedWithRestrictions: { type: boolean }
         expiresAt: { type: string, format: date-time }
-        reason: { type: string }
+        nextReviewAt: { type: string, format: date-time }
+        expectedVersion: { type: integer, format: int64, minimum: 1 }
+        reason: { type: string, minLength: 5 }
+    SenderLifecycleAction:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, reason]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 1 }
+        reason: { type: string, minLength: 8 }
     TransportSelectionRequest:
       type: object
       additionalProperties: false

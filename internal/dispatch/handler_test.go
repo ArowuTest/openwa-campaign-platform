@@ -45,7 +45,8 @@ func jobFixture() jobs.Job {
 }
 func validLoader() loaderFunc {
 	return func(context.Context, delivery.Recipient) (Material, error) {
-		return Material{GatewayPoolID: "pool-1", SessionID: "session-1", RecipientE164: "+2348012345678", MessageType: "text", Body: "hello"}, nil
+		now := time.Now().UTC()
+		return Material{Provider: "OPENWA", Engine: "WHATSAPP_WEB_JS", GatewayPoolID: "pool-1", GatewayPoolVersion: 1, GatewayAdapterVersion: "0.13.0", GatewayNodeID: "node-1", GatewayNodeVersion: 1, SessionID: "session-1", SessionLeaseVersion: 1, SessionConfigurationVersion: 1, AuthorityExpiresAt: now.Add(10 * time.Minute), RouteReference: "campaign-1:recipient-1", RecipientE164: "+2348012345678", MessageType: "text", Body: "hello"}, nil
 	}
 }
 func eligible() eligibilityFunc {

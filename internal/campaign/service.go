@@ -52,7 +52,7 @@ type Service struct {
 		ValidateCampaignApproval(context.Context, string, string, int64) (string, error)
 	}
 	consentReviews interface {
-		ValidateCampaignReview(context.Context, string, string, string, time.Time) error
+		ValidateCampaignReview(context.Context, string, string, string, string, time.Time) error
 	}
 	providerCapabilities interface {
 		Require(context.Context, string, provider.Channel, string, time.Time, []provider.Capability) (provider.Definition, error)
@@ -163,7 +163,7 @@ func (s *Service) providerEffectiveAt(requestedStart *time.Time) time.Time {
 }
 
 func (s *Service) WithConsentReviews(reader interface {
-	ValidateCampaignReview(context.Context, string, string, string, time.Time) error
+	ValidateCampaignReview(context.Context, string, string, string, string, time.Time) error
 }) *Service {
 	s.consentReviews = reader
 	return s
@@ -173,7 +173,7 @@ func (s *Service) validateConsentReview(ctx context.Context, entity Campaign) er
 	if s.consentReviews == nil {
 		return nil
 	}
-	return s.consentReviews.ValidateCampaignReview(ctx, entity.ConsentReviewID, entity.OrganisationID, entity.Transport.Channel, s.clock().UTC())
+	return s.consentReviews.ValidateCampaignReview(ctx, entity.ConsentReviewID, entity.ID, entity.OrganisationID, entity.Transport.Channel, s.clock().UTC())
 }
 
 func (s *Service) requireActiveOrganisation(ctx context.Context, organisationID string) error {

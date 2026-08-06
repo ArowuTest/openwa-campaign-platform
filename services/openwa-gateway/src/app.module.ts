@@ -14,6 +14,9 @@ import { GatewayIdentityService } from './gateway-identity.service';
 import { CapabilitiesController } from './capabilities.controller';
 import { OpenWAWebhookController } from './openwa-webhook.controller';
 import { ProviderEventOutboxService } from './provider-event-outbox.service';
+import { SessionAuthorityService } from './session-authority.service';
+import { InboundMessageOutboxService } from './inbound-message-outbox.service';
+import { InboundMessagePublisherService } from './inbound-message-publisher.service';
 
 @Module({
   controllers: [HealthController, SendController, SessionController, CapabilitiesController, OpenWAWebhookController],
@@ -26,6 +29,9 @@ import { ProviderEventOutboxService } from './provider-event-outbox.service';
     GatewayMessagingService,
     ProviderEventOutboxService,
     ProviderEventPublisherService,
+    SessionAuthorityService,
+    InboundMessageOutboxService,
+    InboundMessagePublisherService,
     messagingProviderRegistration()
   ]
 })

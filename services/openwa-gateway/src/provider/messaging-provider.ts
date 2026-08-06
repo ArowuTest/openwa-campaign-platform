@@ -2,8 +2,18 @@ export type MessageType = 'text' | 'image' | 'video' | 'document';
 
 export type SendRequest = {
   idempotencyKey: string;
+  provider: 'OPENWA';
+  engine: 'WHATSAPP_WEB_JS' | 'BAILEYS';
   gatewayPoolId: string;
+  gatewayPoolVersion: number;
+  gatewayAdapterVersion: string;
+  gatewayNodeId: string;
+  gatewayNodeVersion: number;
   sessionId: string;
+  sessionLeaseVersion: number;
+  sessionConfigurationVersion: number;
+  authorityExpiresAt: string;
+  routeReference: string;
   recipientMsisdn: string;
   messageType: MessageType;
   body?: string;

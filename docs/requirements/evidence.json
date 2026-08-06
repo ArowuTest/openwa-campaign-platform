@@ -917,9 +917,12 @@
       "internal/sender/postgres_governance.go",
       "internal/sender/allocator.go",
       "internal/platform/httpserver/sender_governance.go",
-      "database/migrations/0047_sender_session_quarantine.sql"
+      "database/migrations/0047_sender_session_quarantine.sql",
+      "internal/sender/session_lifecycle.go",
+      "internal/sender/session_lifecycle_test.go",
+      "database/migrations/0060_sender_lifecycle_and_gateway_fencing.sql"
     ],
-    "notes": "Governed sender lifecycle includes quarantine; quarantined/restricted/retired sessions are excluded from allocation and runtime heartbeats cannot silently re-enable them.",
+    "notes": "A canonical lifecycle covers NEW, PAIRING, CONNECTING, READY, BUSY, DRAINING, PAUSED, DISCONNECTED, RECOVERING, FAILED_RECOVERY, RESTRICTED, QUARANTINED and RETIRED. Invalid transitions are rejected before gateway side effects and only eligible leased/healthy states can be allocated.",
     "status": "IMPLEMENTED_TESTED"
   },
   "SND-013": {
@@ -979,5 +982,107 @@
       "database/migrations/0059_backend_hardening_and_provider_binding.sql"
     ],
     "notes": "The control plane exposes governed provider/engine capability and version definitions, freezes the exact definition into campaign/test-send evidence, and blocks incompatible gateway, adapter, minimum-version or message-capability routes. Genuine engine operation remains an external validation gate."
+  },
+  "CRV-001": {
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/consent/review.go",
+      "internal/consent/review_test.go",
+      "internal/persistence/postgres/consent.go",
+      "internal/platform/httpserver/consent_reviews.go",
+      "contracts/openapi/control-api.yaml",
+      "database/migrations/0061_trusted_assets_and_consent_review_governance.sql"
+    ],
+    "notes": "Consent reviews are created as governed drafts at organisation, source or exact campaign scope; scope-specific identifiers are validated, persisted and rechecked during campaign eligibility."
+  },
+  "CRV-005": {
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/storage/asset.go",
+      "internal/storage/asset_test.go",
+      "internal/consent/review.go",
+      "internal/consent/review_test.go",
+      "internal/persistence/postgres/consent.go",
+      "database/migrations/0061_trusted_assets_and_consent_review_governance.sql"
+    ],
+    "notes": "Uploaded evidence derives its SHA-256 checksum from stored bytes and external evidence references require an explicit SHA-256 fingerprint. Clean asset bytes are rechecked before use."
+  },
+  "CRV-006": {
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/storage/asset.go",
+      "internal/storage/asset_test.go",
+      "internal/security/malware/scanner.go",
+      "internal/platform/httpserver/assets.go",
+      "database/migrations/0061_trusted_assets_and_consent_review_governance.sql"
+    ],
+    "notes": "Evidence and campaign media remain unavailable until trusted intake has completed malware scanning; infected, indeterminate, failed or revoked assets fail closed."
+  },
+  "CRV-010": {
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/consent/review.go",
+      "internal/consent/review_test.go",
+      "internal/persistence/postgres/consent.go",
+      "contracts/openapi/control-api.yaml",
+      "database/migrations/0061_trusted_assets_and_consent_review_governance.sql"
+    ],
+    "notes": "Consent reviews store bounded aggregate sample-review notes and reject telephone-number or email-address patterns to reduce unnecessary sample PII."
+  },
+  "CRV-012": {
+    "status": "PARTIAL",
+    "evidence": [
+      "internal/campaign/service.go",
+      "internal/campaign/consent_review_gate_test.go",
+      "internal/consent/review.go",
+      "internal/persistence/postgres/consent.go"
+    ],
+    "notes": "Campaign release requires a valid, correctly scoped, unexpired approved consent review. The separately approved non-consent lawful-basis alternative remains unimplemented."
+  },
+  "GWY-011": {
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "services/openwa-gateway/src/openwa-webhook.controller.ts",
+      "services/openwa-gateway/src/inbound-message-outbox.service.ts",
+      "services/openwa-gateway/src/inbound-message-publisher.service.ts",
+      "internal/gateway/callback.go",
+      "internal/gateway/inbound.go",
+      "internal/gateway/inbound_test.go",
+      "internal/platform/httpserver/server.go"
+    ],
+    "notes": "Delivery/read and inbound events are normalised, durably queued by the gateway and forwarded through signed callbacks. The control plane verifies signatures, replay windows and event identity; genuine WhatsApp event shapes remain a live validation gate."
+  },
+  "GWY-013": {
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/storage/asset.go",
+      "internal/storage/asset_test.go",
+      "internal/message/service.go",
+      "internal/campaign/service.go",
+      "internal/dispatch/handler.go",
+      "internal/provider/registry.go",
+      "database/migrations/0061_trusted_assets_and_consent_review_governance.sql"
+    ],
+    "notes": "Messages freeze trusted object references, derived media type/size/checksum and route capability evidence. Dispatch resolves short-lived object access and enforces the frozen provider attachment ceiling without loading campaign batches into memory."
+  },
+  "SND-019": {
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/platform/httpserver/server.go",
+      "internal/platform/httpserver/sender_governance.go",
+      "internal/sender/session_lifecycle.go",
+      "contracts/openapi/control-api.yaml"
+    ],
+    "notes": "QR and pairing-code routes require sender-administrator permission and recent MFA step-up before gateway pairing material can be requested."
+  },
+  "SND-021": {
+    "status": "PARTIAL",
+    "evidence": [
+      "internal/sender/session_lifecycle.go",
+      "internal/sender/session_lifecycle_test.go",
+      "internal/sender/governance.go",
+      "database/migrations/0060_sender_lifecycle_and_gateway_fencing.sql"
+    ],
+    "notes": "Retirement is governed, fenced, blocked while active work exists and evidenced. Cryptographic or storage-level deletion of the real engine session-state volume still requires gateway/runtime implementation and live validation."
   }
 }

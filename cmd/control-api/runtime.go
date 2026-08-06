@@ -111,7 +111,7 @@ func buildMemoryRuntime(cfg config.Config, protector *sharedcrypto.MSISDNProtect
 	inboundReplies := &inbound.Service{Repository: inbound.NewMemoryRepository(), Audit: inboundAuditSink{recorder: auditRecorder}, RetentionPolicies: retentionPolicies}
 	policyStore := consent.NewMemoryOptOutPolicyStore(consent.GovernedOptOutPolicy{ID: "bootstrap-opt-out-policy", Keywords: cfg.OptOutKeywords, Status: consent.OptOutPolicyActive, EffectiveFrom: nowPolicy.Add(-time.Second), Version: 1, CreatedBy: consent.DefaultGatewayServiceActorID, Reason: "bootstrap governed opt-out policy", CreatedAt: nowPolicy, UpdatedAt: nowPolicy})
 	optOutPolicies := &consent.OptOutPolicyAdministration{Store: policyStore}
-	optOutProcessor := &consent.OptOutProcessor{Deliveries: deliveryEvents, Ledger: consentLedger, Policies: optOutPolicies, ActorID: consent.DefaultGatewayServiceActorID, Inbox: inboundReplies}
+	optOutProcessor := &consent.OptOutProcessor{Deliveries: deliveryEvents, Ledger: consentLedger, Policies: optOutPolicies, ActorID: consent.DefaultGatewayServiceActorID, Inbox: inboundReplies, Protector: protector}
 	providerStore := provider.NewMemoryStore()
 	providerCapabilities := &provider.Service{Store: providerStore}
 	if err := bootstrapProviderCapabilities(context.Background(), providerStore, nowPolicy); err != nil {
@@ -125,7 +125,7 @@ func buildMemoryRuntime(cfg config.Config, protector *sharedcrypto.MSISDNProtect
 	campaigns := campaign.NewService(campaign.NewMemoryRepository()).WithOrganisationReader(orgs).WithOrganisationPolicies(organisationPolicies).WithCommercialApprovals(commercialService).WithConsentReviews(reviews).WithProviderCapabilities(providerCapabilities).WithGatewayPools(gatewayPools)
 	messages := message.NewService(message.NewMemoryRepository())
 	testMessages := &testmessage.Service{Repository: testmessage.NewMemoryRepository(), Protector: protector, Messages: messages, Routes: testmessage.RouteValidatorFunc(func(context.Context, testmessage.RouteRequirements) (testmessage.RouteEvidence, error) {
-		return testmessage.RouteEvidence{GatewayPoolVersion: 1, AdapterVersion: "0.13.0", ProviderDefinitionID: "00000000-0000-4000-8000-000000000101", ProviderDefinitionVersion: 1}, nil
+		return testmessage.RouteEvidence{GatewayPoolVersion: 1, AdapterVersion: "0.13.0", ProviderDefinitionID: "00000000-0000-4000-8000-000000000101", ProviderDefinitionVersion: 1, GatewayNodeID: "00000000-0000-4000-8000-000000000201", GatewayNodeVersion: 1, SessionLeaseVersion: 1, SessionConfigurationVersion: 1, AuthorityExpiresAt: time.Now().UTC().Add(10 * time.Minute)}, nil
 	})}
 	snapshots := segment.NewService(segment.NewMemoryRepository())
 	segmentDefinitions := &segment.DefinitionService{Repository: segment.NewMemoryDefinitionRepository(), Registry: filters.Registry}
@@ -133,6 +133,7 @@ func buildMemoryRuntime(cfg config.Config, protector *sharedcrypto.MSISDNProtect
 	materialisationService := &materialisation.MaterialisationService{Repository: materialisation.NewMemoryMaterialisationRepository()}
 	metrics := delivery.NewMetricsService(delivery.NewMemoryMetricsRepository())
 	senderGovernance := &sender.GovernanceService{Store: senderStore}
+	senderLifecycle := &sender.SessionLifecycleService{Governance: senderGovernance, Gateway: &sender.HTTPSessionGateway{CommandSecret: cfg.GatewayCommandSecret}, ActiveWork: sender.StaticActiveSessionWorkChecker(false)}
 	pacingPolicies := &sender.PacingAdministration{Store: sender.NewMemoryPacingStore()}
 	executionStore := execution.NewMemoryStore()
 	executionCoordinator := &execution.Coordinator{Campaigns: campaigns, Store: executionStore, SafetyMarginPercent: 15}
@@ -153,6 +154,15 @@ func buildMemoryRuntime(cfg config.Config, protector *sharedcrypto.MSISDNProtect
 	if err != nil {
 		return nil, fmt.Errorf("initialise media object store: %w", err)
 	}
+	trustedAssets, err := buildTrustedAssets(cfg, mediaStore, storage.NewMemoryAssetRepository())
+	if err != nil {
+		return nil, err
+	}
+	if trustedAssets != nil {
+		messages.Assets = trustedMessageAssetResolver{service: trustedAssets, maximum: 64 << 20}
+		reviews.Evidence = trustedConsentEvidenceResolver{service: trustedAssets}
+	}
+	messages.LinkPolicies = message.StaticLinkPolicy{Hosts: cfg.MessageAllowedHosts, Version: "environment-v1"}
 	jobOperations := &jobs.AdministrationService{Repository: jobs.NewMemoryRepository()}
 	intake, err := buildImportIntake(cfg, imports)
 	if err != nil {
@@ -161,7 +171,7 @@ func buildMemoryRuntime(cfg config.Config, protector *sharedcrypto.MSISDNProtect
 	if intake == nil {
 		logger.Warn("secure audience-import intake is disabled until CLAMAV_ADDRESS is configured")
 	}
-	deps := httpserver.Dependencies{Registry: filters.Registry, FilterDefinitions: filters.Administration, Compiler: filters.Compiler, Cohorts: cohortExecution, Organisations: orgs, OrganisationPolicies: organisationPolicies, ConsentReviews: reviews, ConsentLedger: consentLedger, OptOutProcessor: optOutProcessor, OptOutPolicies: optOutPolicies, InboundReplies: inboundReplies, InboundRetentionPolicies: retentionPolicies, InboundRotation: rotationService, Campaigns: campaigns, CampaignWorkspace: campaignWorkspace, Commercial: commercialService, Geography: geography.DefaultCatalogue(), MaxImportPreviewRows: cfg.MaxImportPreviewRows, Identity: identityService, IdentityAdministration: identityAdministration, SecureCookies: cfg.SecureCookies, NetworkPolicy: httpserver.NetworkPolicy{AllowedCIDRs: cfg.AllowedNetworkCIDRs, TrustedProxyCIDRs: cfg.TrustedProxyCIDRs}, MSISDNProtector: protector, Messages: messages, TestMessages: testMessages, Snapshots: snapshots, SegmentDefinitions: segmentDefinitions, AudienceMaterialisations: materialisationService, DeliveryMetrics: metrics, Execution: executionCoordinator, RoutingPlans: routingPlans, ShardReallocations: shardReallocations, JobOperations: jobOperations, Operations: operationsService, SenderGovernance: senderGovernance, PacingPolicies: pacingPolicies, ProviderCapabilities: providerCapabilities, AudienceImports: imports, AudienceConflicts: audienceConflicts, AudienceReconciliation: audienceReconciliation, AudienceSourceTrust: audienceSourceTrust, AudienceImportIntake: intake, MaxImportFileBytes: cfg.MaxImportFileBytes, DeliveryEvents: deliveryEvents, GatewayCallbackSecret: []byte(cfg.GatewayCallbackSecret), GatewayCallbackMaxSkew: cfg.GatewayCallbackMaxSkew, MediaObjects: mediaStore, MediaDownloadSecret: []byte(cfg.MediaDownloadSecret), ReadinessChecks: []httpserver.ReadinessCheck{filters.Readiness}}
+	deps := httpserver.Dependencies{Registry: filters.Registry, FilterDefinitions: filters.Administration, Compiler: filters.Compiler, Cohorts: cohortExecution, Organisations: orgs, OrganisationPolicies: organisationPolicies, ConsentReviews: reviews, ConsentLedger: consentLedger, OptOutProcessor: optOutProcessor, OptOutPolicies: optOutPolicies, InboundReplies: inboundReplies, InboundRetentionPolicies: retentionPolicies, InboundRotation: rotationService, Campaigns: campaigns, CampaignWorkspace: campaignWorkspace, Commercial: commercialService, Geography: geography.DefaultCatalogue(), MaxImportPreviewRows: cfg.MaxImportPreviewRows, Identity: identityService, IdentityAdministration: identityAdministration, SecureCookies: cfg.SecureCookies, NetworkPolicy: httpserver.NetworkPolicy{AllowedCIDRs: cfg.AllowedNetworkCIDRs, TrustedProxyCIDRs: cfg.TrustedProxyCIDRs}, MSISDNProtector: protector, Messages: messages, TestMessages: testMessages, Snapshots: snapshots, SegmentDefinitions: segmentDefinitions, AudienceMaterialisations: materialisationService, DeliveryMetrics: metrics, Execution: executionCoordinator, RoutingPlans: routingPlans, ShardReallocations: shardReallocations, JobOperations: jobOperations, Operations: operationsService, SenderGovernance: senderGovernance, SenderSessionLifecycle: senderLifecycle, PacingPolicies: pacingPolicies, ProviderCapabilities: providerCapabilities, AudienceImports: imports, AudienceConflicts: audienceConflicts, AudienceReconciliation: audienceReconciliation, AudienceSourceTrust: audienceSourceTrust, AudienceImportIntake: intake, MaxImportFileBytes: cfg.MaxImportFileBytes, DeliveryEvents: deliveryEvents, GatewayCallbackSecret: []byte(cfg.GatewayCallbackSecret), GatewayCallbackMaxSkew: cfg.GatewayCallbackMaxSkew, MediaObjects: mediaStore, TrustedAssets: trustedAssets, MediaDownloadSecret: []byte(cfg.MediaDownloadSecret), ReadinessChecks: []httpserver.ReadinessCheck{filters.Readiness}}
 	return &controlRuntime{Dependencies: deps}, nil
 }
 
@@ -233,7 +243,7 @@ func buildPostgreSQLRuntime(ctx context.Context, cfg config.Config, protector *s
 	if activeErr != nil {
 		return fail(fmt.Errorf("initialise governed opt-out policy: %w", activeErr))
 	}
-	optOutProcessor := &consent.OptOutProcessor{Deliveries: deliveryEvents, Ledger: consentLedger, Policies: optOutPolicies, ActorID: consent.DefaultGatewayServiceActorID, Inbox: inboundReplies}
+	optOutProcessor := &consent.OptOutProcessor{Deliveries: deliveryEvents, Ledger: consentLedger, Policies: optOutPolicies, ActorID: consent.DefaultGatewayServiceActorID, Inbox: inboundReplies, Protector: protector, Senders: &postgresrepo.InboundSenderResolver{DB: db}}
 	providerCapabilities := &provider.Service{Store: &provider.PostgreSQLStore{DB: db}}
 	senderStore := &sender.PostgreSQLGovernanceStore{DB: db}
 	gatewayPools := &sender.GatewayPoolService{Store: senderStore}
@@ -248,6 +258,7 @@ func buildPostgreSQLRuntime(ctx context.Context, cfg config.Config, protector *s
 	materialisationService := &materialisation.MaterialisationService{Repository: &materialisation.PostgreSQLRepository{DB: db}}
 	metrics := delivery.NewMetricsService(&delivery.PostgreSQLMetricsRepository{DB: db})
 	senderGovernance := &sender.GovernanceService{Store: senderStore}
+	senderLifecycle := &sender.SessionLifecycleService{Governance: senderGovernance, Gateway: &sender.HTTPSessionGateway{CommandSecret: cfg.GatewayCommandSecret}, ActiveWork: sender.PostgreSQLActiveSessionWorkChecker{DB: db}}
 	pacingPolicies := &sender.PacingAdministration{Store: &postgresrepo.PacingPolicyRepository{DB: db}}
 	executionStore := &execution.PostgreSQLStore{DB: db}
 	executionCoordinator := &execution.Coordinator{Campaigns: campaigns, Store: executionStore, SafetyMarginPercent: 15}
@@ -268,6 +279,16 @@ func buildPostgreSQLRuntime(ctx context.Context, cfg config.Config, protector *s
 	if err != nil {
 		return fail(fmt.Errorf("initialise media object store: %w", err))
 	}
+	trustedAssets, err := buildTrustedAssets(cfg, mediaStore, &storage.PostgreSQLAssetRepository{DB: db})
+	if err != nil {
+		return fail(err)
+	}
+	if trustedAssets == nil {
+		return fail(errors.New("trusted asset intake is required for persistent runtime"))
+	}
+	messages.Assets = trustedMessageAssetResolver{service: trustedAssets, maximum: 64 << 20}
+	reviews.Evidence = trustedConsentEvidenceResolver{service: trustedAssets}
+	messages.LinkPolicies = message.StaticLinkPolicy{Hosts: cfg.MessageAllowedHosts, Version: "environment-v1"}
 	intake, err := buildImportIntake(cfg, imports)
 	if err != nil {
 		return fail(err)
@@ -276,7 +297,7 @@ func buildPostgreSQLRuntime(ctx context.Context, cfg config.Config, protector *s
 		return fail(errors.New("secure audience-import intake is required for persistent runtime"))
 	}
 	releases := &orchestration.ReleaseService{Campaigns: campaigns, Organisations: orgs, Snapshots: snapshots, Store: &orchestration.PostgreSQLStore{DB: db}, Eligibility: orchestration.SQLFinalEligibilityChecker{}, BatchSize: 1000, ShardCount: 256}
-	deps := httpserver.Dependencies{Registry: filters.Registry, FilterDefinitions: filters.Administration, Compiler: filters.Compiler, Cohorts: cohortExecution, Organisations: orgs, OrganisationPolicies: organisationPolicies, ConsentReviews: reviews, ConsentLedger: consentLedger, OptOutProcessor: optOutProcessor, OptOutPolicies: optOutPolicies, InboundReplies: inboundReplies, InboundRetentionPolicies: retentionPolicies, InboundRotation: rotationService, Campaigns: campaigns, CampaignWorkspace: campaignWorkspace, Commercial: commercialService, Geography: geography.DefaultCatalogue(), MaxImportPreviewRows: cfg.MaxImportPreviewRows, Identity: identityService, IdentityAdministration: identityAdministration, SecureCookies: cfg.SecureCookies, NetworkPolicy: httpserver.NetworkPolicy{AllowedCIDRs: cfg.AllowedNetworkCIDRs, TrustedProxyCIDRs: cfg.TrustedProxyCIDRs}, MSISDNProtector: protector, Messages: messages, TestMessages: testMessages, Snapshots: snapshots, SegmentDefinitions: segmentDefinitions, AudienceMaterialisations: materialisationService, Releases: releases, DeliveryMetrics: metrics, Execution: executionCoordinator, RoutingPlans: routingPlans, ShardReallocations: shardReallocations, JobOperations: jobOperations, Operations: operationsService, SenderGovernance: senderGovernance, PacingPolicies: pacingPolicies, ProviderCapabilities: providerCapabilities, AudienceImports: imports, AudienceConflicts: audienceConflicts, AudienceReconciliation: audienceReconciliation, AudienceSourceTrust: audienceSourceTrust, AudienceImportIntake: intake, MaxImportFileBytes: cfg.MaxImportFileBytes, DeliveryEvents: deliveryEvents, GatewayCallbackSecret: []byte(cfg.GatewayCallbackSecret), GatewayCallbackMaxSkew: cfg.GatewayCallbackMaxSkew, MediaObjects: mediaStore, MediaDownloadSecret: []byte(cfg.MediaDownloadSecret), ReadinessChecks: []httpserver.ReadinessCheck{{Name: "postgres", Check: db.PingContext}, {Name: "schema", Check: func(c context.Context) error { return verifyControlSchema(c, db) }}, filters.Readiness}}
+	deps := httpserver.Dependencies{Registry: filters.Registry, FilterDefinitions: filters.Administration, Compiler: filters.Compiler, Cohorts: cohortExecution, Organisations: orgs, OrganisationPolicies: organisationPolicies, ConsentReviews: reviews, ConsentLedger: consentLedger, OptOutProcessor: optOutProcessor, OptOutPolicies: optOutPolicies, InboundReplies: inboundReplies, InboundRetentionPolicies: retentionPolicies, InboundRotation: rotationService, Campaigns: campaigns, CampaignWorkspace: campaignWorkspace, Commercial: commercialService, Geography: geography.DefaultCatalogue(), MaxImportPreviewRows: cfg.MaxImportPreviewRows, Identity: identityService, IdentityAdministration: identityAdministration, SecureCookies: cfg.SecureCookies, NetworkPolicy: httpserver.NetworkPolicy{AllowedCIDRs: cfg.AllowedNetworkCIDRs, TrustedProxyCIDRs: cfg.TrustedProxyCIDRs}, MSISDNProtector: protector, Messages: messages, TestMessages: testMessages, Snapshots: snapshots, SegmentDefinitions: segmentDefinitions, AudienceMaterialisations: materialisationService, Releases: releases, DeliveryMetrics: metrics, Execution: executionCoordinator, RoutingPlans: routingPlans, ShardReallocations: shardReallocations, JobOperations: jobOperations, Operations: operationsService, SenderGovernance: senderGovernance, SenderSessionLifecycle: senderLifecycle, PacingPolicies: pacingPolicies, ProviderCapabilities: providerCapabilities, AudienceImports: imports, AudienceConflicts: audienceConflicts, AudienceReconciliation: audienceReconciliation, AudienceSourceTrust: audienceSourceTrust, AudienceImportIntake: intake, MaxImportFileBytes: cfg.MaxImportFileBytes, DeliveryEvents: deliveryEvents, GatewayCallbackSecret: []byte(cfg.GatewayCallbackSecret), GatewayCallbackMaxSkew: cfg.GatewayCallbackMaxSkew, MediaObjects: mediaStore, TrustedAssets: trustedAssets, MediaDownloadSecret: []byte(cfg.MediaDownloadSecret), ReadinessChecks: []httpserver.ReadinessCheck{{Name: "postgres", Check: db.PingContext}, {Name: "schema", Check: func(c context.Context) error { return verifyControlSchema(c, db) }}, filters.Readiness}}
 	return &controlRuntime{Dependencies: deps, close: db.Close}, nil
 }
 
@@ -320,6 +341,9 @@ func verifyControlSchema(ctx context.Context, db *sql.DB) error {
   AND to_regclass('public.approved_test_recipients') IS NOT NULL
   AND to_regclass('public.test_message_sends') IS NOT NULL
   AND to_regclass('public.provider_capability_definitions') IS NOT NULL
+  AND to_regclass('public.gateway_session_authorities') IS NOT NULL
+  AND to_regclass('public.trusted_assets') IS NOT NULL
+  AND to_regclass('public.consent_review_events') IS NOT NULL
   AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='campaigns' AND column_name='provider_capability_definition_id')
   AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='campaigns' AND column_name='provider_capability_definition_version')
   AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='campaigns' AND column_name='gateway_pool_version')
@@ -362,4 +386,39 @@ func bootstrapProviderCapabilities(ctx context.Context, store provider.Store, no
 		}
 	}
 	return nil
+}
+
+type trustedConsentEvidenceResolver struct {
+	service *storage.TrustedAssetService
+}
+
+func (r trustedConsentEvidenceResolver) ResolveConsentEvidence(ctx context.Context, identifier string) (consent.EvidenceAsset, error) {
+	asset, err := r.service.ResolveClean(ctx, identifier, storage.AssetPurposeConsentEvidence, 128<<20)
+	if err != nil {
+		return consent.EvidenceAsset{}, err
+	}
+	return consent.EvidenceAsset{ID: asset.ID, ObjectKey: asset.ObjectKey}, nil
+}
+
+type trustedMessageAssetResolver struct {
+	service *storage.TrustedAssetService
+	maximum int64
+}
+
+func (r trustedMessageAssetResolver) ResolveMessageAsset(ctx context.Context, identifier string) (message.TrustedAsset, error) {
+	asset, err := r.service.ResolveClean(ctx, identifier, storage.AssetPurposeMessageMedia, r.maximum)
+	if err != nil {
+		return message.TrustedAsset{}, err
+	}
+	return message.TrustedAsset{ID: asset.ID, ObjectKey: asset.ObjectKey, SHA256: asset.SHA256, MediaType: asset.MediaType, Size: asset.Size}, nil
+}
+
+func buildTrustedAssets(cfg config.Config, objects storage.ObjectStore, repository storage.AssetRepository) (*storage.TrustedAssetService, error) {
+	if objects == nil || repository == nil {
+		return nil, nil
+	}
+	if strings.TrimSpace(cfg.ClamAVAddress) == "" {
+		return nil, nil
+	}
+	return &storage.TrustedAssetService{Objects: objects, Repository: repository, MaximumBytes: 128 << 20, Scanner: malware.ClamAVScanner{Address: cfg.ClamAVAddress, DialTimeout: cfg.ClamAVDialTimeout, ScanTimeout: cfg.ClamAVScanTimeout}}, nil
 }

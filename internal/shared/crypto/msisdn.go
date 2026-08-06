@@ -74,6 +74,35 @@ func (p *MSISDNProtector) LookupHMAC(e164 string) []byte {
 	return mac.Sum(nil)
 }
 
+// NormalizeE164 validates an already international telephone number and removes
+// harmless formatting characters. Country-specific national-number conversion
+// belongs to the audience import normalizer; gateway callbacks must provide an
+// explicit international identity so they cannot be interpreted under an
+// ambiguous default country.
+func NormalizeE164(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	var b strings.Builder
+	for i, r := range value {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+			continue
+		}
+		if r == '+' && i == 0 {
+			b.WriteRune(r)
+			continue
+		}
+		if r == ' ' || r == '-' || r == '(' || r == ')' {
+			continue
+		}
+		return "", errors.New("MSISDN contains unsupported characters")
+	}
+	normalized := b.String()
+	if len(normalized) < 9 || len(normalized) > 16 || normalized[0] != '+' || normalized[1] == '0' {
+		return "", errors.New("MSISDN must be a valid E.164 number")
+	}
+	return normalized, nil
+}
+
 func Mask(e164 string) string {
 	if len(e164) <= 7 {
 		return "***"

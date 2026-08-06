@@ -49,7 +49,7 @@ func TestApprovedTestRecipientAndIdempotentScheduling(t *testing.T) {
 	repo := NewMemoryRepository()
 	msgs := draftMessage(t)
 	svc := &Service{Repository: repo, Protector: testProtector(t), Messages: msgs, Routes: RouteValidatorFunc(func(context.Context, RouteRequirements) (RouteEvidence, error) {
-		return RouteEvidence{GatewayPoolVersion: 1, AdapterVersion: "0.13.0", ProviderDefinitionID: "definition-1", ProviderDefinitionVersion: 1}, nil
+		return RouteEvidence{GatewayPoolVersion: 1, AdapterVersion: "0.13.0", ProviderDefinitionID: "definition-1", ProviderDefinitionVersion: 1, GatewayNodeID: "node-1", GatewayNodeVersion: 1, SessionLeaseVersion: 1, SessionConfigurationVersion: 1, AuthorityExpiresAt: time.Now().UTC().Add(10 * time.Minute)}, nil
 	})}
 	r := approvedRecipient(t, svc)
 	versions, _ := msgs.ListByCampaign(context.Background(), "campaign-1")
@@ -69,7 +69,7 @@ func TestTestSendRejectsUnapprovedRecipient(t *testing.T) {
 	repo := NewMemoryRepository()
 	msgs := draftMessage(t)
 	svc := &Service{Repository: repo, Protector: testProtector(t), Messages: msgs, Routes: RouteValidatorFunc(func(context.Context, RouteRequirements) (RouteEvidence, error) {
-		return RouteEvidence{GatewayPoolVersion: 1, AdapterVersion: "0.13.0", ProviderDefinitionID: "definition-1", ProviderDefinitionVersion: 1}, nil
+		return RouteEvidence{GatewayPoolVersion: 1, AdapterVersion: "0.13.0", ProviderDefinitionID: "definition-1", ProviderDefinitionVersion: 1, GatewayNodeID: "node-1", GatewayNodeVersion: 1, SessionLeaseVersion: 1, SessionConfigurationVersion: 1, AuthorityExpiresAt: time.Now().UTC().Add(10 * time.Minute)}, nil
 	})}
 	r, err := svc.CreateRecipient(context.Background(), "Draft", "+2348012345678", "maker", "draft test recipient")
 	if err != nil {
@@ -91,7 +91,7 @@ func TestProcessorRendersDraftAndRecordsAcceptance(t *testing.T) {
 	repo := NewMemoryRepository()
 	msgs := draftMessage(t)
 	svc := &Service{Repository: repo, Protector: testProtector(t), Messages: msgs, Routes: RouteValidatorFunc(func(context.Context, RouteRequirements) (RouteEvidence, error) {
-		return RouteEvidence{GatewayPoolVersion: 1, AdapterVersion: "0.13.0", ProviderDefinitionID: "definition-1", ProviderDefinitionVersion: 1}, nil
+		return RouteEvidence{GatewayPoolVersion: 1, AdapterVersion: "0.13.0", ProviderDefinitionID: "definition-1", ProviderDefinitionVersion: 1, GatewayNodeID: "node-1", GatewayNodeVersion: 1, SessionLeaseVersion: 1, SessionConfigurationVersion: 1, AuthorityExpiresAt: time.Now().UTC().Add(10 * time.Minute)}, nil
 	})}
 	r := approvedRecipient(t, svc)
 	versions, _ := msgs.ListByCampaign(context.Background(), "campaign-1")
@@ -122,7 +122,7 @@ func TestScheduleFreezesGovernedRouteEvidence(t *testing.T) {
 	var captured RouteRequirements
 	svc := &Service{Repository: repo, Protector: testProtector(t), Messages: msgs, Routes: RouteValidatorFunc(func(_ context.Context, requirements RouteRequirements) (RouteEvidence, error) {
 		captured = requirements
-		return RouteEvidence{GatewayPoolVersion: 1, AdapterVersion: "0.13.0", ProviderDefinitionID: "definition-42", ProviderDefinitionVersion: 7}, nil
+		return RouteEvidence{GatewayPoolVersion: 1, AdapterVersion: "0.13.0", ProviderDefinitionID: "definition-42", ProviderDefinitionVersion: 7, GatewayNodeID: "node-1", GatewayNodeVersion: 1, SessionLeaseVersion: 1, SessionConfigurationVersion: 1, AuthorityExpiresAt: time.Now().UTC().Add(10 * time.Minute)}, nil
 	})}
 	r := approvedRecipient(t, svc)
 	versions, _ := msgs.ListByCampaign(context.Background(), "campaign-1")
@@ -143,7 +143,7 @@ func TestIdempotentReplayRejectsChangedGovernedRoute(t *testing.T) {
 	msgs := draftMessage(t)
 	definitionVersion := int64(1)
 	svc := &Service{Repository: repo, Protector: testProtector(t), Messages: msgs, Routes: RouteValidatorFunc(func(context.Context, RouteRequirements) (RouteEvidence, error) {
-		return RouteEvidence{GatewayPoolVersion: 1, AdapterVersion: "0.13.0", ProviderDefinitionID: "definition-1", ProviderDefinitionVersion: definitionVersion}, nil
+		return RouteEvidence{GatewayPoolVersion: 1, AdapterVersion: "0.13.0", ProviderDefinitionID: "definition-1", ProviderDefinitionVersion: definitionVersion, GatewayNodeID: "node-1", GatewayNodeVersion: 1, SessionLeaseVersion: 1, SessionConfigurationVersion: 1, AuthorityExpiresAt: time.Now().UTC().Add(10 * time.Minute)}, nil
 	})}
 	r := approvedRecipient(t, svc)
 	versions, _ := msgs.ListByCampaign(context.Background(), "campaign-1")
@@ -162,7 +162,7 @@ func TestProcessorFailsClosedWhenGovernedRouteDrifts(t *testing.T) {
 	repo := NewMemoryRepository()
 	msgs := draftMessage(t)
 	scheduleRoutes := RouteValidatorFunc(func(context.Context, RouteRequirements) (RouteEvidence, error) {
-		return RouteEvidence{GatewayPoolVersion: 1, AdapterVersion: "0.13.0", ProviderDefinitionID: "definition-1", ProviderDefinitionVersion: 1}, nil
+		return RouteEvidence{GatewayPoolVersion: 1, AdapterVersion: "0.13.0", ProviderDefinitionID: "definition-1", ProviderDefinitionVersion: 1, GatewayNodeID: "node-1", GatewayNodeVersion: 1, SessionLeaseVersion: 1, SessionConfigurationVersion: 1, AuthorityExpiresAt: time.Now().UTC().Add(10 * time.Minute)}, nil
 	})
 	svc := &Service{Repository: repo, Protector: testProtector(t), Messages: msgs, Routes: scheduleRoutes}
 	r := approvedRecipient(t, svc)
@@ -176,7 +176,7 @@ func TestProcessorFailsClosedWhenGovernedRouteDrifts(t *testing.T) {
 		t.Fatalf("claim=%v err=%v", claimed, err)
 	}
 	changedRoutes := RouteValidatorFunc(func(context.Context, RouteRequirements) (RouteEvidence, error) {
-		return RouteEvidence{GatewayPoolVersion: 1, AdapterVersion: "0.13.0", ProviderDefinitionID: "definition-1", ProviderDefinitionVersion: 2}, nil
+		return RouteEvidence{GatewayPoolVersion: 1, AdapterVersion: "0.13.0", ProviderDefinitionID: "definition-1", ProviderDefinitionVersion: 2, GatewayNodeID: "node-1", GatewayNodeVersion: 1, SessionLeaseVersion: 1, SessionConfigurationVersion: 1, AuthorityExpiresAt: time.Now().UTC().Add(10 * time.Minute)}, nil
 	})
 	p := &Processor{Repository: repo, Protector: svc.Protector, Messages: msgs, Routes: changedRoutes, Gateway: acceptingGateway{}}
 	if err := p.Process(context.Background(), claimed[0]); err != nil {

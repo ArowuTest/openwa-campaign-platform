@@ -8,6 +8,7 @@ import (
 
 	"campaign-platform/internal/delivery"
 	"campaign-platform/internal/inbound"
+	sharedcrypto "campaign-platform/internal/shared/crypto"
 )
 
 // DefaultGatewayServiceActorID identifies the internal gateway service in
@@ -34,6 +35,24 @@ type OptOutPolicyProvider interface {
 	Active(context.Context) (OptOutPolicy, error)
 }
 
+type InboundRecipientEvidence struct {
+	RecipientID string
+	ContactID   string
+	CampaignID  string
+}
+
+type InboundSenderResolver interface {
+	ResolveInboundSender(context.Context, []byte, string) (InboundRecipientEvidence, error)
+}
+
+type InboundEventReference struct {
+	ClientReference         string
+	QuotedProviderMessageID string
+	SenderMSISDN            string
+	SessionID               string
+	ProviderMessageID       string
+}
+
 type OptOutProcessor struct {
 	Deliveries *delivery.Service
 	Ledger     *LedgerService
@@ -42,13 +61,59 @@ type OptOutProcessor struct {
 	ActorID    string
 	Clock      func() time.Time
 	Inbox      *inbound.Service
+	Protector  *sharedcrypto.MSISDNProtector
+	Senders    InboundSenderResolver
 }
 
 func (p *OptOutProcessor) Process(ctx context.Context, recipientID, eventID, messageText, sourceReference string) (OptOutResult, error) {
+	if p == nil || p.Deliveries == nil {
+		return OptOutResult{}, errors.New("opt-out processor dependencies are required")
+	}
+	recipient, err := p.Deliveries.Get(ctx, strings.TrimSpace(recipientID))
+	if err != nil {
+		return OptOutResult{}, err
+	}
+	return p.processResolved(ctx, InboundRecipientEvidence{RecipientID: recipient.ID, ContactID: recipient.ContactID, CampaignID: recipient.CampaignID}, eventID, messageText, sourceReference, "")
+}
+
+func (p *OptOutProcessor) ProcessInbound(ctx context.Context, reference InboundEventReference, eventID, messageText, sourceReference string) (OptOutResult, error) {
 	if p == nil || p.Deliveries == nil || p.Ledger == nil {
 		return OptOutResult{}, errors.New("opt-out processor dependencies are required")
 	}
-	if strings.TrimSpace(recipientID) == "" || strings.TrimSpace(eventID) == "" {
+	var evidence InboundRecipientEvidence
+	var err error
+	switch {
+	case strings.TrimSpace(reference.ClientReference) != "":
+		var recipient delivery.Recipient
+		recipient, err = p.Deliveries.Get(ctx, strings.TrimSpace(reference.ClientReference))
+		evidence = InboundRecipientEvidence{RecipientID: recipient.ID, ContactID: recipient.ContactID, CampaignID: recipient.CampaignID}
+	case strings.TrimSpace(reference.QuotedProviderMessageID) != "":
+		var recipient delivery.Recipient
+		recipient, err = p.Deliveries.GetByProviderMessageID(ctx, strings.TrimSpace(reference.QuotedProviderMessageID))
+		evidence = InboundRecipientEvidence{RecipientID: recipient.ID, ContactID: recipient.ContactID, CampaignID: recipient.CampaignID}
+	case strings.TrimSpace(reference.SenderMSISDN) != "":
+		if p.Protector == nil || p.Senders == nil {
+			return OptOutResult{}, errors.New("sender correlation is not configured")
+		}
+		e164, normaliseErr := sharedcrypto.NormalizeE164(reference.SenderMSISDN)
+		if normaliseErr != nil {
+			return OptOutResult{}, normaliseErr
+		}
+		evidence, err = p.Senders.ResolveInboundSender(ctx, p.Protector.LookupHMAC(e164), strings.TrimSpace(reference.SessionID))
+	default:
+		return OptOutResult{}, errors.New("inbound event has no recipient correlation evidence")
+	}
+	if err != nil {
+		return OptOutResult{}, err
+	}
+	return p.processResolved(ctx, evidence, eventID, messageText, sourceReference, strings.TrimSpace(reference.ProviderMessageID))
+}
+
+func (p *OptOutProcessor) processResolved(ctx context.Context, recipient InboundRecipientEvidence, eventID, messageText, sourceReference, providerMessageID string) (OptOutResult, error) {
+	if p == nil || p.Ledger == nil {
+		return OptOutResult{}, errors.New("opt-out ledger is required")
+	}
+	if strings.TrimSpace(recipient.RecipientID) == "" || strings.TrimSpace(recipient.ContactID) == "" || strings.TrimSpace(eventID) == "" {
 		return OptOutResult{}, errors.New("recipient and event identifiers are required")
 	}
 	policy := p.Policy
@@ -63,12 +128,8 @@ func (p *OptOutProcessor) Process(ctx context.Context, recipientID, eventID, mes
 		policy = DefaultOptOutPolicy()
 	}
 	recognised := policy.Recognises(messageText)
-	recipient, err := p.Deliveries.Get(ctx, strings.TrimSpace(recipientID))
-	if err != nil {
-		return OptOutResult{}, err
-	}
 	if p.Inbox != nil {
-		_, _, err = p.Inbox.Record(ctx, inbound.CreateInput{EventID: eventID, RecipientID: recipient.ID, ContactID: recipient.ContactID, CampaignID: recipient.CampaignID, SessionID: sourceReference, MessageText: messageText, Classification: map[bool]inbound.Classification{true: inbound.ClassificationOptOut, false: inbound.ClassificationUnreviewed}[recognised]})
+		_, _, err := p.Inbox.Record(ctx, inbound.CreateInput{EventID: eventID, RecipientID: recipient.RecipientID, ContactID: recipient.ContactID, CampaignID: recipient.CampaignID, SessionID: sourceReference, ProviderMessageID: providerMessageID, MessageText: messageText, Classification: map[bool]inbound.Classification{true: inbound.ClassificationOptOut, false: inbound.ClassificationUnreviewed}[recognised]})
 		if err != nil {
 			return OptOutResult{}, err
 		}
@@ -85,13 +146,8 @@ func (p *OptOutProcessor) Process(ctx context.Context, recipientID, eventID, mes
 		now = p.Clock().UTC()
 	}
 	suppression, created, err := p.Ledger.CreateSuppression(ctx, SuppressionInput{
-		ContactID:       recipient.ContactID,
-		Scope:           SuppressionGlobal,
-		Reason:          "INBOUND_STOP",
-		EffectiveAt:     &now,
-		SourceReference: strings.TrimSpace(sourceReference),
-		CreatedBy:       actor,
-		ClientRequestID: "gateway-inbound:" + strings.TrimSpace(eventID),
+		ContactID: recipient.ContactID, Scope: SuppressionGlobal, Reason: "INBOUND_STOP", EffectiveAt: &now,
+		SourceReference: strings.TrimSpace(sourceReference), CreatedBy: actor, ClientRequestID: "gateway-inbound:" + strings.TrimSpace(eventID),
 	})
 	if err != nil {
 		return OptOutResult{}, err

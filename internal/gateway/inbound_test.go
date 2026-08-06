@@ -27,3 +27,20 @@ func TestInboundMessageRejectsUnknownFieldsAndOversizeText(t *testing.T) {
 		t.Fatal("blank inbound message accepted")
 	}
 }
+
+func TestInboundMessageAcceptsQuotedProviderOrProtectedSenderCorrelation(t *testing.T) {
+	now := time.Date(2026, 8, 4, 8, 1, 0, 0, time.UTC)
+	quoted := InboundMessageEvent{SchemaVersion: "1.0", EventID: "reply-quoted", SessionID: "session-1", QuotedProviderMessageID: "provider-original", MessageText: "STOP", OccurredAt: now}
+	if err := quoted.Validate(now, time.Minute); err != nil {
+		t.Fatalf("quoted-provider correlation rejected: %v", err)
+	}
+	sender := InboundMessageEvent{SchemaVersion: "1.0", EventID: "reply-sender", SessionID: "session-1", SenderMSISDN: "+2348012345678", MessageText: "STOP", OccurredAt: now}
+	if err := sender.Validate(now, time.Minute); err != nil {
+		t.Fatalf("sender correlation rejected: %v", err)
+	}
+	invalid := sender
+	invalid.SenderMSISDN = "08012345678"
+	if err := invalid.Validate(now, time.Minute); err == nil {
+		t.Fatal("expected non-E.164 sender rejection")
+	}
+}

@@ -21,12 +21,13 @@ import (
 type materialLoader struct{}
 
 func (materialLoader) Load(_ context.Context, recipient delivery.Recipient) (dispatch.Material, error) {
+	now := time.Now().UTC()
 	return dispatch.Material{
-		GatewayPoolID:   "gateway-pool-1",
-		SessionID:       "session-healthy-1",
-		RecipientE164:   "+2348012345678",
-		MessageType:     "text",
-		Body:            "approved campaign message",
+		Provider: "OPENWA", Engine: "WHATSAPP_WEB_JS", GatewayPoolID: "gateway-pool-1", GatewayPoolVersion: 1,
+		GatewayAdapterVersion: "0.13.0", GatewayNodeID: "gateway-node-1", GatewayNodeVersion: 1,
+		SessionID: "session-healthy-1", SessionLeaseVersion: 1, SessionConfigurationVersion: 1,
+		AuthorityExpiresAt: now.Add(10 * time.Minute), RouteReference: recipient.CampaignID + ":" + recipient.ID,
+		RecipientE164: "+2348012345678", MessageType: "text", Body: "approved campaign message",
 		ClientReference: recipient.ID,
 	}, nil
 }

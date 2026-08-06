@@ -18,10 +18,16 @@ var (
 type Status string
 
 const (
+	StatusNew          Status = "NEW"
+	StatusPairing      Status = "PAIRING"
+	StatusConnecting   Status = "CONNECTING"
 	StatusReady        Status = "READY"
 	StatusBusy         Status = "BUSY"
+	StatusDraining     Status = "DRAINING"
 	StatusPaused       Status = "PAUSED"
 	StatusDisconnected Status = "DISCONNECTED"
+	StatusRecovering   Status = "RECOVERING"
+	StatusRecoveryFail Status = "FAILED_RECOVERY"
 	StatusRestricted   Status = "RESTRICTED"
 	StatusQuarantined  Status = "QUARANTINED"
 	StatusRetired      Status = "RETIRED"

@@ -200,3 +200,48 @@ func TestBackendHardeningMigrationPersistsProviderAndRoutingIdempotencyEvidence(
 		}
 	}
 }
+
+func TestSenderLifecycleAndGatewayFencingMigrationContainsCanonicalControls(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(migrationDirectory(t), "0060_sender_lifecycle_and_gateway_fencing.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlText := string(content)
+	for _, required := range []string{
+		"gateway_session_authorities",
+		"session_lease_version bigint",
+		"session_configuration_version bigint",
+		"authority_expires_at timestamptz",
+		"route_reference text",
+		"prevent_gateway_session_authority_event_mutation",
+		"'NEW','PAIRING','CONNECTING','READY','BUSY','DRAINING','PAUSED',",
+		"'DISCONNECTED','RECOVERING','FAILED_RECOVERY','RESTRICTED','QUARANTINED','RETIRED'",
+	} {
+		if !strings.Contains(sqlText, required) {
+			t.Errorf("sender lifecycle migration missing %q", required)
+		}
+	}
+}
+
+func TestTrustedAssetAndConsentReviewMigrationContainsTrustBoundaryControls(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(migrationDirectory(t), "0061_trusted_assets_and_consent_review_governance.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlText := string(content)
+	for _, required := range []string{
+		"CREATE TABLE trusted_assets",
+		"CREATE TABLE trusted_asset_events",
+		"message_versions_trusted_media_check",
+		"review_scope text",
+		"exact_consent_wording text",
+		"permitted_partner_organisations jsonb",
+		"trusted_asset_id uuid REFERENCES trusted_assets(id)",
+		"CREATE TABLE consent_review_events",
+		"'REVOKED','SUPERSEDED'",
+	} {
+		if !strings.Contains(sqlText, required) {
+			t.Errorf("trusted asset and consent governance migration missing %q", required)
+		}
+	}
+}

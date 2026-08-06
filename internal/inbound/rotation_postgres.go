@@ -17,6 +17,7 @@ type PostgreSQLRotationRepository struct {
 }
 
 const rotationCols = `id::text,requested_by::text,target_key_version,status,requested_at,started_at,completed_at,updated_at,processed_count,failed_count,COALESCE(last_processed_id::text,''),COALESCE(failure_reason,''),COALESCE(lease_owner,''),lease_version,COALESCE(lease_expires_at,'epoch'::timestamptz)`
+const rotationClaimColumns = `x.id::text,x.requested_by::text,x.target_key_version,x.status,x.requested_at,x.started_at,x.completed_at,x.updated_at,x.processed_count,x.failed_count,COALESCE(x.last_processed_id::text,''),COALESCE(x.failure_reason,''),COALESCE(x.lease_owner,''),x.lease_version,COALESCE(x.lease_expires_at,'epoch'::timestamptz)`
 
 func scanRotation(s scanner) (RotationRun, error) {
 	var r RotationRun
@@ -50,7 +51,7 @@ func (r *PostgreSQLRotationRepository) ListRuns(ctx context.Context, limit int) 
 	return out, rows.Err()
 }
 func (r *PostgreSQLRotationRepository) ClaimRun(ctx context.Context, owner string, now time.Time, lease time.Duration) (RotationRun, error) {
-	v, err := scanRotation(r.DB.QueryRowContext(ctx, `WITH c AS (SELECT id FROM inbound_content_reencryption_runs WHERE status IN('PENDING','RUNNING','FAILED') AND next_run_at<=$1 AND (lease_expires_at IS NULL OR lease_expires_at<=$1) ORDER BY requested_at FOR UPDATE SKIP LOCKED LIMIT 1) UPDATE inbound_content_reencryption_runs x SET status='RUNNING',started_at=COALESCE(started_at,$1),updated_at=$1,lease_owner=$2,lease_expires_at=$3,lease_version=lease_version+1,failure_reason=NULL FROM c WHERE x.id=c.id RETURNING `+rotationCols, now, owner, now.Add(lease)))
+	v, err := scanRotation(r.DB.QueryRowContext(ctx, `WITH c AS (SELECT id FROM inbound_content_reencryption_runs WHERE status IN('PENDING','RUNNING','FAILED') AND next_run_at<=$1 AND (lease_expires_at IS NULL OR lease_expires_at<=$1) ORDER BY requested_at FOR UPDATE SKIP LOCKED LIMIT 1) UPDATE inbound_content_reencryption_runs x SET status='RUNNING',started_at=COALESCE(started_at,$1),updated_at=$1,lease_owner=$2,lease_expires_at=$3,lease_version=lease_version+1,failure_reason=NULL FROM c WHERE x.id=c.id RETURNING `+rotationClaimColumns, now, owner, now.Add(lease)))
 	if errors.Is(err, sql.ErrNoRows) {
 		return RotationRun{}, ErrNotFound
 	}

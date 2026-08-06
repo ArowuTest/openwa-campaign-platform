@@ -371,14 +371,13 @@ func buildImportIntake(cfg config.Config, service *importer.ImportService, store
 	}
 	return &importer.IntakeService{Store: store, Imports: service, MaxFileSize: cfg.MaxImportFileBytes, DefaultSourceRetention: time.Duration(cfg.AudienceImportSourceRetentionDays) * 24 * time.Hour, Scanner: malware.ClamAVScanner{Address: cfg.ClamAVAddress, DialTimeout: cfg.ClamAVDialTimeout, ScanTimeout: cfg.ClamAVScanTimeout}}, nil
 }
-func verifyControlSchema(ctx context.Context, db *sql.DB) error {
-	var ready bool
-	err := db.QueryRowContext(ctx, `SELECT
+
+const controlSchemaReadinessQuery = `SELECT
   to_regclass('public.internal_mfa_challenges') IS NOT NULL
   AND to_regclass('public.attribute_definitions') IS NOT NULL
   AND to_regclass('public.audience_import_staging') IS NOT NULL
-  AND to_regclass('public.delivery_provider_events') IS NOT NULL
-  AND to_regclass('public.campaign_metric_reconciliation') IS NOT NULL
+  AND to_regclass('public.delivery_events') IS NOT NULL
+  AND to_regclass('public.campaign_metric_reconciliations') IS NOT NULL
   AND to_regclass('public.consent_grants') IS NOT NULL
   AND to_regclass('public.suppressions') IS NOT NULL
   AND to_regclass('public.consent_events') IS NOT NULL
@@ -429,7 +428,11 @@ func verifyControlSchema(ctx context.Context, db *sql.DB) error {
   AND EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='retention_policies')
   AND EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='operational_alert_policies')
   AND EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='operational_incident_events')
-  AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname='provider_capability_active_period_exclusion')`).Scan(&ready)
+  AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname='provider_capability_active_period_exclusion')`
+
+func verifyControlSchema(ctx context.Context, db *sql.DB) error {
+	var ready bool
+	err := db.QueryRowContext(ctx, controlSchemaReadinessQuery).Scan(&ready)
 	if err != nil {
 		return err
 	}

@@ -12,6 +12,17 @@ import (
 
 type PostgreSQLRepository struct{ DB *sql.DB }
 
+const capacityShortfallQuery = `WITH reserved AS (
+  SELECT sender_pool_id,sum(reserved_daily_units) AS reserved
+  FROM campaign_pool_capacity_reservations
+  WHERE status IN ('HELD','ACTIVE') AND reservation_start<=$1 AND reservation_end>$1
+  GROUP BY sender_pool_id
+) SELECT count(*) FROM reserved r JOIN sender_pools p ON p.id=r.sender_pool_id WHERE r.reserved>p.daily_capacity`
+
+func capacityShortfallStatement(now time.Time) (string, []any) {
+	return capacityShortfallQuery, []any{now.UTC()}
+}
+
 func (r *PostgreSQLRepository) Dashboard(ctx context.Context, now time.Time) (Dashboard, error) {
 	if r == nil || r.DB == nil {
 		return Dashboard{}, errors.New("database is required")
@@ -85,12 +96,8 @@ WHERE status IN('SUBMITTING','FAILED_RETRYABLE')`).Scan(&submitting, &retryable)
 WHERE c.status IN ('SCHEDULED','DISPATCHING','PAUSED') AND (l.decision IN ('HOLD','REJECT') OR l.forecast_completion_at>l.deadline_at)`).Scan(&d.CampaignsAtRisk); err != nil {
 		return d, err
 	}
-	if err := r.DB.QueryRowContext(ctx, `WITH reserved AS (
-  SELECT sender_pool_id,sum(reserved_daily_units) AS reserved
-  FROM campaign_pool_capacity_reservations
-  WHERE status IN ('HELD','ACTIVE') AND reservation_start<=$1 AND reservation_end>$1
-  GROUP BY sender_pool_id
-) SELECT count(*) FROM reserved r JOIN sender_pools p ON p.id=r.sender_pool_id WHERE r.reserved>p.daily_capacity`).Scan(&d.CapacityShortfallPools); err != nil {
+	capacityQuery, capacityArgs := capacityShortfallStatement(now)
+	if err := r.DB.QueryRowContext(ctx, capacityQuery, capacityArgs...).Scan(&d.CapacityShortfallPools); err != nil {
 		return d, err
 	}
 	if err := r.DB.QueryRowContext(ctx, `SELECT

@@ -20,10 +20,10 @@ type IdentityRepository struct {
 }
 
 func (r *IdentityRepository) ByEmail(ctx context.Context, email string) (identity.User, error) {
-	return r.scanUser(r.DB.QueryRowContext(ctx, identitySelect+` WHERE lower(u.email::text)=lower($1)`, strings.TrimSpace(email)))
+	return r.scanUser(r.DB.QueryRowContext(ctx, identityQuery("lower(u.email::text)=lower($1)"), strings.TrimSpace(email)))
 }
 func (r *IdentityRepository) ByID(ctx context.Context, id string) (identity.User, error) {
-	return r.scanUser(r.DB.QueryRowContext(ctx, identitySelect+` WHERE u.id=$1::uuid`, strings.TrimSpace(id)))
+	return r.scanUser(r.DB.QueryRowContext(ctx, identityQuery("u.id=$1::uuid"), strings.TrimSpace(id)))
 }
 
 const identitySelect = `
@@ -34,8 +34,14 @@ FROM internal_users u
 JOIN internal_user_credentials c ON c.user_id=u.id
 LEFT JOIN user_roles ur ON ur.user_id=u.id
 LEFT JOIN roles r ON r.id=ur.role_id
-LEFT JOIN LATERAL unnest(r.permissions) p(permission) ON true
+LEFT JOIN LATERAL unnest(r.permissions) p(permission) ON true`
+
+const identityGroupBy = `
 GROUP BY u.id,u.email,u.display_name,u.status,u.mfa_required,c.password_hash,c.totp_secret_ciphertext,c.failed_login_count,c.locked_until,u.last_login_at`
+
+func identityQuery(predicate string) string {
+	return identitySelect + "\nWHERE " + predicate + identityGroupBy
+}
 
 func (r *IdentityRepository) scanUser(row scanner) (identity.User, error) {
 	if r == nil || r.DB == nil || r.Secrets == nil {

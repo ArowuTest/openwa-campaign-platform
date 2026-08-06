@@ -4,12 +4,16 @@ import { randomBytes } from 'node:crypto';
 
 type TraceContext = { traceId: string; spanId: string; flags: string };
 type Counter = { labels: Record<string, string>; value: number };
+type Gauge = { labels: Record<string, string>; value: number };
+type Observation = { labels: Record<string, string>; count: number; sum: number };
 
 @Injectable()
 export class GatewayObservabilityService {
   private readonly startedAt = Date.now();
   private readonly traceStorage = new AsyncLocalStorage<TraceContext>();
   private readonly counters = new Map<string, Map<string, Counter>>();
+  private readonly gauges = new Map<string, Map<string, Gauge>>();
+  private readonly observations = new Map<string, Map<string, Observation>>();
   private readonly durationBuckets = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10];
   private readonly durations = new Map<string, { labels: Record<string, string>; counts: number[]; count: number; sum: number }>();
 
@@ -44,16 +48,39 @@ export class GatewayObservabilityService {
   }
 
   increment(name: string, labels: Record<string, string> = {}): void {
-    const safeLabels: Record<string, string> = { service: 'openwa-gateway' };
-    for (const [rawKey, rawValue] of Object.entries(labels).sort(([left], [right]) => left.localeCompare(right))) {
-      const key = normaliseLabelName(rawKey);
-      if (!(key in safeLabels)) safeLabels[key] = bounded(rawValue, 160);
-    }
+    const safeLabels = sanitiseLabels(labels);
     const key = labelKey(safeLabels);
     let samples = this.counters.get(name);
     if (!samples) { samples = new Map(); this.counters.set(name, samples); }
     const sample = samples.get(key) ?? { labels: safeLabels, value: 0 };
     sample.value += 1;
+    samples.set(key, sample);
+  }
+
+  gauge(name: string, value: number, labels: Record<string, string> = {}): void {
+    if (!Number.isFinite(value)) return;
+    const safeLabels = sanitiseLabels(labels);
+    const key = labelKey(safeLabels);
+    let samples = this.gauges.get(name);
+    if (!samples) {
+      samples = new Map();
+      this.gauges.set(name, samples);
+    }
+    samples.set(key, { labels: safeLabels, value });
+  }
+
+  observe(name: string, value: number, labels: Record<string, string> = {}): void {
+    if (!Number.isFinite(value) || value < 0) return;
+    const safeLabels = sanitiseLabels(labels);
+    const key = labelKey(safeLabels);
+    let samples = this.observations.get(name);
+    if (!samples) {
+      samples = new Map();
+      this.observations.set(name, samples);
+    }
+    const sample = samples.get(key) ?? { labels: safeLabels, count: 0, sum: 0 };
+    sample.count += 1;
+    sample.sum += value;
     samples.set(key, sample);
   }
 
@@ -66,6 +93,17 @@ export class GatewayObservabilityService {
     for (const [name, samples] of [...this.counters.entries()].sort(([left], [right]) => left.localeCompare(right))) {
       lines.push(`# HELP ${name} OpenWA gateway operational counter.`, `# TYPE ${name} counter`);
       for (const sample of [...samples.values()].sort((left, right) => labelKey(left.labels).localeCompare(labelKey(right.labels)))) lines.push(`${name}${renderLabels(sample.labels)} ${sample.value}`);
+    }
+    for (const [name, samples] of [...this.gauges.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+      lines.push(`# HELP ${name} OpenWA gateway operational gauge.`, `# TYPE ${name} gauge`);
+      for (const sample of [...samples.values()].sort((left, right) => labelKey(left.labels).localeCompare(labelKey(right.labels)))) lines.push(`${name}${renderLabels(sample.labels)} ${sample.value}`);
+    }
+    for (const [name, samples] of [...this.observations.entries()].sort(([left], [right]) => left.localeCompare(right))) {
+      lines.push(`# HELP ${name} OpenWA gateway operational observation.`, `# TYPE ${name} summary`);
+      for (const sample of [...samples.values()].sort((left, right) => labelKey(left.labels).localeCompare(labelKey(right.labels)))) {
+        lines.push(`${name}_sum${renderLabels(sample.labels)} ${sample.sum}`);
+        lines.push(`${name}_count${renderLabels(sample.labels)} ${sample.count}`);
+      }
     }
     lines.push('# HELP campaign_platform_http_request_duration_seconds HTTP request duration in seconds.', '# TYPE campaign_platform_http_request_duration_seconds histogram');
     for (const histogram of [...this.durations.values()].sort((left, right) => labelKey(left.labels).localeCompare(labelKey(right.labels)))) {
@@ -98,6 +136,14 @@ function parseTraceparent(value: string | undefined): TraceContext | undefined {
 }
 function normaliseRoute(value: string): string {
   return bounded(value.replace(/[0-9a-f]{8}-[0-9a-f-]{27,}/gi, ':id').replace(/\b[A-Za-z0-9:_-]{24,}\b/g, ':id'), 200);
+}
+function sanitiseLabels(labels: Record<string, string>): Record<string, string> {
+  const safeLabels: Record<string, string> = { service: 'openwa-gateway' };
+  for (const [rawKey, rawValue] of Object.entries(labels).sort(([left], [right]) => left.localeCompare(right))) {
+    const key = normaliseLabelName(rawKey);
+    if (!(key in safeLabels)) safeLabels[key] = bounded(rawValue, 160);
+  }
+  return safeLabels;
 }
 function labelKey(labels: Record<string, string>): string { return Object.keys(labels).sort().map(key => `${key}=${labels[key]}\0`).join(''); }
 function renderLabels(labels: Record<string, string>): string { return `{${Object.keys(labels).sort().map(key => `${key}="${labels[key].replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`).join(',')}}`; }

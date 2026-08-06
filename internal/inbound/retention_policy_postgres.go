@@ -9,6 +9,11 @@ import (
 
 type PostgreSQLRetentionPolicyStore struct{ DB *sql.DB }
 
+const insertRetentionPolicySQL = `INSERT INTO inbound_retention_policies(
+ id,retention_days,status,effective_from,effective_to,version,created_by,
+ submitted_by,approved_by,reason,created_at,updated_at
+) VALUES($1,$2,$3,$4,$5,$6,$7::uuid,NULLIF($8,'')::uuid,NULLIF($9,'')::uuid,$10,$11,$12)`
+
 func (s *PostgreSQLRetentionPolicyStore) List(ctx context.Context) ([]RetentionPolicy, error) {
 	rows, err := s.DB.QueryContext(ctx, `SELECT id,retention_days,status,effective_from,effective_to,version,created_by,coalesce(submitted_by::text,''),coalesce(approved_by::text,''),reason,created_at,updated_at FROM inbound_retention_policies ORDER BY created_at DESC`)
 	if err != nil {
@@ -40,7 +45,7 @@ func (s *PostgreSQLRetentionPolicyStore) Active(ctx context.Context, at time.Tim
 	return p, err
 }
 func (s *PostgreSQLRetentionPolicyStore) Create(ctx context.Context, p RetentionPolicy) (RetentionPolicy, error) {
-	_, err := s.DB.ExecContext(ctx, `INSERT INTO inbound_retention_policies(id,retention_days,status,effective_from,effective_to,version,created_by,reason,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7::uuid,$8,$9,$10)`, p.ID, p.RetentionDays, p.Status, p.EffectiveFrom, p.EffectiveTo, p.Version, p.CreatedBy, p.Reason, p.CreatedAt, p.UpdatedAt)
+	_, err := s.DB.ExecContext(ctx, insertRetentionPolicySQL, p.ID, p.RetentionDays, p.Status, p.EffectiveFrom, p.EffectiveTo, p.Version, p.CreatedBy, p.SubmittedBy, p.ApprovedBy, p.Reason, p.CreatedAt, p.UpdatedAt)
 	return p, err
 }
 func (s *PostgreSQLRetentionPolicyStore) CompareAndSwap(ctx context.Context, p RetentionPolicy, expected int64) (RetentionPolicy, error) {

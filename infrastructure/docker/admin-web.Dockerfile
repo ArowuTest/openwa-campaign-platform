@@ -1,7 +1,7 @@
 FROM node:22.16-alpine AS dependencies
 WORKDIR /app
-COPY apps/admin-web/package.json ./
-RUN npm install --no-audit --no-fund
+COPY apps/admin-web/package.json apps/admin-web/package-lock.json ./
+RUN npm ci --no-audit --no-fund
 
 FROM node:22.16-alpine AS build
 WORKDIR /app
@@ -12,6 +12,7 @@ RUN npm run build
 FROM node:22.16-alpine AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
+ENV HOSTNAME=0.0.0.0
 RUN addgroup -S campaign && adduser -S campaign -G campaign
 COPY --from=build --chown=campaign:campaign /app/.next/standalone ./
 COPY --from=build --chown=campaign:campaign /app/.next/static ./.next/static

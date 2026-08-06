@@ -12,6 +12,16 @@ import (
 
 type OptOutPolicyStore struct{ DB *sql.DB }
 
+const insertOptOutPolicySQL = `INSERT INTO opt_out_policies(
+ id,keywords,status,effective_from,effective_to,version,created_by,
+ submitted_by,approved_by,reason,created_at,updated_at
+) VALUES($1,$2::jsonb,$3,$4,$5,$6,$7,NULLIF($8,''),NULLIF($9,''),$10,$11,$12)`
+
+func encodeOptOutKeywords(keywords []string) (string, error) {
+	encoded, err := json.Marshal(keywords)
+	return string(encoded), err
+}
+
 func (s *OptOutPolicyStore) List(ctx context.Context) ([]consent.GovernedOptOutPolicy, error) {
 	rows, err := s.DB.QueryContext(ctx, `SELECT id,keywords,status,effective_from,effective_to,version,created_by,coalesce(submitted_by::text,''),coalesce(approved_by::text,''),reason,created_at,updated_at FROM opt_out_policies ORDER BY created_at DESC LIMIT 1000`)
 	if err != nil {
@@ -43,11 +53,11 @@ func (s *OptOutPolicyStore) Active(ctx context.Context, at time.Time) (consent.G
 	return p, err
 }
 func (s *OptOutPolicyStore) Create(ctx context.Context, p consent.GovernedOptOutPolicy) (consent.GovernedOptOutPolicy, error) {
-	keywords, err := json.Marshal(p.Keywords)
+	keywords, err := encodeOptOutKeywords(p.Keywords)
 	if err != nil {
 		return p, err
 	}
-	_, err = s.DB.ExecContext(ctx, `INSERT INTO opt_out_policies(id,keywords,status,effective_from,effective_to,version,created_by,submitted_by,approved_by,reason,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,NULL,NULL,$8,$9,$10)`, p.ID, keywords, p.Status, p.EffectiveFrom, p.EffectiveTo, p.Version, p.CreatedBy, p.Reason, p.CreatedAt, p.UpdatedAt)
+	_, err = s.DB.ExecContext(ctx, insertOptOutPolicySQL, p.ID, keywords, p.Status, p.EffectiveFrom, p.EffectiveTo, p.Version, p.CreatedBy, p.SubmittedBy, p.ApprovedBy, p.Reason, p.CreatedAt, p.UpdatedAt)
 	return p, err
 }
 func (s *OptOutPolicyStore) CompareAndSwap(ctx context.Context, p consent.GovernedOptOutPolicy, expected int64) (consent.GovernedOptOutPolicy, error) {
@@ -62,11 +72,11 @@ func (s *OptOutPolicyStore) CompareAndSwap(ctx context.Context, p consent.Govern
 			return p, err
 		}
 	}
-	keywords, err := json.Marshal(p.Keywords)
+	keywords, err := encodeOptOutKeywords(p.Keywords)
 	if err != nil {
 		return p, err
 	}
-	res, err := tx.ExecContext(ctx, `UPDATE opt_out_policies SET keywords=$1,status=$2,effective_from=$3,effective_to=$4,version=$5,submitted_by=NULLIF($6,''),approved_by=NULLIF($7,''),reason=$8,updated_at=$9 WHERE id=$10 AND version=$11`, keywords, p.Status, p.EffectiveFrom, p.EffectiveTo, p.Version, p.SubmittedBy, p.ApprovedBy, p.Reason, p.UpdatedAt, p.ID, expected)
+	res, err := tx.ExecContext(ctx, `UPDATE opt_out_policies SET keywords=$1::jsonb,status=$2,effective_from=$3,effective_to=$4,version=$5,submitted_by=NULLIF($6,''),approved_by=NULLIF($7,''),reason=$8,updated_at=$9 WHERE id=$10 AND version=$11`, keywords, p.Status, p.EffectiveFrom, p.EffectiveTo, p.Version, p.SubmittedBy, p.ApprovedBy, p.Reason, p.UpdatedAt, p.ID, expected)
 	if err != nil {
 		return p, err
 	}

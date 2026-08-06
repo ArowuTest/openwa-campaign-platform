@@ -1,0 +1,67 @@
+import subprocess
+import sys
+import unittest
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+class StackStartupContractTests(unittest.TestCase):
+    def test_root_dockerignore_excludes_generated_context(self):
+        dockerignore = (ROOT / ".dockerignore").read_text()
+        for pattern in (".git", "**/node_modules", "**/.next", "**/dist", "**/*.tsbuildinfo"):
+            self.assertIn(pattern, dockerignore)
+
+    def test_node_security_exception_is_structurally_valid(self):
+        result = subprocess.run(
+            [sys.executable, ROOT / "scripts/verify-node-security.py", "--structural-only"],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("PENDING_APPROVAL", result.stdout)
+
+    def test_first_party_node_images_use_locked_installs(self):
+        for app, dockerfile_name in (
+            ("apps/admin-web", "admin-web.Dockerfile"),
+            ("services/openwa-gateway", "openwa-gateway.Dockerfile"),
+        ):
+            self.assertTrue((ROOT / app / "package-lock.json").is_file(), app)
+            dockerfile = (ROOT / "infrastructure/docker" / dockerfile_name).read_text()
+            self.assertIn("package-lock.json", dockerfile)
+            self.assertIn("npm ci", dockerfile)
+            self.assertNotIn("npm install --no-audit --no-fund", dockerfile)
+
+    def test_admin_runtime_binds_all_interfaces(self):
+        dockerfile = (ROOT / "infrastructure/docker/admin-web.Dockerfile").read_text()
+        self.assertIn("ENV HOSTNAME=0.0.0.0", dockerfile)
+
+    def test_control_api_receives_required_keyrings(self):
+        compose = (ROOT / "infrastructure/compose/compose.yaml").read_text()
+        control = compose.split("  control-api:", 1)[1].split("  audience-worker:", 1)[0]
+        for name in (
+            "IDENTITY_SECRET_KEY_BASE64",
+            "INBOUND_CONTENT_KEYS_JSON",
+            "PRIVACY_EVIDENCE_KEYS_JSON",
+        ):
+            self.assertIn(name, control)
+
+    def test_edge_exposes_control_health_and_readiness(self):
+        nginx = (ROOT / "infrastructure/nginx/default.conf").read_text()
+        self.assertIn("location = /healthz", nginx)
+        self.assertIn("location = /readyz", nginx)
+        self.assertIn("http://control-api:8080/healthz", nginx)
+        self.assertIn("http://control-api:8080/readyz", nginx)
+
+    def test_export_worker_has_privacy_keyring_and_healthcheck(self):
+        compose = (ROOT / "infrastructure/compose/compose.yaml").read_text()
+        export = compose.split("  export-worker:", 1)[1].split("  inbound-governance-worker:", 1)[0]
+        self.assertIn("PRIVACY_EVIDENCE_KEYS_JSON", export)
+        self.assertIn("healthcheck:", export)
+        self.assertIn("/readyz", export)
+
+
+if __name__ == "__main__":
+    unittest.main()

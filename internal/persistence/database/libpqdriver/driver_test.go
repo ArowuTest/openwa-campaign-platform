@@ -25,6 +25,7 @@ func TestDriverIsRegistered(t *testing.T) {
 
 func TestParameterEncoding(t *testing.T) {
 	instant := time.Date(2026, 8, 6, 18, 30, 15, 123456000, time.FixedZone("test", 3600))
+	var absentTime *time.Time
 	tests := []struct {
 		name  string
 		value any
@@ -32,6 +33,7 @@ func TestParameterEncoding(t *testing.T) {
 		null  bool
 	}{
 		{name: "null", value: nil, null: true},
+		{name: "typed nil time pointer", value: absentTime, null: true},
 		{name: "bytea", value: []byte{0, 0xff}, want: `\x00ff`},
 		{name: "time", value: instant, want: "2026-08-06 17:30:15.123456Z"},
 		{name: "string array", value: []string{"SEND_TEXT", "value,with,comma", `quote"and\\slash`, "NULL", ""}, want: `{"SEND_TEXT","value,with,comma","quote\"and\\\\slash","NULL",""}`},
@@ -135,5 +137,20 @@ func TestValuerMustReturnDriverValue(t *testing.T) {
 func TestNestedArraysAreRejected(t *testing.T) {
 	if _, _, err := encodeParameter([][]string{{"a"}, {"b"}}); err == nil || !strings.Contains(err.Error(), "nested arrays") {
 		t.Fatalf("nested array err=%v", err)
+	}
+}
+
+type namedStringParameter string
+
+type namedIntParameter int64
+
+func TestNamedScalarParametersUseUnderlyingValues(t *testing.T) {
+	got, null, err := encodeParameter(namedStringParameter("ACTIVE"))
+	if err != nil || null || got != "ACTIVE" {
+		t.Fatalf("named string got=(%q,%v) err=%v", got, null, err)
+	}
+	got, null, err = encodeParameter(namedIntParameter(42))
+	if err != nil || null || got != "42" {
+		t.Fatalf("named int got=(%q,%v) err=%v", got, null, err)
 	}
 }

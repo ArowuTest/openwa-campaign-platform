@@ -27,68 +27,68 @@ External organisations do not receive portal access in the initial release. They
 
 ## Current development checkpoint
 
-Version `0.8.28` is an **interim backend-production-engineering checkpoint** on branch `work/backend-production-engineering`, based on the completed `0.8.27` commit `d002177c6ea52500053134398282f5410d8e6e2a`.
+Version `0.8.28` is an **interim runtime-validated backend-production-engineering checkpoint** on branch `work/backend-production-engineering`, based on the completed `0.8.27` commit `d002177c6ea52500053134398282f5410d8e6e2a`.
 
-This checkpoint is intentionally preserved before the final release-readiness review. It is substantially beyond `0.8.27`, but it is **not yet the final or deployment-certified `0.8.28` release**.
+The repository includes the earlier `0.8.28` PostgreSQL, service-identity, observability, replay-safety, partition-readiness and supply-chain work, plus corrections found only by building and running the complete Docker stack:
 
-The repository now includes the `0.8.27` functional and governance platform plus the following `0.8.28` production-engineering work:
+- native `libpq` handling for PostgreSQL domains, typed nil parameters and SQL-state-preserving errors;
+- valid campaign lease, controlled-test-message, inbound rotation, identity bootstrap, capacity and governance-policy SQL;
+- control-plane secret and keyring wiring, export-worker readiness and explicit admin runtime binding;
+- canonical schema-readiness checks and public edge `/healthz` and `/readyz` routes;
+- gateway gauge and summary metrics with executable durability coverage;
+- deterministic package-local lockfiles and `npm ci` for first-party Node images;
+- Next.js `16.3.0` and NestJS dependency upgrades, with zero npm findings for the admin portal and gateway;
+- zero npm findings for the OpenWA server dependency tree;
+- an explicit, expiring and strict-release-blocking exception candidate for the sole remaining OpenWA-dashboard React Router advisory, which is limited to RSC mode that the Vite/BrowserRouter dashboard does not expose;
+- a root `.dockerignore` that excludes Git history, local dependency caches and generated output from build contexts.
 
-- A real PostgreSQL runtime driver backed by native `libpq`, including TLS/SCRAM support, prepared statements, cancellation, SQLSTATE-preserving errors, PostgreSQL array handling and a fail-closed non-CGO build path.
-- Clean PostgreSQL migrations through `0066_partition_readiness_and_maintenance.sql`.
-- Live clean-install validation of migrations `0001` through `0066` on an isolated Neon PostgreSQL 18.4 branch.
-- Corrections for stale migration references to obsolete role, user and segment table names, with regression tests preventing recurrence.
-- Service-specific PostgreSQL privilege roles, post-migration grant reconciliation, explicit table-level worker grants and runtime rejection of superusers or cross-service role membership.
-- Prometheus-compatible metrics, W3C trace-context propagation, sanitised structured logs and protected profiling controls across Go services and the OpenWA gateway.
-- Durable gateway command replay protection, restart-safe idempotency retention, concurrent identical-request sharing, signed runtime registration and heartbeat evidence.
-- Secret-file loading, previous-key verification windows and separated command, callback and runtime-registration signing credentials.
-- Standard cursor envelopes on the principal cursor-based APIs, with a wider operational-history pagination audit still open.
-- Partition-readiness policies, maintenance functions, high-volume time-key indexes and rollback-based partition validation assets.
-- Production Compose hardening, immutable-image requirements, reduced secret exposure, optional S3 session-token overlay, SBOM generation and committed-secret scanning.
-- Retry-safe object deletion for retention workflows after partial external success.
-- An opt-in PostgreSQL adversarial integration suite covering concurrent release, `SKIP LOCKED` claims, duplicate provider events, stale fencing, transaction atomicity and overlapping capacity reservations.
+This checkpoint is intentionally recoverable and fully runnable in local Docker, but it is **not the final or deployment-certified `0.8.28` release**.
 
 ## Current verification evidence
 
-The current working tree has passed the following code-side gates during `0.8.28` development:
+The authoritative desktop repository was built and started through Docker Compose as project `openwa0828smoke`. The verified runtime contained 14 containers: PostgreSQL, Redis, ClamAV, OpenWA upstream, OpenWA gateway, control API, admin web, nginx and all seven Go workers.
+
+At the final runtime snapshot:
+
+- all 14 containers were healthy;
+- all restart counts were zero;
+- the public admin UI returned HTTP 200;
+- public `/healthz` and `/readyz` both returned HTTP 200;
+- control API readiness reported PostgreSQL and schema checks as healthy;
+- no fresh application-level errors were present;
+- no fresh PostgreSQL errors or failed statements were present.
+
+The source has also passed:
 
 ```bash
-go test ./...
+go test -count=1 ./...
 go vet ./...
-make build
-make frontend-syntax
+go test -race <all changed Go packages>
+node scripts/test-gateway-durability.js
+python3 -m unittest tests.governance.test_release_readiness tests.governance.test_stack_startup
+python3 scripts/verify-node-security.py
 python3 scripts/verify_openapi_routes.py
 python3 scripts/verify-production-compose.py
 python3 scripts/scan-committed-secrets.py
 python3 scripts/generate-sbom.py
-node scripts/test-gateway-durability.js
+python3 scripts/verify-release-readiness.py
 ```
 
-Race-sensitive Go packages have been completed in bounded groups; the 26 HTTP-server tests were also run individually under the race detector because a single aggregate HTTP package run exceeds constrained workspace execution limits.
-
-Live PostgreSQL evidence is recorded in `docs/operations/NEON_POSTGRES_VALIDATION_0.8.28.md`. The clean Neon validation branch reached:
-
-- 128 base tables;
-- 411 indexes;
-- 61 user triggers;
-- 1 view;
-- 5 governed partition policies.
-
-The same environment was used to validate exact service-role grants and six independent multi-session adversarial scenarios. No database credential is stored in this repository.
+The CycloneDX SBOM contains 24 components. OpenAPI verification covers 277 implemented `/api/v1` method/path pairs. Live PostgreSQL evidence remains recorded in `docs/operations/NEON_POSTGRES_VALIDATION_0.8.28.md`, including clean migrations `0001` through `0066`, exact service-role grants and six independent multi-session adversarial scenarios.
 
 ## Release gates still open
 
-This interim checkpoint must not be represented as the final `0.8.28` release. The remaining work includes:
+This interim checkpoint must not be represented as the final `0.8.28` release. Remaining code and evidence work includes:
 
-- Complete genuine continuation pagination for the remaining growing operational histories; bounded limits alone are not being misrepresented as pagination.
-- Reconcile all 398 requirement records against the final backend code, migrations, tests, frontend scope and external evidence. The inherited `107 implemented / 44 partial / 247 not started` catalogue is stale and is not a backend-completion percentage.
-- Complete the adversarial Backend Release Readiness Review across APIs, workers, migrations, gateway contracts, deployment assets, monitoring and operational controls.
-- Refresh final release notes, handover material and traceability evidence.
-- Run the final complete verification gate after all remaining corrections.
-- Commit and independently verify the final source archive, complete Git bundle and checksum manifest.
+- genuine continuation pagination for remaining growing operational histories;
+- reconciliation of all 398 requirement records against code, migrations, tests, frontend scope and external evidence;
+- the adversarial Backend Release Readiness Review and final handover documentation;
+- independent review of the pending, time-bounded React Router RSC advisory exception; strict security verification fails until that approval is recorded;
+- final release packaging and independent clone/extraction verification after the remaining code work.
 
-External or environment-dependent gates will remain separate after code completion, including genuine `whatsapp-web.js` and Baileys sessions, target-volume endurance, Hostinger deployment, backup/restore and disaster recovery, penetration testing, and the production frontend.
+External or environment-dependent gates remain separate: authenticated real WhatsApp sessions, target-volume endurance, Hostinger deployment, backup/restore and disaster recovery, penetration testing, operational approval and the production frontend.
 
-`make release-gate` must remain closed until governed evidence for the applicable release gates has been reviewed and accepted.
+`make release-gate` must remain closed until the applicable governed evidence has been reviewed and accepted.
 
 ## Local checks and deployment assets
 

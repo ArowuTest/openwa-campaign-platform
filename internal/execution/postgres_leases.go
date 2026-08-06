@@ -9,11 +9,14 @@ import (
 	"time"
 )
 
+const dueClaimPredicate = `c.status='SCHEDULED' AND c.requested_start_at<=$4`
+const activeClaimPredicate = `c.status IN('DISPATCHING','PAUSED') AND $4::timestamptz IS NOT NULL`
+
 func (s *PostgreSQLStore) ClaimDue(ctx context.Context, owner string, lease time.Duration, now time.Time, limit int) ([]campaign.Campaign, error) {
-	return s.claim(ctx, owner, lease, now, limit, `c.status='SCHEDULED' AND c.requested_start_at<=$4`)
+	return s.claim(ctx, owner, lease, now, limit, dueClaimPredicate)
 }
 func (s *PostgreSQLStore) ClaimActive(ctx context.Context, owner string, lease time.Duration, now time.Time, limit int) ([]campaign.Campaign, error) {
-	return s.claim(ctx, owner, lease, now, limit, `c.status IN('DISPATCHING','PAUSED') AND $4 IS NOT NULL`)
+	return s.claim(ctx, owner, lease, now, limit, activeClaimPredicate)
 }
 func (s *PostgreSQLStore) claim(ctx context.Context, owner string, lease time.Duration, now time.Time, limit int, predicate string) ([]campaign.Campaign, error) {
 	if s == nil || s.DB == nil {

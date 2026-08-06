@@ -94,11 +94,19 @@ async function testObservabilitySanitisation() {
 
   const observability = new GatewayObservabilityService();
   observability.increment('gateway_test_total', { 'bad-key': 'first', 'bad key': 'discarded', '9code': 'value' });
+  observability.gauge('gateway_runtime_last_success_seconds', 123, { node: 'node-1' });
+  observability.observe('gateway_runtime_duration_seconds', 0.25, { node: 'node-1' });
+  observability.observe('gateway_runtime_duration_seconds', 0.75, { node: 'node-1' });
   const metrics = observability.prometheus();
   assert.equal(metrics.includes('bad-key='), false);
   assert.equal(metrics.includes('bad key='), false);
   assert.equal((metrics.match(/bad_key=/g) ?? []).length, 1);
   assert.equal(metrics.includes('_9code="value"'), true);
+  assert.equal(metrics.includes('# TYPE gateway_runtime_last_success_seconds gauge'), true);
+  assert.equal(metrics.includes('gateway_runtime_last_success_seconds{node="node-1",service="openwa-gateway"} 123'), true);
+  assert.equal(metrics.includes('# TYPE gateway_runtime_duration_seconds summary'), true);
+  assert.equal(metrics.includes('gateway_runtime_duration_seconds_sum{node="node-1",service="openwa-gateway"} 1'), true);
+  assert.equal(metrics.includes('gateway_runtime_duration_seconds_count{node="node-1",service="openwa-gateway"} 2'), true);
 }
 
 async function testIdempotencyDurability() {

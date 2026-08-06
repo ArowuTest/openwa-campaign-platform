@@ -488,6 +488,10 @@ func encodeParameter(value any) (string, bool, error) {
 	if value == nil {
 		return "", true, nil
 	}
+	reflected := reflect.ValueOf(value)
+	if reflected.Kind() == reflect.Pointer && reflected.IsNil() {
+		return "", true, nil
+	}
 	if valuer, ok := value.(driver.Valuer); ok {
 		converted, err := valuer.Value()
 		if err != nil {
@@ -550,12 +554,26 @@ func encodeParameter(value any) (string, bool, error) {
 	if stringer, ok := value.(fmt.Stringer); ok {
 		return stringer.String(), false, nil
 	}
-	reflected := reflect.ValueOf(value)
 	if reflected.Kind() == reflect.Pointer {
 		if reflected.IsNil() {
 			return "", true, nil
 		}
 		return encodeParameter(reflected.Elem().Interface())
+	}
+	switch reflected.Kind() {
+	case reflect.String:
+		return reflected.String(), false, nil
+	case reflect.Bool:
+		return strconv.FormatBool(reflected.Bool()), false, nil
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return strconv.FormatInt(reflected.Int(), 10), false, nil
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		if reflected.Uint() > math.MaxInt64 {
+			return "", false, fmt.Errorf("unsigned integer %d exceeds PostgreSQL bigint range", reflected.Uint())
+		}
+		return strconv.FormatUint(reflected.Uint(), 10), false, nil
+	case reflect.Float32, reflect.Float64:
+		return strconv.FormatFloat(reflected.Float(), 'g', -1, reflected.Type().Bits()), false, nil
 	}
 	if reflected.Kind() == reflect.Slice || reflected.Kind() == reflect.Array {
 		encoded, err := encodeArray(reflected)

@@ -16,44 +16,49 @@ import (
 )
 
 type Config struct {
-	Environment               string
-	HTTPAddr                  string
-	LogLevel                  string
-	DatabaseURL               string
-	DatabaseDriver            string
-	DatabaseMaxOpen           int
-	DatabaseMaxIdle           int
-	DatabaseConnMaxLifetime   time.Duration
-	DatabaseConnMaxIdleTime   time.Duration
-	DatabasePingTimeout       time.Duration
-	RedisAddr                 string
-	MaxImportPreviewRows      int
-	BootstrapAdminEmail       string
-	BootstrapAdminPassword    string
-	BootstrapAdminTOTP        string
-	SecureCookies             bool
-	SessionIdleTimeout        time.Duration
-	SessionAbsoluteTimeout    time.Duration
-	MSISDNEncryptionKeyBase64 string
-	MSISDNLookupKeyBase64     string
-	IdentitySecretKeyBase64   string
-	InboundContentKeyBase64   string
-	InboundContentKeysJSON    string
-	InboundContentActiveKey   string
-	InboundRetentionDays      int
-	GatewayCallbackSecret     string
-	GatewayCommandSecret      string
-	GatewayCallbackMaxSkew    time.Duration
-	MediaDownloadSecret       string
-	ObjectStoreRoot           string
-	MaxImportFileBytes        int64
-	ClamAVAddress             string
-	ClamAVDialTimeout         time.Duration
-	ClamAVScanTimeout         time.Duration
-	AllowedNetworkCIDRs       []netip.Prefix
-	TrustedProxyCIDRs         []netip.Prefix
-	OptOutKeywords            []string
-	MessageAllowedHosts       []string
+	Environment                       string
+	HTTPAddr                          string
+	LogLevel                          string
+	DatabaseURL                       string
+	DatabaseDriver                    string
+	DatabaseMaxOpen                   int
+	DatabaseMaxIdle                   int
+	DatabaseConnMaxLifetime           time.Duration
+	DatabaseConnMaxIdleTime           time.Duration
+	DatabasePingTimeout               time.Duration
+	RedisAddr                         string
+	MaxImportPreviewRows              int
+	BootstrapAdminEmail               string
+	BootstrapAdminPassword            string
+	BootstrapAdminTOTP                string
+	SecureCookies                     bool
+	SessionIdleTimeout                time.Duration
+	SessionAbsoluteTimeout            time.Duration
+	MSISDNEncryptionKeyBase64         string
+	MSISDNLookupKeyBase64             string
+	IdentitySecretKeyBase64           string
+	InboundContentKeyBase64           string
+	InboundContentKeysJSON            string
+	InboundContentActiveKey           string
+	PrivacyEvidenceKeyBase64          string
+	PrivacyEvidenceKeysJSON           string
+	PrivacyEvidenceActiveKey          string
+	InboundRetentionDays              int
+	AudienceImportSourceRetentionDays int
+	GatewayCallbackSecret             string
+	GatewayCommandSecret              string
+	GatewayCallbackMaxSkew            time.Duration
+	MediaDownloadSecret               string
+	ObjectStoreDriver                 string
+	ObjectStoreRoot                   string
+	MaxImportFileBytes                int64
+	ClamAVAddress                     string
+	ClamAVDialTimeout                 time.Duration
+	ClamAVScanTimeout                 time.Duration
+	AllowedNetworkCIDRs               []netip.Prefix
+	TrustedProxyCIDRs                 []netip.Prefix
+	OptOutKeywords                    []string
+	MessageAllowedHosts               []string
 }
 
 // Load parses configuration without silently replacing malformed values with
@@ -143,6 +148,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	importSourceRetentionDays, err := intEnv("AUDIENCE_IMPORT_SOURCE_RETENTION_DAYS", 30)
+	if err != nil {
+		return Config{}, err
+	}
 	optOutKeywords, err := stringListEnv("OPT_OUT_KEYWORDS", []string{"STOP", "UNSUBSCRIBE", "CANCEL", "END", "QUIT", "OPTOUT", "OPT OUT"})
 	if err != nil {
 		return Config{}, err
@@ -153,44 +162,49 @@ func Load() (Config, error) {
 	}
 
 	cfg := Config{
-		Environment:               environment,
-		HTTPAddr:                  strings.TrimSpace(envOrDefault("HTTP_ADDR", ":8080")),
-		LogLevel:                  strings.ToLower(strings.TrimSpace(envOrDefault("LOG_LEVEL", "info"))),
-		DatabaseURL:               strings.TrimSpace(os.Getenv("DATABASE_URL")),
-		DatabaseDriver:            strings.TrimSpace(envOrDefault("DATABASE_DRIVER", "pgx")),
-		DatabaseMaxOpen:           dbMaxOpen,
-		DatabaseMaxIdle:           dbMaxIdle,
-		DatabaseConnMaxLifetime:   dbLifetime,
-		DatabaseConnMaxIdleTime:   dbIdle,
-		DatabasePingTimeout:       dbPing,
-		RedisAddr:                 strings.TrimSpace(envOrDefault("REDIS_ADDR", "localhost:6379")),
-		MaxImportPreviewRows:      maxPreview,
-		BootstrapAdminEmail:       strings.TrimSpace(envOrDefault("BOOTSTRAP_ADMIN_EMAIL", "admin@example.test")),
-		BootstrapAdminPassword:    os.Getenv("BOOTSTRAP_ADMIN_PASSWORD"),
-		BootstrapAdminTOTP:        strings.TrimSpace(os.Getenv("BOOTSTRAP_ADMIN_TOTP_SECRET")),
-		SecureCookies:             secureCookies,
-		SessionIdleTimeout:        idle,
-		SessionAbsoluteTimeout:    absolute,
-		MSISDNEncryptionKeyBase64: strings.TrimSpace(os.Getenv("MSISDN_ENCRYPTION_KEY_BASE64")),
-		MSISDNLookupKeyBase64:     strings.TrimSpace(os.Getenv("MSISDN_LOOKUP_KEY_BASE64")),
-		IdentitySecretKeyBase64:   strings.TrimSpace(os.Getenv("IDENTITY_SECRET_KEY_BASE64")),
-		InboundContentKeyBase64:   strings.TrimSpace(os.Getenv("INBOUND_CONTENT_KEY_BASE64")),
-		InboundContentKeysJSON:    strings.TrimSpace(os.Getenv("INBOUND_CONTENT_KEYS_JSON")),
-		InboundContentActiveKey:   strings.TrimSpace(envOrDefault("INBOUND_CONTENT_ACTIVE_KEY_VERSION", "v1")),
-		InboundRetentionDays:      inboundRetentionDays,
-		GatewayCallbackSecret:     callbackSecret,
-		GatewayCommandSecret:      commandSecret,
-		GatewayCallbackMaxSkew:    callbackSkew,
-		MediaDownloadSecret:       mediaDownloadSecret,
-		ObjectStoreRoot:           objectStoreRoot,
-		MaxImportFileBytes:        maxImportBytes,
-		ClamAVAddress:             strings.TrimSpace(os.Getenv("CLAMAV_ADDRESS")),
-		ClamAVDialTimeout:         clamDial,
-		ClamAVScanTimeout:         clamScan,
-		AllowedNetworkCIDRs:       allowedNetworks,
-		TrustedProxyCIDRs:         trustedProxies,
-		OptOutKeywords:            optOutKeywords,
-		MessageAllowedHosts:       messageAllowedHosts,
+		Environment:                       environment,
+		HTTPAddr:                          strings.TrimSpace(envOrDefault("HTTP_ADDR", ":8080")),
+		LogLevel:                          strings.ToLower(strings.TrimSpace(envOrDefault("LOG_LEVEL", "info"))),
+		DatabaseURL:                       strings.TrimSpace(os.Getenv("DATABASE_URL")),
+		DatabaseDriver:                    strings.TrimSpace(envOrDefault("DATABASE_DRIVER", "pgx")),
+		DatabaseMaxOpen:                   dbMaxOpen,
+		DatabaseMaxIdle:                   dbMaxIdle,
+		DatabaseConnMaxLifetime:           dbLifetime,
+		DatabaseConnMaxIdleTime:           dbIdle,
+		DatabasePingTimeout:               dbPing,
+		RedisAddr:                         strings.TrimSpace(envOrDefault("REDIS_ADDR", "localhost:6379")),
+		MaxImportPreviewRows:              maxPreview,
+		BootstrapAdminEmail:               strings.TrimSpace(envOrDefault("BOOTSTRAP_ADMIN_EMAIL", "admin@example.test")),
+		BootstrapAdminPassword:            os.Getenv("BOOTSTRAP_ADMIN_PASSWORD"),
+		BootstrapAdminTOTP:                strings.TrimSpace(os.Getenv("BOOTSTRAP_ADMIN_TOTP_SECRET")),
+		SecureCookies:                     secureCookies,
+		SessionIdleTimeout:                idle,
+		SessionAbsoluteTimeout:            absolute,
+		MSISDNEncryptionKeyBase64:         strings.TrimSpace(os.Getenv("MSISDN_ENCRYPTION_KEY_BASE64")),
+		MSISDNLookupKeyBase64:             strings.TrimSpace(os.Getenv("MSISDN_LOOKUP_KEY_BASE64")),
+		IdentitySecretKeyBase64:           strings.TrimSpace(os.Getenv("IDENTITY_SECRET_KEY_BASE64")),
+		InboundContentKeyBase64:           strings.TrimSpace(os.Getenv("INBOUND_CONTENT_KEY_BASE64")),
+		InboundContentKeysJSON:            strings.TrimSpace(os.Getenv("INBOUND_CONTENT_KEYS_JSON")),
+		InboundContentActiveKey:           strings.TrimSpace(envOrDefault("INBOUND_CONTENT_ACTIVE_KEY_VERSION", "v1")),
+		PrivacyEvidenceKeyBase64:          strings.TrimSpace(os.Getenv("PRIVACY_EVIDENCE_KEY_BASE64")),
+		PrivacyEvidenceKeysJSON:           strings.TrimSpace(os.Getenv("PRIVACY_EVIDENCE_KEYS_JSON")),
+		PrivacyEvidenceActiveKey:          strings.TrimSpace(envOrDefault("PRIVACY_EVIDENCE_ACTIVE_KEY_VERSION", "v1")),
+		InboundRetentionDays:              inboundRetentionDays,
+		AudienceImportSourceRetentionDays: importSourceRetentionDays,
+		GatewayCallbackSecret:             callbackSecret,
+		GatewayCommandSecret:              commandSecret,
+		GatewayCallbackMaxSkew:            callbackSkew,
+		MediaDownloadSecret:               mediaDownloadSecret,
+		ObjectStoreDriver:                 strings.ToLower(strings.TrimSpace(envOrDefault("OBJECT_STORE_DRIVER", "filesystem"))),
+		ObjectStoreRoot:                   objectStoreRoot,
+		MaxImportFileBytes:                maxImportBytes,
+		ClamAVAddress:                     strings.TrimSpace(os.Getenv("CLAMAV_ADDRESS")),
+		ClamAVDialTimeout:                 clamDial,
+		ClamAVScanTimeout:                 clamScan,
+		AllowedNetworkCIDRs:               allowedNetworks,
+		TrustedProxyCIDRs:                 trustedProxies,
+		OptOutKeywords:                    optOutKeywords,
+		MessageAllowedHosts:               messageAllowedHosts,
 	}
 	if cfg.BootstrapAdminPassword == "" && environment == "development" {
 		cfg.BootstrapAdminPassword = "development-only-password-change-me"
@@ -221,6 +235,12 @@ func (c Config) Validate() error {
 	}
 	if c.MaxImportPreviewRows <= 0 || c.MaxImportPreviewRows > 2_000_000 {
 		return errors.New("MAX_IMPORT_PREVIEW_ROWS must be between 1 and 2000000")
+	}
+	if c.AudienceImportSourceRetentionDays < 1 || c.AudienceImportSourceRetentionDays > 3650 {
+		return errors.New("AUDIENCE_IMPORT_SOURCE_RETENTION_DAYS must be between 1 and 3650")
+	}
+	if c.ObjectStoreDriver != "filesystem" && c.ObjectStoreDriver != "s3" && c.ObjectStoreDriver != "minio" {
+		return errors.New("OBJECT_STORE_DRIVER must be filesystem or s3")
 	}
 	if strings.TrimSpace(c.DatabaseDriver) == "" {
 		return errors.New("DATABASE_DRIVER is required")
@@ -299,6 +319,12 @@ func (c Config) Validate() error {
 			}
 		}
 	}
+	if err := validateKey("PRIVACY_EVIDENCE_KEY_BASE64", c.PrivacyEvidenceKeyBase64, 32, false); err != nil {
+		return err
+	}
+	if err := validateVersionedKeyring("privacy evidence", "PRIVACY_EVIDENCE_KEYS_JSON", c.PrivacyEvidenceKeysJSON, c.PrivacyEvidenceActiveKey); err != nil {
+		return err
+	}
 
 	if production {
 		if strings.Contains(c.BootstrapAdminPassword, "development-only") || len(c.BootstrapAdminPassword) < 20 {
@@ -325,17 +351,51 @@ func (c Config) Validate() error {
 		if c.InboundContentKeyBase64 == "" && c.InboundContentKeysJSON == "" {
 			return errors.New("production requires an inbound content encryption key or keyring")
 		}
+		if c.PrivacyEvidenceKeyBase64 == "" && c.PrivacyEvidenceKeysJSON == "" {
+			return errors.New("production requires a privacy evidence encryption key or keyring")
+		}
 		if len(c.GatewayCallbackSecret) < 32 || strings.Contains(c.GatewayCallbackSecret, "development-") || strings.Contains(strings.ToLower(c.GatewayCallbackSecret), "change-me") {
 			return errors.New("production requires a strong GATEWAY_CALLBACK_SECRET")
 		}
 		if len(c.MediaDownloadSecret) < 32 || strings.Contains(c.MediaDownloadSecret, "development-") || strings.Contains(strings.ToLower(c.MediaDownloadSecret), "change-me") {
 			return errors.New("production requires a strong MEDIA_DOWNLOAD_SECRET")
 		}
-		if c.ObjectStoreRoot == "" || !filepath.IsAbs(c.ObjectStoreRoot) {
-			return errors.New("production requires an absolute OBJECT_STORE_ROOT")
+		switch c.ObjectStoreDriver {
+		case "filesystem":
+			if c.ObjectStoreRoot == "" || !filepath.IsAbs(c.ObjectStoreRoot) {
+				return errors.New("filesystem object storage requires an absolute OBJECT_STORE_ROOT in production")
+			}
+		case "s3", "minio":
+		default:
+			return errors.New("OBJECT_STORE_DRIVER must be filesystem or s3")
 		}
 		if c.ClamAVAddress == "" {
 			return errors.New("production requires CLAMAV_ADDRESS")
+		}
+	}
+	return nil
+}
+
+func validateVersionedKeyring(label, envName, value, active string) error {
+	if strings.TrimSpace(value) == "" {
+		return nil
+	}
+	var values map[string]string
+	if err := json.Unmarshal([]byte(value), &values); err != nil {
+		return fmt.Errorf("%s must be valid JSON", envName)
+	}
+	if len(values) == 0 || strings.TrimSpace(active) == "" {
+		return fmt.Errorf("%s keyring requires keys and an active version", label)
+	}
+	if _, ok := values[active]; !ok {
+		return fmt.Errorf("active %s key version is not configured", label)
+	}
+	for version, encoded := range values {
+		if strings.TrimSpace(version) == "" {
+			return fmt.Errorf("%s key version is required", label)
+		}
+		if err := validateKey(envName+"["+version+"]", encoded, 32, false); err != nil {
+			return err
 		}
 	}
 	return nil

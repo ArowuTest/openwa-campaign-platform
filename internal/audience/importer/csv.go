@@ -21,12 +21,13 @@ const (
 )
 
 type ColumnMapping struct {
-	MSISDN  string `json:"msisdn"`
-	Country string `json:"country"`
-	State   string `json:"state"`
-	LGA     string `json:"lga"`
-	Age     string `json:"age"`
-	Gender  string `json:"gender"`
+	Worksheet string `json:"worksheet,omitempty"`
+	MSISDN    string `json:"msisdn"`
+	Country   string `json:"country"`
+	State     string `json:"state"`
+	LGA       string `json:"lga"`
+	Age       string `json:"age"`
+	Gender    string `json:"gender"`
 }
 
 type GeographyValidator func(countryISO2, state, lga string) error

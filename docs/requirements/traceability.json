@@ -851,9 +851,14 @@
     "requirement": "Restrict plaintext decryption to the minimum sending/export services and authorised workflows.",
     "priority": "Must",
     "acceptance": "Permission and service-role tests pass.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "PARTIAL",
+    "evidence": [
+      "internal/privacy/service.go",
+      "internal/dispatch/worker.go",
+      "internal/operations/export_worker.go",
+      "internal/shared/crypto/msisdn.go"
+    ],
+    "notes": "Plaintext decryption is constrained to final dispatch and approved privacy/export execution paths. Deployment-specific least-privilege service/database identities remain for the production-engineering checkpoint."
   },
   {
     "id": "CON-007",
@@ -1007,47 +1012,76 @@
     "requirement": "Support CSV and XLSX imports through an internal controlled workflow.",
     "priority": "Must",
     "acceptance": "Valid template imports successfully.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/audience/importer/xlsx.go",
+      "internal/audience/importer/xlsx_test.go",
+      "internal/audience/importer/validation_worker.go",
+      "internal/platform/httpserver/server.go",
+      "contracts/openapi/control-api.yaml",
+      "database/migrations/0064_import_mapping_rollback_and_retention.sql"
+    ],
+    "notes": "CSV and bounded XLSX imports run through the same protected validation/staging workflow. XLSX tests cover worksheet selection, hidden sheets, formulas and unsafe embedded/external content."
   },
   {
     "id": "IMP-002",
     "requirement": "Provide downloadable versioned import templates.",
     "priority": "Must",
     "acceptance": "Template version is recorded on import.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/audience/importer/template.go",
+      "internal/audience/importer/governance_test.go",
+      "internal/platform/httpserver/import_governance.go",
+      "contracts/openapi/control-api.yaml"
+    ],
+    "notes": "Versioned deterministic CSV and XLSX templates are downloadable through a dedicated controlled API; unknown versions and formats fail closed."
   },
   {
     "id": "IMP-003",
     "requirement": "Support configurable column mapping and saved mappings per source.",
     "priority": "Must",
     "acceptance": "Repeat source can reuse approved mapping.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/audience/importer/mapping.go",
+      "internal/audience/importer/governance_test.go",
+      "internal/platform/httpserver/import_governance.go",
+      "database/migrations/0064_import_mapping_rollback_and_retention.sql",
+      "contracts/openapi/control-api.yaml"
+    ],
+    "notes": "Reusable source mappings are governed, maker-checker approved, effective-dated and safely superseded; future replacements do not retire the current mapping before their effective boundary."
   },
   {
     "id": "IMP-004",
     "requirement": "Validate file type, extension, MIME signature, size and malware status.",
     "priority": "Must",
     "acceptance": "Invalid or disguised file is rejected/quarantined.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/audience/importer/intake.go",
+      "internal/audience/importer/file_inspection.go",
+      "internal/audience/importer/file_inspection_test.go",
+      "internal/audience/importer/intake_test.go",
+      "internal/security/malware/scanner.go"
+    ],
+    "notes": "Import intake streams to quarantine storage, enforces filename and byte limits, verifies actual CSV/XLSX signatures and records a terminal malware decision before validation can proceed."
   },
   {
     "id": "IMP-005",
     "requirement": "Protect against CSV formula injection in previews and exports.",
     "priority": "Must",
     "acceptance": "Cells beginning with dangerous formula prefixes are neutralised.",
-    "status": "PARTIAL",
+    "status": "IMPLEMENTED_TESTED",
     "evidence": [
-      "internal/audience/importer/csv.go"
+      "internal/audience/importer/csv.go",
+      "internal/audience/importer/error_export.go",
+      "internal/audience/importer/issue_service.go",
+      "internal/audience/importer/issue_service_test.go",
+      "internal/operations/export_worker.go",
+      "internal/operations/export_worker_test.go"
     ],
-    "notes": "Import preview is safe; export formula protection is pending."
+    "notes": "Dangerous spreadsheet prefixes are neutralised in import previews, row-level issue exports, CSV reports and XLSX cell rendering."
   },
   {
     "id": "IMP-006",
@@ -1167,9 +1201,14 @@
     "requirement": "Provide row-level error export with masked identifiers.",
     "priority": "Must",
     "acceptance": "Operator can correct only failed rows.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/audience/importer/issue_service.go",
+      "internal/audience/importer/issue_service_test.go",
+      "internal/platform/httpserver/import_issues.go",
+      "contracts/openapi/control-api.yaml"
+    ],
+    "notes": "Authorised operators can download bounded row-level validation issues as spreadsheet-safe CSV with masked identifiers and auditable search/export evidence."
   },
   {
     "id": "IMP-017",
@@ -1192,9 +1231,15 @@
     "requirement": "Support rollback of an unconsumed erroneous import where legally/operationally safe.",
     "priority": "Must",
     "acceptance": "Rollback preserves audit and does not delete subsequent independent changes.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/audience/importer/rollback.go",
+      "internal/audience/importer/governance_test.go",
+      "internal/audience/importer/merge_postgres.go",
+      "database/migrations/0064_import_mapping_rollback_and_retention.sql",
+      "internal/platform/httpserver/import_governance.go"
+    ],
+    "notes": "Rollback restores captured pre-import state, removes only exclusively inserted contacts, revokes only import-derived consent and fails closed after downstream consumption or later profile changes."
   },
   {
     "id": "IMP-019",
@@ -1210,9 +1255,16 @@
     "requirement": "Support encrypted import file retention or prompt deletion according to policy.",
     "priority": "Must",
     "acceptance": "Retention job and audit evidence are verified.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/audience/importer/source_retention.go",
+      "internal/audience/importer/governance_test.go",
+      "cmd/audience-worker/main.go",
+      "database/migrations/0064_import_mapping_rollback_and_retention.sql",
+      "internal/storage/environment.go",
+      "internal/storage/s3.go"
+    ],
+    "notes": "Import source objects receive governed expiry, lease-fenced deletion, retry/failure handling and append-only deletion evidence; storage can use filesystem or S3/MinIO."
   },
   {
     "id": "CNS-001",
@@ -1399,9 +1451,15 @@
     "requirement": "Provide consent and suppression audit/export for authorised privacy workflows.",
     "priority": "Must",
     "acceptance": "Export is complete, secured and logged.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/privacy/model.go",
+      "internal/privacy/service.go",
+      "internal/privacy/postgres.go",
+      "internal/operations/export_worker.go",
+      "internal/platform/httpserver/privacy.go"
+    ],
+    "notes": "Approved privacy access packages include consent and suppression evidence and are encrypted, controlled, integrity-checked and fully audited."
   },
   {
     "id": "SEG-001",
@@ -1618,9 +1676,15 @@
     "requirement": "Prevent tiny cohort reporting below configurable privacy threshold.",
     "priority": "Must",
     "acceptance": "Dashboard groups/suppresses small slices.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/operations/reporting_privacy.go",
+      "internal/operations/reporting_privacy_test.go",
+      "internal/operations/service.go",
+      "internal/operations/postgres.go",
+      "database/migrations/0063_privacy_cases_contact_lifecycle_and_reporting_privacy.sql"
+    ],
+    "notes": "Campaign and organisation demographic/geographic cells below the effective governed threshold are suppressed server-side before report data crosses the service boundary."
   },
   {
     "id": "SEG-020",
@@ -1695,9 +1759,17 @@
     "requirement": "Store media in object storage with checksum, type, size and scan status.",
     "priority": "Must",
     "acceptance": "Tampered/quarantined asset cannot be used.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/storage/asset.go",
+      "internal/storage/asset_postgres.go",
+      "internal/storage/asset_test.go",
+      "internal/storage/environment.go",
+      "internal/storage/s3.go",
+      "internal/storage/s3_test.go",
+      "internal/platform/httpserver/assets.go"
+    ],
+    "notes": "Assets use trusted server-derived checksum, content type, size and malware status; quarantined/revoked/tampered objects fail closed and storage supports filesystem or S3/MinIO."
   },
   {
     "id": "CAM-007",
@@ -2795,9 +2867,14 @@
     "requirement": "Apply configurable minimum-cohort privacy threshold.",
     "priority": "Must",
     "acceptance": "Small cells are suppressed/combined.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/operations/reporting_privacy.go",
+      "internal/operations/reporting_privacy_test.go",
+      "internal/platform/httpserver/operations.go",
+      "database/migrations/0063_privacy_cases_contact_lifecycle_and_reporting_privacy.sql"
+    ],
+    "notes": "Minimum report cohort thresholds are governed, maker-checker approved, effective-dated and frozen by policy ID/version into report evidence."
   },
   {
     "id": "MET-013",
@@ -2840,18 +2917,27 @@
     "requirement": "Generate an organisation-facing campaign report without portal access.",
     "priority": "Must",
     "acceptance": "Authorised user can export approved report.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/operations/service.go",
+      "internal/operations/export_worker.go",
+      "internal/operations/export_worker_test.go",
+      "internal/platform/httpserver/operations.go",
+      "database/migrations/0062_secure_exports_and_audit_search.sql"
+    ],
+    "notes": "Organisation-facing campaign reports can be frozen, approved, rendered and retrieved through short-lived actor-bound export grants without external portal access."
   },
   {
     "id": "MET-018",
     "requirement": "Support PDF-ready, XLSX and CSV report data outputs.",
     "priority": "Must",
     "acceptance": "Generated files open and totals match.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/operations/export_worker.go",
+      "internal/operations/export_worker_test.go"
+    ],
+    "notes": "Export rendering produces valid multi-page PDF, CSV and XLSX files with deterministic frozen input and spreadsheet-safe cells."
   },
   {
     "id": "MET-019",
@@ -3056,9 +3142,14 @@
     "requirement": "Configure report templates, privacy thresholds and retention.",
     "priority": "Must",
     "acceptance": "Generated report reflects version.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "PARTIAL",
+    "evidence": [
+      "internal/operations/reporting_privacy.go",
+      "internal/operations/reporting_privacy_test.go",
+      "internal/platform/httpserver/operations.go",
+      "database/migrations/0063_privacy_cases_contact_lifecycle_and_reporting_privacy.sql"
+    ],
+    "notes": "Governed privacy-threshold configuration and exact report policy evidence are implemented. A unified report-template and cross-domain retention administration service remains for the next governance checkpoint."
   },
   {
     "id": "ADM-014",
@@ -3098,9 +3189,16 @@
     "requirement": "Provide searchable audit views with export controls.",
     "priority": "Must",
     "acceptance": "Auditor can trace one campaign end to end.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/audit/postgres.go",
+      "internal/audit/event.go",
+      "internal/operations/service.go",
+      "internal/operations/export_worker.go",
+      "internal/platform/httpserver/operations.go",
+      "database/migrations/0062_secure_exports_and_audit_search.sql"
+    ],
+    "notes": "Audit search supports bounded cursor paging and actor/action/object/organisation/request/correlation/IP/time/outcome/sensitivity filters; approved exports are frozen, controlled and auditable."
   },
   {
     "id": "ADM-017",
@@ -3129,27 +3227,46 @@
     "requirement": "Support authorised exact contact lookup using HMAC and controlled decryption.",
     "priority": "Must",
     "acceptance": "DSAR operator can locate a known number.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/privacy/service.go",
+      "internal/privacy/service_test.go",
+      "internal/privacy/postgres.go",
+      "internal/shared/crypto/msisdn.go",
+      "internal/platform/httpserver/privacy.go"
+    ],
+    "notes": "Privacy cases locate an exact subject using the protected HMAC representation; plaintext is decrypted only inside approved execution/export workflows."
   },
   {
     "id": "PRV-002",
     "requirement": "Provide a data-subject access package containing profile, sources, consent, suppression and campaign history according to policy.",
     "priority": "Must",
     "acceptance": "Package is complete and secure.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/privacy/model.go",
+      "internal/privacy/service.go",
+      "internal/privacy/postgres.go",
+      "internal/privacy/service_test.go",
+      "internal/operations/export_worker.go",
+      "internal/platform/httpserver/privacy.go",
+      "database/migrations/0063_privacy_cases_contact_lifecycle_and_reporting_privacy.sql"
+    ],
+    "notes": "Approved access cases build profile, source, attribute, consent, suppression and campaign-history packages, encrypt them with a dedicated evidence key and release them only through controlled export."
   },
   {
     "id": "PRV-003",
     "requirement": "Support correction requests with source/reason and history.",
     "priority": "Must",
     "acceptance": "Current value changes without erasing audit.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/privacy/service.go",
+      "internal/privacy/postgres.go",
+      "internal/privacy/service_test.go",
+      "database/migrations/0063_privacy_cases_contact_lifecycle_and_reporting_privacy.sql"
+    ],
+    "notes": "Approved rectification cases update only an allowlisted field set while preserving a complete pre-change contact profile history, actor and reason."
   },
   {
     "id": "PRV-004",
@@ -3158,67 +3275,87 @@
     "acceptance": "Future eligibility is blocked.",
     "status": "IMPLEMENTED_TESTED",
     "evidence": [
-      "internal/consent/optout.go",
-      "internal/platform/httpserver/inbound_optout_test.go"
+      "internal/privacy/service.go",
+      "internal/privacy/postgres.go",
+      "internal/privacy/service_test.go",
+      "database/migrations/0063_privacy_cases_contact_lifecycle_and_reporting_privacy.sql"
     ],
-    "notes": "A recognised authenticated opt-out creates an immediate effective global suppression and blocks future eligibility."
+    "notes": "Approved objection execution atomically suppresses the contact and creates a global WhatsApp suppression before the case is completed."
   },
   {
     "id": "PRV-005",
     "requirement": "Support deletion/anonymisation workflow subject to lawful retention and suppression requirements.",
     "priority": "Must",
     "acceptance": "Decision records retained; unnecessary PII removed.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/privacy/service.go",
+      "internal/privacy/postgres.go",
+      "internal/privacy/service_test.go",
+      "internal/audience/contactlife/service.go",
+      "database/migrations/0063_privacy_cases_contact_lifecycle_and_reporting_privacy.sql"
+    ],
+    "notes": "Approved erasure cases are blocked by active legal holds, remove unnecessary attributes, withdraw active consent, anonymise the contact and preserve minimised suppression and immutable decision evidence."
   },
   {
     "id": "PRV-006",
     "requirement": "Support contact export in structured format for approved portability requests.",
     "priority": "Must",
     "acceptance": "Export is controlled and logged.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/privacy/service.go",
+      "internal/privacy/service_test.go",
+      "internal/operations/export_worker.go",
+      "internal/operations/export_worker_test.go",
+      "internal/platform/httpserver/privacy.go"
+    ],
+    "notes": "Approved portability cases produce an encrypted structured package and use actor-bound, expiring, single-use, audited export delivery."
   },
   {
     "id": "PRV-007",
     "requirement": "Track DSAR status, deadlines, owner and evidence.",
     "priority": "Must",
     "acceptance": "Overdue alert is produced.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "PARTIAL",
+    "evidence": [
+      "internal/privacy/model.go",
+      "internal/privacy/service.go",
+      "internal/privacy/postgres.go",
+      "internal/platform/httpserver/privacy.go",
+      "database/migrations/0063_privacy_cases_contact_lifecycle_and_reporting_privacy.sql"
+    ],
+    "notes": "Case status, deadlines, assignment, owner and immutable evidence are implemented. Automated overdue alert production remains for the platform alerting milestone."
   },
   {
     "id": "PRV-008",
     "requirement": "Restrict disclosure of third-party or security-sensitive information.",
     "priority": "Must",
     "acceptance": "Review step exists before release.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/privacy/service.go",
+      "internal/privacy/service_test.go",
+      "internal/platform/httpserver/privacy.go",
+      "database/migrations/0063_privacy_cases_contact_lifecycle_and_reporting_privacy.sql"
+    ],
+    "notes": "Disclosure packages require submission, independent approval and a separate executor; ordinary case APIs exclude encrypted result payloads."
   },
   {
     "id": "PRV-009",
     "requirement": "Support retention holds and legal holds with approval.",
     "priority": "Must",
     "acceptance": "Scheduled deletion excludes held records and logs reason.",
-    "status": "PARTIAL",
+    "status": "IMPLEMENTED_TESTED",
     "evidence": [
-      "internal/inbound/service.go",
-      "internal/inbound/postgres.go",
-      "internal/platform/httpserver/server.go",
-      "database/migrations/0027_inbound_reply_legal_hold_governance.sql",
-      "internal/inbound/retention_policy.go",
-      "internal/shared/crypto/keyring.go",
-      "database/migrations/0028_governed_inbound_retention_and_key_rotation.sql",
-      "internal/inbound/rotation.go",
-      "internal/inbound/rotation_postgres.go",
-      "cmd/inbound-governance-worker/main.go",
-      "database/migrations/0029_resumable_inbound_governance_operations.sql"
+      "internal/privacy/service.go",
+      "internal/privacy/postgres.go",
+      "internal/privacy/service_test.go",
+      "internal/audience/importer/rollback.go",
+      "database/migrations/0063_privacy_cases_contact_lifecycle_and_reporting_privacy.sql",
+      "internal/platform/httpserver/privacy.go"
     ],
-    "notes": "Inbound reply content supports reasoned, actor-attributed, optimistic-concurrency legal holds and controlled release; broader platform-wide legal hold coverage remains incomplete. Version 0.4.8 adds maker-checker inbound retention policy and versioned content-key rotation controls. Version 0.4.9 adds durable, lease-fenced and resumable key-rotation runs plus scheduled retention-sweep evidence."
+    "notes": "Privacy legal holds follow draft, submission, independent approval/rejection, active and released states with optimistic concurrency and append-only events; erasure and affected rollback paths fail closed while any applicable active hold remains."
   },
   {
     "id": "PRV-010",
@@ -3496,18 +3633,27 @@
     "requirement": "Small demographic report cells are suppressed or grouped according to privacy threshold.",
     "priority": "Must",
     "acceptance": "See acceptance criteria and linked tests.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/operations/reporting_privacy.go",
+      "internal/operations/reporting_privacy_test.go",
+      "internal/operations/service.go"
+    ],
+    "notes": "Small demographic and geographic report cells are suppressed according to the exact effective privacy-policy version."
   },
   {
     "id": "BR-028",
     "requirement": "Campaign evidence and source files are retained or deleted only according to approved retention rules.",
     "priority": "Must",
     "acceptance": "See acceptance criteria and linked tests.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "PARTIAL",
+    "evidence": [
+      "internal/audience/importer/source_retention.go",
+      "internal/operations/export_worker.go",
+      "internal/storage/environment.go",
+      "database/migrations/0064_import_mapping_rollback_and_retention.sql"
+    ],
+    "notes": "Import source files and generated exports follow governed expiry and deletion evidence. Complete cross-domain campaign evidence/media retention remains for the platform retention milestone."
   },
   {
     "id": "BR-029",
@@ -3721,9 +3867,14 @@
     "requirement": "Provide secure export workflow with purpose, approval and expiry.",
     "priority": "Must",
     "acceptance": "Unapproved bulk export is blocked.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/operations/service.go",
+      "internal/operations/export_worker.go",
+      "internal/platform/httpserver/operations.go",
+      "database/migrations/0062_secure_exports_and_audit_search.sql"
+    ],
+    "notes": "Exports require purpose, maker-checker approval, expiry and actor-bound single-use download grants; revocation and all download outcomes are audited."
   },
   {
     "id": "UX-014",

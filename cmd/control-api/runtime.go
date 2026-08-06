@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"campaign-platform/internal/audience/cohort"
+	"campaign-platform/internal/audience/contactlife"
 	audiencefilter "campaign-platform/internal/audience/filter"
 	"campaign-platform/internal/audience/importer"
 	"campaign-platform/internal/audience/materialisation"
@@ -31,6 +32,7 @@ import (
 	"campaign-platform/internal/persistence/database"
 	postgresrepo "campaign-platform/internal/persistence/postgres"
 	"campaign-platform/internal/platform/httpserver"
+	"campaign-platform/internal/privacy"
 	"campaign-platform/internal/provider"
 	"campaign-platform/internal/security/malware"
 	"campaign-platform/internal/segment"
@@ -104,6 +106,11 @@ func buildMemoryRuntime(cfg config.Config, protector *sharedcrypto.MSISDNProtect
 	deliveryEvents := delivery.NewService(delivery.NewMemoryRepository())
 	auditRepository := audit.NewMemoryRepository()
 	auditRecorder := audit.NewRecorder(auditRepository)
+	privacyKeyring, err := buildPrivacyEvidenceKeyring(cfg, false)
+	if err != nil {
+		return nil, fmt.Errorf("initialise privacy evidence protection: %w", err)
+	}
+	privacyCases := &privacy.Service{Repository: privacy.NewMemoryRepository(), Protector: protector, Evidence: privacyKeyring, Audit: auditRecorder}
 	nowPolicy := time.Now().UTC()
 	retentionStore := inbound.NewMemoryRetentionPolicyStore(inbound.RetentionPolicy{ID: "bootstrap-inbound-retention", RetentionDays: cfg.InboundRetentionDays, Status: inbound.RetentionPolicyActive, EffectiveFrom: nowPolicy.Add(-time.Second), Version: 1, CreatedBy: consent.DefaultGatewayServiceActorID, ApprovedBy: consent.DefaultGatewayServiceActorID, Reason: "bootstrap governed inbound retention policy", CreatedAt: nowPolicy, UpdatedAt: nowPolicy})
 	retentionPolicies := &inbound.RetentionPolicyAdministration{Store: retentionStore}
@@ -144,13 +151,19 @@ func buildMemoryRuntime(cfg config.Config, protector *sharedcrypto.MSISDNProtect
 	routingPlans := &execution.RoutingAdministration{Store: execution.NewMemoryRoutingPlanStore(), Campaigns: campaigns, ProviderCapabilities: providerCapabilities, GatewayPools: gatewayPools}
 	shardReallocations := &execution.ReallocationAdministration{Store: execution.NewMemoryShardRepository()}
 	executionCoordinator.RoutingPlans = routingPlans
-	operationsService := &operations.Service{Repo: operations.NewMemoryRepository(), Audit: auditRecorder, AuditRepository: auditRepository, Deliveries: deliveryEvents}
-	imports := &importer.ImportService{Repository: importer.NewMemoryImportRepository(), Organisations: orgs}
+	reportingPrivacy := &operations.ReportingPrivacyAdministration{Store: operations.NewMemoryReportingPrivacyStore(), Audit: auditRecorder}
+	operationsService := &operations.Service{Repo: operations.NewMemoryRepository(), Audit: auditRecorder, AuditRepository: auditRepository, Deliveries: deliveryEvents, ReportingPrivacy: reportingPrivacy}
+	importRepository := importer.NewMemoryImportRepository()
+	imports := &importer.ImportService{Repository: importRepository, Organisations: orgs}
+	importMappings := &importer.MappingAdministration{Store: importer.NewMemoryMappingStore(), Audit: auditRecorder}
+	importRollback := &importer.RollbackService{Repository: &importer.MemoryRollbackRepository{Imports: importRepository}, Audit: auditRecorder}
+	importIssues := &importer.IssueExportService{Repository: &importer.MemoryIssueRepository{Staging: importer.NewMemoryStagingRepository()}, Audit: auditRecorder}
+	contactLifecycle := &contactlife.Service{Repository: contactlife.NewMemoryRepository(), Audit: auditRecorder}
 	conflictRepository := importer.NewMemoryConflictRepository()
 	audienceConflicts := &importer.ConflictService{Repository: conflictRepository}
 	audienceReconciliation := &importer.ReconciliationService{Imports: imports, Conflicts: audienceConflicts, Repository: importer.NewMemoryReconciliationRepository()}
 	audienceSourceTrust := &importer.SourceTrustService{Repository: importer.NewMemorySourceTrustRepository()}
-	mediaStore, err := storage.NewFileSystemStore(cfg.ObjectStoreRoot)
+	mediaStore, err := storage.NewObjectStoreFromEnvironment(cfg.ObjectStoreRoot)
 	if err != nil {
 		return nil, fmt.Errorf("initialise media object store: %w", err)
 	}
@@ -164,14 +177,14 @@ func buildMemoryRuntime(cfg config.Config, protector *sharedcrypto.MSISDNProtect
 	}
 	messages.LinkPolicies = message.StaticLinkPolicy{Hosts: cfg.MessageAllowedHosts, Version: "environment-v1"}
 	jobOperations := &jobs.AdministrationService{Repository: jobs.NewMemoryRepository()}
-	intake, err := buildImportIntake(cfg, imports)
+	intake, err := buildImportIntake(cfg, imports, mediaStore)
 	if err != nil {
 		return nil, err
 	}
 	if intake == nil {
 		logger.Warn("secure audience-import intake is disabled until CLAMAV_ADDRESS is configured")
 	}
-	deps := httpserver.Dependencies{Registry: filters.Registry, FilterDefinitions: filters.Administration, Compiler: filters.Compiler, Cohorts: cohortExecution, Organisations: orgs, OrganisationPolicies: organisationPolicies, ConsentReviews: reviews, ConsentLedger: consentLedger, OptOutProcessor: optOutProcessor, OptOutPolicies: optOutPolicies, InboundReplies: inboundReplies, InboundRetentionPolicies: retentionPolicies, InboundRotation: rotationService, Campaigns: campaigns, CampaignWorkspace: campaignWorkspace, Commercial: commercialService, Geography: geography.DefaultCatalogue(), MaxImportPreviewRows: cfg.MaxImportPreviewRows, Identity: identityService, IdentityAdministration: identityAdministration, SecureCookies: cfg.SecureCookies, NetworkPolicy: httpserver.NetworkPolicy{AllowedCIDRs: cfg.AllowedNetworkCIDRs, TrustedProxyCIDRs: cfg.TrustedProxyCIDRs}, MSISDNProtector: protector, Messages: messages, TestMessages: testMessages, Snapshots: snapshots, SegmentDefinitions: segmentDefinitions, AudienceMaterialisations: materialisationService, DeliveryMetrics: metrics, Execution: executionCoordinator, RoutingPlans: routingPlans, ShardReallocations: shardReallocations, JobOperations: jobOperations, Operations: operationsService, SenderGovernance: senderGovernance, SenderSessionLifecycle: senderLifecycle, PacingPolicies: pacingPolicies, ProviderCapabilities: providerCapabilities, AudienceImports: imports, AudienceConflicts: audienceConflicts, AudienceReconciliation: audienceReconciliation, AudienceSourceTrust: audienceSourceTrust, AudienceImportIntake: intake, MaxImportFileBytes: cfg.MaxImportFileBytes, DeliveryEvents: deliveryEvents, GatewayCallbackSecret: []byte(cfg.GatewayCallbackSecret), GatewayCallbackMaxSkew: cfg.GatewayCallbackMaxSkew, MediaObjects: mediaStore, TrustedAssets: trustedAssets, MediaDownloadSecret: []byte(cfg.MediaDownloadSecret), ReadinessChecks: []httpserver.ReadinessCheck{filters.Readiness}}
+	deps := httpserver.Dependencies{Registry: filters.Registry, FilterDefinitions: filters.Administration, Compiler: filters.Compiler, Cohorts: cohortExecution, Organisations: orgs, OrganisationPolicies: organisationPolicies, ConsentReviews: reviews, ConsentLedger: consentLedger, OptOutProcessor: optOutProcessor, OptOutPolicies: optOutPolicies, InboundReplies: inboundReplies, InboundRetentionPolicies: retentionPolicies, InboundRotation: rotationService, Campaigns: campaigns, CampaignWorkspace: campaignWorkspace, Commercial: commercialService, Geography: geography.DefaultCatalogue(), MaxImportPreviewRows: cfg.MaxImportPreviewRows, Identity: identityService, IdentityAdministration: identityAdministration, SecureCookies: cfg.SecureCookies, NetworkPolicy: httpserver.NetworkPolicy{AllowedCIDRs: cfg.AllowedNetworkCIDRs, TrustedProxyCIDRs: cfg.TrustedProxyCIDRs}, MSISDNProtector: protector, Messages: messages, TestMessages: testMessages, Snapshots: snapshots, SegmentDefinitions: segmentDefinitions, AudienceMaterialisations: materialisationService, DeliveryMetrics: metrics, Execution: executionCoordinator, RoutingPlans: routingPlans, ShardReallocations: shardReallocations, JobOperations: jobOperations, Operations: operationsService, PrivacyCases: privacyCases, ContactLifecycle: contactLifecycle, SenderGovernance: senderGovernance, SenderSessionLifecycle: senderLifecycle, PacingPolicies: pacingPolicies, ProviderCapabilities: providerCapabilities, AudienceImports: imports, AudienceImportMappings: importMappings, AudienceImportRollback: importRollback, AudienceImportIssues: importIssues, AudienceConflicts: audienceConflicts, AudienceReconciliation: audienceReconciliation, AudienceSourceTrust: audienceSourceTrust, AudienceImportIntake: intake, MaxImportFileBytes: cfg.MaxImportFileBytes, DeliveryEvents: deliveryEvents, GatewayCallbackSecret: []byte(cfg.GatewayCallbackSecret), GatewayCallbackMaxSkew: cfg.GatewayCallbackMaxSkew, MediaObjects: mediaStore, TrustedAssets: trustedAssets, MediaDownloadSecret: []byte(cfg.MediaDownloadSecret), ReadinessChecks: []httpserver.ReadinessCheck{filters.Readiness}}
 	return &controlRuntime{Dependencies: deps}, nil
 }
 
@@ -223,6 +236,11 @@ func buildPostgreSQLRuntime(ctx context.Context, cfg config.Config, protector *s
 	}
 	auditRepository := &audit.PostgreSQLRepository{DB: db}
 	auditRecorder := audit.NewRecorder(auditRepository)
+	privacyKeyring, err := buildPrivacyEvidenceKeyring(cfg, true)
+	if err != nil {
+		return fail(fmt.Errorf("initialise privacy evidence protection: %w", err))
+	}
+	privacyCases := &privacy.Service{Repository: &privacy.PostgreSQLRepository{DB: db}, Protector: protector, Evidence: privacyKeyring, Audit: auditRecorder}
 	retentionStore := &inbound.PostgreSQLRetentionPolicyStore{DB: db}
 	retentionPolicies := &inbound.RetentionPolicyAdministration{Store: retentionStore}
 	if _, retentionErr := retentionStore.Active(ctx, time.Now().UTC()); errors.Is(retentionErr, inbound.ErrRetentionPolicyNotFound) {
@@ -269,13 +287,18 @@ func buildPostgreSQLRuntime(ctx context.Context, cfg config.Config, protector *s
 	routingPlans := &execution.RoutingAdministration{Store: &execution.PostgreSQLRoutingPlanStore{DB: db}, Campaigns: campaigns, ProviderCapabilities: providerCapabilities, GatewayPools: gatewayPools}
 	shardReallocations := &execution.ReallocationAdministration{Store: &execution.PostgreSQLShardRepository{DB: db}}
 	executionCoordinator.RoutingPlans = routingPlans
-	operationsService := &operations.Service{Repo: &operations.PostgreSQLRepository{DB: db}, Audit: auditRecorder, AuditRepository: auditRepository, Deliveries: deliveryEvents}
+	reportingPrivacy := &operations.ReportingPrivacyAdministration{Store: &operations.PostgreSQLReportingPrivacyStore{DB: db}, Audit: auditRecorder}
+	operationsService := &operations.Service{Repo: &operations.PostgreSQLRepository{DB: db}, Audit: auditRecorder, AuditRepository: auditRepository, Deliveries: deliveryEvents, ReportingPrivacy: reportingPrivacy}
 	jobOperations := &jobs.AdministrationService{Repository: &jobs.PostgreSQLRepository{DB: db}}
 	imports := &importer.ImportService{Repository: &importer.PostgreSQLImportRepository{DB: db}, Organisations: orgs}
+	importMappings := &importer.MappingAdministration{Store: &importer.PostgreSQLMappingStore{DB: db}, Audit: auditRecorder}
+	importRollback := &importer.RollbackService{Repository: &importer.PostgreSQLRollbackRepository{DB: db}, Audit: auditRecorder}
+	importIssues := &importer.IssueExportService{Repository: &importer.PostgreSQLIssueRepository{DB: db}, Audit: auditRecorder}
+	contactLifecycle := &contactlife.Service{Repository: &contactlife.PostgreSQLRepository{DB: db}, Audit: auditRecorder}
 	audienceConflicts := &importer.ConflictService{Repository: &importer.PostgreSQLConflictRepository{DB: db}}
 	audienceReconciliation := &importer.ReconciliationService{Imports: imports, Conflicts: audienceConflicts, Repository: &importer.PostgreSQLReconciliationRepository{DB: db}}
 	audienceSourceTrust := &importer.SourceTrustService{Repository: &importer.PostgreSQLSourceTrustRepository{DB: db}}
-	mediaStore, err := storage.NewFileSystemStore(cfg.ObjectStoreRoot)
+	mediaStore, err := storage.NewObjectStoreFromEnvironment(cfg.ObjectStoreRoot)
 	if err != nil {
 		return fail(fmt.Errorf("initialise media object store: %w", err))
 	}
@@ -289,7 +312,7 @@ func buildPostgreSQLRuntime(ctx context.Context, cfg config.Config, protector *s
 	messages.Assets = trustedMessageAssetResolver{service: trustedAssets, maximum: 64 << 20}
 	reviews.Evidence = trustedConsentEvidenceResolver{service: trustedAssets}
 	messages.LinkPolicies = message.StaticLinkPolicy{Hosts: cfg.MessageAllowedHosts, Version: "environment-v1"}
-	intake, err := buildImportIntake(cfg, imports)
+	intake, err := buildImportIntake(cfg, imports, mediaStore)
 	if err != nil {
 		return fail(err)
 	}
@@ -297,19 +320,31 @@ func buildPostgreSQLRuntime(ctx context.Context, cfg config.Config, protector *s
 		return fail(errors.New("secure audience-import intake is required for persistent runtime"))
 	}
 	releases := &orchestration.ReleaseService{Campaigns: campaigns, Organisations: orgs, Snapshots: snapshots, Store: &orchestration.PostgreSQLStore{DB: db}, Eligibility: orchestration.SQLFinalEligibilityChecker{}, BatchSize: 1000, ShardCount: 256}
-	deps := httpserver.Dependencies{Registry: filters.Registry, FilterDefinitions: filters.Administration, Compiler: filters.Compiler, Cohorts: cohortExecution, Organisations: orgs, OrganisationPolicies: organisationPolicies, ConsentReviews: reviews, ConsentLedger: consentLedger, OptOutProcessor: optOutProcessor, OptOutPolicies: optOutPolicies, InboundReplies: inboundReplies, InboundRetentionPolicies: retentionPolicies, InboundRotation: rotationService, Campaigns: campaigns, CampaignWorkspace: campaignWorkspace, Commercial: commercialService, Geography: geography.DefaultCatalogue(), MaxImportPreviewRows: cfg.MaxImportPreviewRows, Identity: identityService, IdentityAdministration: identityAdministration, SecureCookies: cfg.SecureCookies, NetworkPolicy: httpserver.NetworkPolicy{AllowedCIDRs: cfg.AllowedNetworkCIDRs, TrustedProxyCIDRs: cfg.TrustedProxyCIDRs}, MSISDNProtector: protector, Messages: messages, TestMessages: testMessages, Snapshots: snapshots, SegmentDefinitions: segmentDefinitions, AudienceMaterialisations: materialisationService, Releases: releases, DeliveryMetrics: metrics, Execution: executionCoordinator, RoutingPlans: routingPlans, ShardReallocations: shardReallocations, JobOperations: jobOperations, Operations: operationsService, SenderGovernance: senderGovernance, SenderSessionLifecycle: senderLifecycle, PacingPolicies: pacingPolicies, ProviderCapabilities: providerCapabilities, AudienceImports: imports, AudienceConflicts: audienceConflicts, AudienceReconciliation: audienceReconciliation, AudienceSourceTrust: audienceSourceTrust, AudienceImportIntake: intake, MaxImportFileBytes: cfg.MaxImportFileBytes, DeliveryEvents: deliveryEvents, GatewayCallbackSecret: []byte(cfg.GatewayCallbackSecret), GatewayCallbackMaxSkew: cfg.GatewayCallbackMaxSkew, MediaObjects: mediaStore, TrustedAssets: trustedAssets, MediaDownloadSecret: []byte(cfg.MediaDownloadSecret), ReadinessChecks: []httpserver.ReadinessCheck{{Name: "postgres", Check: db.PingContext}, {Name: "schema", Check: func(c context.Context) error { return verifyControlSchema(c, db) }}, filters.Readiness}}
+	deps := httpserver.Dependencies{Registry: filters.Registry, FilterDefinitions: filters.Administration, Compiler: filters.Compiler, Cohorts: cohortExecution, Organisations: orgs, OrganisationPolicies: organisationPolicies, ConsentReviews: reviews, ConsentLedger: consentLedger, OptOutProcessor: optOutProcessor, OptOutPolicies: optOutPolicies, InboundReplies: inboundReplies, InboundRetentionPolicies: retentionPolicies, InboundRotation: rotationService, Campaigns: campaigns, CampaignWorkspace: campaignWorkspace, Commercial: commercialService, Geography: geography.DefaultCatalogue(), MaxImportPreviewRows: cfg.MaxImportPreviewRows, Identity: identityService, IdentityAdministration: identityAdministration, SecureCookies: cfg.SecureCookies, NetworkPolicy: httpserver.NetworkPolicy{AllowedCIDRs: cfg.AllowedNetworkCIDRs, TrustedProxyCIDRs: cfg.TrustedProxyCIDRs}, MSISDNProtector: protector, Messages: messages, TestMessages: testMessages, Snapshots: snapshots, SegmentDefinitions: segmentDefinitions, AudienceMaterialisations: materialisationService, Releases: releases, DeliveryMetrics: metrics, Execution: executionCoordinator, RoutingPlans: routingPlans, ShardReallocations: shardReallocations, JobOperations: jobOperations, Operations: operationsService, PrivacyCases: privacyCases, ContactLifecycle: contactLifecycle, SenderGovernance: senderGovernance, SenderSessionLifecycle: senderLifecycle, PacingPolicies: pacingPolicies, ProviderCapabilities: providerCapabilities, AudienceImports: imports, AudienceImportMappings: importMappings, AudienceImportRollback: importRollback, AudienceImportIssues: importIssues, AudienceConflicts: audienceConflicts, AudienceReconciliation: audienceReconciliation, AudienceSourceTrust: audienceSourceTrust, AudienceImportIntake: intake, MaxImportFileBytes: cfg.MaxImportFileBytes, DeliveryEvents: deliveryEvents, GatewayCallbackSecret: []byte(cfg.GatewayCallbackSecret), GatewayCallbackMaxSkew: cfg.GatewayCallbackMaxSkew, MediaObjects: mediaStore, TrustedAssets: trustedAssets, MediaDownloadSecret: []byte(cfg.MediaDownloadSecret), ReadinessChecks: []httpserver.ReadinessCheck{{Name: "postgres", Check: db.PingContext}, {Name: "schema", Check: func(c context.Context) error { return verifyControlSchema(c, db) }}, filters.Readiness}}
 	return &controlRuntime{Dependencies: deps, close: db.Close}, nil
 }
 
-func buildImportIntake(cfg config.Config, service *importer.ImportService) (*importer.IntakeService, error) {
+func buildPrivacyEvidenceKeyring(cfg config.Config, persistent bool) (*sharedcrypto.SecretKeyring, error) {
+	if strings.TrimSpace(cfg.PrivacyEvidenceKeysJSON) != "" {
+		return sharedcrypto.NewSecretKeyringFromJSON(cfg.PrivacyEvidenceActiveKey, cfg.PrivacyEvidenceKeysJSON)
+	}
+	if strings.TrimSpace(cfg.PrivacyEvidenceKeyBase64) != "" {
+		return sharedcrypto.NewSecretKeyringFromJSON("v1", fmt.Sprintf(`{"v1":%q}`, cfg.PrivacyEvidenceKeyBase64))
+	}
+	if persistent {
+		return nil, errors.New("persistent runtime requires PRIVACY_EVIDENCE_KEY_BASE64 or PRIVACY_EVIDENCE_KEYS_JSON")
+	}
+	return sharedcrypto.NewSecretKeyring("development-v1", map[string][]byte{"development-v1": []byte("development-privacy-key-32-byte!")})
+}
+
+func buildImportIntake(cfg config.Config, service *importer.ImportService, store storage.ObjectStore) (*importer.IntakeService, error) {
 	if strings.TrimSpace(cfg.ClamAVAddress) == "" {
 		return nil, nil
 	}
-	store, err := storage.NewFileSystemStore(cfg.ObjectStoreRoot)
-	if err != nil {
-		return nil, err
+	if store == nil {
+		return nil, errors.New("object storage is required for audience intake")
 	}
-	return &importer.IntakeService{Store: store, Imports: service, MaxFileSize: cfg.MaxImportFileBytes, Scanner: malware.ClamAVScanner{Address: cfg.ClamAVAddress, DialTimeout: cfg.ClamAVDialTimeout, ScanTimeout: cfg.ClamAVScanTimeout}}, nil
+	return &importer.IntakeService{Store: store, Imports: service, MaxFileSize: cfg.MaxImportFileBytes, DefaultSourceRetention: time.Duration(cfg.AudienceImportSourceRetentionDays) * 24 * time.Hour, Scanner: malware.ClamAVScanner{Address: cfg.ClamAVAddress, DialTimeout: cfg.ClamAVDialTimeout, ScanTimeout: cfg.ClamAVScanTimeout}}, nil
 }
 func verifyControlSchema(ctx context.Context, db *sql.DB) error {
 	var ready bool
@@ -331,6 +366,16 @@ func verifyControlSchema(ctx context.Context, db *sql.DB) error {
   AND to_regclass('public.campaign_execution_leases') IS NOT NULL
   AND to_regclass('public.operations_incidents') IS NOT NULL
   AND to_regclass('public.export_requests') IS NOT NULL
+  AND to_regclass('public.export_download_grants') IS NOT NULL
+  AND to_regclass('public.privacy_cases') IS NOT NULL
+  AND to_regclass('public.privacy_legal_holds') IS NOT NULL
+  AND to_regclass('public.privacy_legal_hold_events') IS NOT NULL
+  AND to_regclass('public.reporting_privacy_policies') IS NOT NULL
+  AND to_regclass('public.audience_import_mapping_definitions') IS NOT NULL
+  AND to_regclass('public.audience_import_contact_mutations') IS NOT NULL
+  AND to_regclass('public.audience_import_rollback_events') IS NOT NULL
+  AND to_regclass('public.audience_import_source_deletion_events') IS NOT NULL
+  AND to_regclass('public.contact_lifecycle_events') IS NOT NULL
   AND to_regclass('public.audience_profile_conflicts') IS NOT NULL
   AND to_regclass('public.organisation_policy_versions') IS NOT NULL
   AND to_regclass('public.campaign_commercial_approvals') IS NOT NULL
@@ -352,6 +397,7 @@ func verifyControlSchema(ctx context.Context, db *sql.DB) error {
   AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='test_message_sends' AND column_name='gateway_pool_version')
   AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='test_message_sends' AND column_name='provider_adapter_version')
   AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='test_message_sends' AND column_name='provider_capability_definition_id')
+  AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='contacts' AND column_name='lifecycle_version')
   AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname='provider_capability_active_period_exclusion')`).Scan(&ready)
 	if err != nil {
 		return err

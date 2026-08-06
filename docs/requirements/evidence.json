@@ -111,6 +111,16 @@
     "notes": "Effective-dated, maker-checker organisation policies configure purpose/channel frequency caps with bounded message and time windows.",
     "status": "IMPLEMENTED_TESTED"
   },
+  "ADM-013": {
+    "evidence": [
+      "internal/operations/reporting_privacy.go",
+      "internal/operations/reporting_privacy_test.go",
+      "internal/platform/httpserver/operations.go",
+      "database/migrations/0063_privacy_cases_contact_lifecycle_and_reporting_privacy.sql"
+    ],
+    "notes": "Governed privacy-threshold configuration and exact report policy evidence are implemented. A unified report-template and cross-domain retention administration service remains for the next governance checkpoint.",
+    "status": "PARTIAL"
+  },
   "ADM-014": {
     "evidence": [
       "internal/audit/event.go",
@@ -133,6 +143,18 @@
       "database/migrations/0027_inbound_reply_legal_hold_governance.sql"
     ],
     "status": "PARTIAL"
+  },
+  "ADM-016": {
+    "evidence": [
+      "internal/audit/postgres.go",
+      "internal/audit/event.go",
+      "internal/operations/service.go",
+      "internal/operations/export_worker.go",
+      "internal/platform/httpserver/operations.go",
+      "database/migrations/0062_secure_exports_and_audit_search.sql"
+    ],
+    "notes": "Audit search supports bounded cursor paging and actor/action/object/organisation/request/correlation/IP/time/outcome/sensitivity filters; approved exports are frozen, controlled and auditable.",
+    "status": "IMPLEMENTED_TESTED"
   },
   "ADM-017": {
     "evidence": [
@@ -244,6 +266,25 @@
     ],
     "status": "IMPLEMENTED_TESTED"
   },
+  "BR-027": {
+    "evidence": [
+      "internal/operations/reporting_privacy.go",
+      "internal/operations/reporting_privacy_test.go",
+      "internal/operations/service.go"
+    ],
+    "notes": "Small demographic and geographic report cells are suppressed according to the exact effective privacy-policy version.",
+    "status": "IMPLEMENTED_TESTED"
+  },
+  "BR-028": {
+    "evidence": [
+      "internal/audience/importer/source_retention.go",
+      "internal/operations/export_worker.go",
+      "internal/storage/environment.go",
+      "database/migrations/0064_import_mapping_rollback_and_retention.sql"
+    ],
+    "notes": "Import source files and generated exports follow governed expiry and deletion evidence. Complete cross-domain campaign evidence/media retention remains for the platform retention milestone.",
+    "status": "PARTIAL"
+  },
   "BR-029": {
     "evidence": [
       "internal/organisation/service.go",
@@ -267,8 +308,20 @@
     "notes": "Campaign release binds an immutable snapshot and material changes invalidate approvals.",
     "status": "IMPLEMENTED_TESTED"
   },
+  "CAM-006": {
+    "evidence": [
+      "internal/storage/asset.go",
+      "internal/storage/asset_postgres.go",
+      "internal/storage/asset_test.go",
+      "internal/storage/environment.go",
+      "internal/storage/s3.go",
+      "internal/storage/s3_test.go",
+      "internal/platform/httpserver/assets.go"
+    ],
+    "notes": "Assets use trusted server-derived checksum, content type, size and malware status; quarantined/revoked/tampered objects fail closed and storage supports filesystem or S3/MinIO.",
+    "status": "IMPLEMENTED_TESTED"
+  },
   "CAM-009": {
-    "status": "IMPLEMENTED_TESTED",
     "evidence": [
       "internal/testmessage/model.go",
       "internal/testmessage/memory.go",
@@ -280,7 +333,8 @@
       "database/migrations/0056_controlled_test_messages.sql",
       "database/migrations/0059_backend_hardening_and_provider_binding.sql"
     ],
-    "notes": "Only maker-checker approved test MSISDNs may receive test sends. Test sends freeze the message content hash, explicit OpenWA engine, gateway pool, session, provider adapter and exact provider capability definition/version. Scheduling and worker execution revalidate required capabilities and fail closed on route drift; idempotent replay compares the frozen request."
+    "notes": "Only maker-checker approved test MSISDNs may receive test sends. Test sends freeze the message content hash, explicit OpenWA engine, gateway pool, session, provider adapter and exact provider capability definition/version. Scheduling and worker execution revalidate required capabilities and fail closed on route drift; idempotent replay compares the frozen request.",
+    "status": "IMPLEMENTED_TESTED"
   },
   "CAM-012": {
     "evidence": [
@@ -314,6 +368,17 @@
     "notes": "Exact opt-out commands and language variants are governed through versioned effective-dated policy records with maker-checker submission and approval; inbound processing resolves the active policy at execution time.",
     "status": "IMPLEMENTED_TESTED"
   },
+  "CNS-020": {
+    "evidence": [
+      "internal/privacy/model.go",
+      "internal/privacy/service.go",
+      "internal/privacy/postgres.go",
+      "internal/operations/export_worker.go",
+      "internal/platform/httpserver/privacy.go"
+    ],
+    "notes": "Approved privacy access packages include consent and suppression evidence and are encrypted, controlled, integrity-checked and fully audited.",
+    "status": "IMPLEMENTED_TESTED"
+  },
   "CON-002": {
     "evidence": [
       "internal/audience/importer/normalizer.go",
@@ -343,11 +408,77 @@
     ],
     "status": "IMPLEMENTED_TESTED"
   },
+  "CON-006": {
+    "evidence": [
+      "internal/privacy/service.go",
+      "internal/dispatch/worker.go",
+      "internal/operations/export_worker.go",
+      "internal/shared/crypto/msisdn.go"
+    ],
+    "notes": "Plaintext decryption is constrained to final dispatch and approved privacy/export execution paths. Deployment-specific least-privilege service/database identities remain for the production-engineering checkpoint.",
+    "status": "PARTIAL"
+  },
   "CON-007": {
     "evidence": [
       "internal/geography/catalogue.go",
       "database/reference-data/geography"
     ],
+    "status": "PARTIAL"
+  },
+  "CRV-001": {
+    "evidence": [
+      "internal/consent/review.go",
+      "internal/consent/review_test.go",
+      "internal/persistence/postgres/consent.go",
+      "internal/platform/httpserver/consent_reviews.go",
+      "contracts/openapi/control-api.yaml",
+      "database/migrations/0061_trusted_assets_and_consent_review_governance.sql"
+    ],
+    "notes": "Consent reviews are created as governed drafts at organisation, source or exact campaign scope; scope-specific identifiers are validated, persisted and rechecked during campaign eligibility.",
+    "status": "IMPLEMENTED_TESTED"
+  },
+  "CRV-005": {
+    "evidence": [
+      "internal/storage/asset.go",
+      "internal/storage/asset_test.go",
+      "internal/consent/review.go",
+      "internal/consent/review_test.go",
+      "internal/persistence/postgres/consent.go",
+      "database/migrations/0061_trusted_assets_and_consent_review_governance.sql"
+    ],
+    "notes": "Uploaded evidence derives its SHA-256 checksum from stored bytes and external evidence references require an explicit SHA-256 fingerprint. Clean asset bytes are rechecked before use.",
+    "status": "IMPLEMENTED_TESTED"
+  },
+  "CRV-006": {
+    "evidence": [
+      "internal/storage/asset.go",
+      "internal/storage/asset_test.go",
+      "internal/security/malware/scanner.go",
+      "internal/platform/httpserver/assets.go",
+      "database/migrations/0061_trusted_assets_and_consent_review_governance.sql"
+    ],
+    "notes": "Evidence and campaign media remain unavailable until trusted intake has completed malware scanning; infected, indeterminate, failed or revoked assets fail closed.",
+    "status": "IMPLEMENTED_TESTED"
+  },
+  "CRV-010": {
+    "evidence": [
+      "internal/consent/review.go",
+      "internal/consent/review_test.go",
+      "internal/persistence/postgres/consent.go",
+      "contracts/openapi/control-api.yaml",
+      "database/migrations/0061_trusted_assets_and_consent_review_governance.sql"
+    ],
+    "notes": "Consent reviews store bounded aggregate sample-review notes and reject telephone-number or email-address patterns to reduce unnecessary sample PII.",
+    "status": "IMPLEMENTED_TESTED"
+  },
+  "CRV-012": {
+    "evidence": [
+      "internal/campaign/service.go",
+      "internal/campaign/consent_review_gate_test.go",
+      "internal/consent/review.go",
+      "internal/persistence/postgres/consent.go"
+    ],
+    "notes": "Campaign release requires a valid, correctly scoped, unexpired approved consent review. The separately approved non-consent lawful-basis alternative remains unimplemented.",
     "status": "PARTIAL"
   },
   "DLV-001": {
@@ -477,6 +608,49 @@
     "notes": "Generic worker concurrency is bounded; per-OpenWA-session integration is pending.",
     "status": "PARTIAL"
   },
+  "GWY-011": {
+    "evidence": [
+      "services/openwa-gateway/src/openwa-webhook.controller.ts",
+      "services/openwa-gateway/src/inbound-message-outbox.service.ts",
+      "services/openwa-gateway/src/inbound-message-publisher.service.ts",
+      "internal/gateway/callback.go",
+      "internal/gateway/inbound.go",
+      "internal/gateway/inbound_test.go",
+      "internal/platform/httpserver/server.go"
+    ],
+    "notes": "Delivery/read and inbound events are normalised, durably queued by the gateway and forwarded through signed callbacks. The control plane verifies signatures, replay windows and event identity; genuine WhatsApp event shapes remain a live validation gate.",
+    "status": "IMPLEMENTED_TESTED"
+  },
+  "GWY-013": {
+    "evidence": [
+      "internal/storage/asset.go",
+      "internal/storage/asset_test.go",
+      "internal/message/service.go",
+      "internal/campaign/service.go",
+      "internal/dispatch/handler.go",
+      "internal/provider/registry.go",
+      "database/migrations/0061_trusted_assets_and_consent_review_governance.sql"
+    ],
+    "notes": "Messages freeze trusted object references, derived media type/size/checksum and route capability evidence. Dispatch resolves short-lived object access and enforces the frozen provider attachment ceiling without loading campaign batches into memory.",
+    "status": "IMPLEMENTED_TESTED"
+  },
+  "GWY-016": {
+    "evidence": [
+      "internal/provider/registry.go",
+      "internal/provider/registry_postgres.go",
+      "internal/provider/version.go",
+      "internal/provider/version_test.go",
+      "internal/campaign/service.go",
+      "internal/campaign/provider_capability_test.go",
+      "internal/dispatch/postgres_material.go",
+      "internal/dispatch/governed_route_test.go",
+      "internal/testmessage/postgres.go",
+      "database/migrations/0058_provider_capability_registry.sql",
+      "database/migrations/0059_backend_hardening_and_provider_binding.sql"
+    ],
+    "notes": "The control plane exposes governed provider/engine capability and version definitions, freezes the exact definition into campaign/test-send evidence, and blocks incompatible gateway, adapter, minimum-version or message-capability routes. Genuine engine operation remains an external validation gate.",
+    "status": "IMPLEMENTED_TESTED"
+  },
   "IAM-001": {
     "evidence": [
       "internal/identity/administration.go",
@@ -570,12 +744,61 @@
     "notes": "Optional CIDR allowlisting supports trusted-proxy-aware client resolution and records network denials.",
     "status": "IMPLEMENTED_TESTED"
   },
+  "IMP-001": {
+    "evidence": [
+      "internal/audience/importer/xlsx.go",
+      "internal/audience/importer/xlsx_test.go",
+      "internal/audience/importer/validation_worker.go",
+      "internal/platform/httpserver/server.go",
+      "contracts/openapi/control-api.yaml",
+      "database/migrations/0064_import_mapping_rollback_and_retention.sql"
+    ],
+    "notes": "CSV and bounded XLSX imports run through the same protected validation/staging workflow. XLSX tests cover worksheet selection, hidden sheets, formulas and unsafe embedded/external content.",
+    "status": "IMPLEMENTED_TESTED"
+  },
+  "IMP-002": {
+    "evidence": [
+      "internal/audience/importer/template.go",
+      "internal/audience/importer/governance_test.go",
+      "internal/platform/httpserver/import_governance.go",
+      "contracts/openapi/control-api.yaml"
+    ],
+    "notes": "Versioned deterministic CSV and XLSX templates are downloadable through a dedicated controlled API; unknown versions and formats fail closed.",
+    "status": "IMPLEMENTED_TESTED"
+  },
+  "IMP-003": {
+    "evidence": [
+      "internal/audience/importer/mapping.go",
+      "internal/audience/importer/governance_test.go",
+      "internal/platform/httpserver/import_governance.go",
+      "database/migrations/0064_import_mapping_rollback_and_retention.sql",
+      "contracts/openapi/control-api.yaml"
+    ],
+    "notes": "Reusable source mappings are governed, maker-checker approved, effective-dated and safely superseded; future replacements do not retire the current mapping before their effective boundary.",
+    "status": "IMPLEMENTED_TESTED"
+  },
+  "IMP-004": {
+    "evidence": [
+      "internal/audience/importer/intake.go",
+      "internal/audience/importer/file_inspection.go",
+      "internal/audience/importer/file_inspection_test.go",
+      "internal/audience/importer/intake_test.go",
+      "internal/security/malware/scanner.go"
+    ],
+    "notes": "Import intake streams to quarantine storage, enforces filename and byte limits, verifies actual CSV/XLSX signatures and records a terminal malware decision before validation can proceed.",
+    "status": "IMPLEMENTED_TESTED"
+  },
   "IMP-005": {
     "evidence": [
-      "internal/audience/importer/csv.go"
+      "internal/audience/importer/csv.go",
+      "internal/audience/importer/error_export.go",
+      "internal/audience/importer/issue_service.go",
+      "internal/audience/importer/issue_service_test.go",
+      "internal/operations/export_worker.go",
+      "internal/operations/export_worker_test.go"
     ],
-    "notes": "Import preview is safe; export formula protection is pending.",
-    "status": "PARTIAL"
+    "notes": "Dangerous spreadsheet prefixes are neutralised in import previews, row-level issue exports, CSV reports and XLSX cell rendering.",
+    "status": "IMPLEMENTED_TESTED"
   },
   "IMP-006": {
     "evidence": [
@@ -626,6 +849,16 @@
     ],
     "status": "PARTIAL"
   },
+  "IMP-016": {
+    "evidence": [
+      "internal/audience/importer/issue_service.go",
+      "internal/audience/importer/issue_service_test.go",
+      "internal/platform/httpserver/import_issues.go",
+      "contracts/openapi/control-api.yaml"
+    ],
+    "notes": "Authorised operators can download bounded row-level validation issues as spreadsheet-safe CSV with masked identifiers and auditable search/export evidence.",
+    "status": "IMPLEMENTED_TESTED"
+  },
   "IMP-017": {
     "evidence": [
       "internal/audience/importer/conflict.go",
@@ -637,6 +870,58 @@
     ],
     "notes": "Uploaded, valid, invalid, duplicate, suppressed, inserted and updated totals are reconciled and can be closed with immutable evidence after conflicts resolve. A distinct unchanged-contact count is still outstanding.",
     "status": "PARTIAL"
+  },
+  "IMP-018": {
+    "evidence": [
+      "internal/audience/importer/rollback.go",
+      "internal/audience/importer/governance_test.go",
+      "internal/audience/importer/merge_postgres.go",
+      "database/migrations/0064_import_mapping_rollback_and_retention.sql",
+      "internal/platform/httpserver/import_governance.go"
+    ],
+    "notes": "Rollback restores captured pre-import state, removes only exclusively inserted contacts, revokes only import-derived consent and fails closed after downstream consumption or later profile changes.",
+    "status": "IMPLEMENTED_TESTED"
+  },
+  "IMP-020": {
+    "evidence": [
+      "internal/audience/importer/source_retention.go",
+      "internal/audience/importer/governance_test.go",
+      "cmd/audience-worker/main.go",
+      "database/migrations/0064_import_mapping_rollback_and_retention.sql",
+      "internal/storage/environment.go",
+      "internal/storage/s3.go"
+    ],
+    "notes": "Import source objects receive governed expiry, lease-fenced deletion, retry/failure handling and append-only deletion evidence; storage can use filesystem or S3/MinIO.",
+    "status": "IMPLEMENTED_TESTED"
+  },
+  "MET-012": {
+    "evidence": [
+      "internal/operations/reporting_privacy.go",
+      "internal/operations/reporting_privacy_test.go",
+      "internal/platform/httpserver/operations.go",
+      "database/migrations/0063_privacy_cases_contact_lifecycle_and_reporting_privacy.sql"
+    ],
+    "notes": "Minimum report cohort thresholds are governed, maker-checker approved, effective-dated and frozen by policy ID/version into report evidence.",
+    "status": "IMPLEMENTED_TESTED"
+  },
+  "MET-017": {
+    "evidence": [
+      "internal/operations/service.go",
+      "internal/operations/export_worker.go",
+      "internal/operations/export_worker_test.go",
+      "internal/platform/httpserver/operations.go",
+      "database/migrations/0062_secure_exports_and_audit_search.sql"
+    ],
+    "notes": "Organisation-facing campaign reports can be frozen, approved, rendered and retrieved through short-lived actor-bound export grants without external portal access.",
+    "status": "IMPLEMENTED_TESTED"
+  },
+  "MET-018": {
+    "evidence": [
+      "internal/operations/export_worker.go",
+      "internal/operations/export_worker_test.go"
+    ],
+    "notes": "Export rendering produces valid multi-page PDF, CSV and XLSX files with deterministic frozen input and spreadsheet-safe cells.",
+    "status": "IMPLEMENTED_TESTED"
   },
   "NFR-D-005": {
     "evidence": [
@@ -742,30 +1027,104 @@
     "notes": "Effective-dated organisation policy versions govern contact/campaign retention periods and report branding metadata. The same policy aggregate now carries governed purpose/channel frequency caps.",
     "status": "IMPLEMENTED_TESTED"
   },
+  "PRV-001": {
+    "evidence": [
+      "internal/privacy/service.go",
+      "internal/privacy/service_test.go",
+      "internal/privacy/postgres.go",
+      "internal/shared/crypto/msisdn.go",
+      "internal/platform/httpserver/privacy.go"
+    ],
+    "notes": "Privacy cases locate an exact subject using the protected HMAC representation; plaintext is decrypted only inside approved execution/export workflows.",
+    "status": "IMPLEMENTED_TESTED"
+  },
+  "PRV-002": {
+    "evidence": [
+      "internal/privacy/model.go",
+      "internal/privacy/service.go",
+      "internal/privacy/postgres.go",
+      "internal/privacy/service_test.go",
+      "internal/operations/export_worker.go",
+      "internal/platform/httpserver/privacy.go",
+      "database/migrations/0063_privacy_cases_contact_lifecycle_and_reporting_privacy.sql"
+    ],
+    "notes": "Approved access cases build profile, source, attribute, consent, suppression and campaign-history packages, encrypt them with a dedicated evidence key and release them only through controlled export.",
+    "status": "IMPLEMENTED_TESTED"
+  },
+  "PRV-003": {
+    "evidence": [
+      "internal/privacy/service.go",
+      "internal/privacy/postgres.go",
+      "internal/privacy/service_test.go",
+      "database/migrations/0063_privacy_cases_contact_lifecycle_and_reporting_privacy.sql"
+    ],
+    "notes": "Approved rectification cases update only an allowlisted field set while preserving a complete pre-change contact profile history, actor and reason.",
+    "status": "IMPLEMENTED_TESTED"
+  },
   "PRV-004": {
     "evidence": [
-      "internal/consent/optout.go",
-      "internal/platform/httpserver/inbound_optout_test.go"
+      "internal/privacy/service.go",
+      "internal/privacy/postgres.go",
+      "internal/privacy/service_test.go",
+      "database/migrations/0063_privacy_cases_contact_lifecycle_and_reporting_privacy.sql"
     ],
-    "notes": "A recognised authenticated opt-out creates an immediate effective global suppression and blocks future eligibility.",
+    "notes": "Approved objection execution atomically suppresses the contact and creates a global WhatsApp suppression before the case is completed.",
+    "status": "IMPLEMENTED_TESTED"
+  },
+  "PRV-005": {
+    "evidence": [
+      "internal/privacy/service.go",
+      "internal/privacy/postgres.go",
+      "internal/privacy/service_test.go",
+      "internal/audience/contactlife/service.go",
+      "database/migrations/0063_privacy_cases_contact_lifecycle_and_reporting_privacy.sql"
+    ],
+    "notes": "Approved erasure cases are blocked by active legal holds, remove unnecessary attributes, withdraw active consent, anonymise the contact and preserve minimised suppression and immutable decision evidence.",
+    "status": "IMPLEMENTED_TESTED"
+  },
+  "PRV-006": {
+    "evidence": [
+      "internal/privacy/service.go",
+      "internal/privacy/service_test.go",
+      "internal/operations/export_worker.go",
+      "internal/operations/export_worker_test.go",
+      "internal/platform/httpserver/privacy.go"
+    ],
+    "notes": "Approved portability cases produce an encrypted structured package and use actor-bound, expiring, single-use, audited export delivery.",
+    "status": "IMPLEMENTED_TESTED"
+  },
+  "PRV-007": {
+    "evidence": [
+      "internal/privacy/model.go",
+      "internal/privacy/service.go",
+      "internal/privacy/postgres.go",
+      "internal/platform/httpserver/privacy.go",
+      "database/migrations/0063_privacy_cases_contact_lifecycle_and_reporting_privacy.sql"
+    ],
+    "notes": "Case status, deadlines, assignment, owner and immutable evidence are implemented. Automated overdue alert production remains for the platform alerting milestone.",
+    "status": "PARTIAL"
+  },
+  "PRV-008": {
+    "evidence": [
+      "internal/privacy/service.go",
+      "internal/privacy/service_test.go",
+      "internal/platform/httpserver/privacy.go",
+      "database/migrations/0063_privacy_cases_contact_lifecycle_and_reporting_privacy.sql"
+    ],
+    "notes": "Disclosure packages require submission, independent approval and a separate executor; ordinary case APIs exclude encrypted result payloads.",
     "status": "IMPLEMENTED_TESTED"
   },
   "PRV-009": {
     "evidence": [
-      "internal/inbound/service.go",
-      "internal/inbound/postgres.go",
-      "internal/platform/httpserver/server.go",
-      "database/migrations/0027_inbound_reply_legal_hold_governance.sql",
-      "internal/inbound/retention_policy.go",
-      "internal/shared/crypto/keyring.go",
-      "database/migrations/0028_governed_inbound_retention_and_key_rotation.sql",
-      "internal/inbound/rotation.go",
-      "internal/inbound/rotation_postgres.go",
-      "cmd/inbound-governance-worker/main.go",
-      "database/migrations/0029_resumable_inbound_governance_operations.sql"
+      "internal/privacy/service.go",
+      "internal/privacy/postgres.go",
+      "internal/privacy/service_test.go",
+      "internal/audience/importer/rollback.go",
+      "database/migrations/0063_privacy_cases_contact_lifecycle_and_reporting_privacy.sql",
+      "internal/platform/httpserver/privacy.go"
     ],
-    "notes": "Inbound reply content supports reasoned, actor-attributed, optimistic-concurrency legal holds and controlled release; broader platform-wide legal hold coverage remains incomplete. Version 0.4.8 adds maker-checker inbound retention policy and versioned content-key rotation controls. Version 0.4.9 adds durable, lease-fenced and resumable key-rotation runs plus scheduled retention-sweep evidence.",
-    "status": "PARTIAL"
+    "notes": "Privacy legal holds follow draft, submission, independent approval/rejection, active and released states with optimistic concurrency and append-only events; erasure and affected rollback paths fail closed while any applicable active hold remains.",
+    "status": "IMPLEMENTED_TESTED"
   },
   "REP-002": {
     "evidence": [
@@ -879,6 +1238,17 @@
     "notes": "Identity-free audience snapshot overlap returns intersection, left-only, right-only and union counts without exporting contact identifiers.",
     "status": "IMPLEMENTED_TESTED"
   },
+  "SEG-019": {
+    "evidence": [
+      "internal/operations/reporting_privacy.go",
+      "internal/operations/reporting_privacy_test.go",
+      "internal/operations/service.go",
+      "internal/operations/postgres.go",
+      "database/migrations/0063_privacy_cases_contact_lifecycle_and_reporting_privacy.sql"
+    ],
+    "notes": "Campaign and organisation demographic/geographic cells below the effective governed threshold are suppressed server-side before report data crosses the service boundary.",
+    "status": "IMPLEMENTED_TESTED"
+  },
   "SEG-020": {
     "evidence": [
       "internal/audience/materialisation/materialisation.go",
@@ -959,130 +1329,41 @@
     "notes": "Failure, disconnect and health thresholds are represented and influence allocation/throttling; fully automatic threshold-driven quarantine requires live telemetry calibration.",
     "status": "PARTIAL"
   },
-  "UX-015": {
-    "evidence": [
-      "internal/platform/httpserver/server.go",
-      "internal/platform/httpserver/server_test.go"
-    ],
-    "status": "IMPLEMENTED_TESTED"
-  },
-  "GWY-016": {
-    "status": "IMPLEMENTED_TESTED",
-    "evidence": [
-      "internal/provider/registry.go",
-      "internal/provider/registry_postgres.go",
-      "internal/provider/version.go",
-      "internal/provider/version_test.go",
-      "internal/campaign/service.go",
-      "internal/campaign/provider_capability_test.go",
-      "internal/dispatch/postgres_material.go",
-      "internal/dispatch/governed_route_test.go",
-      "internal/testmessage/postgres.go",
-      "database/migrations/0058_provider_capability_registry.sql",
-      "database/migrations/0059_backend_hardening_and_provider_binding.sql"
-    ],
-    "notes": "The control plane exposes governed provider/engine capability and version definitions, freezes the exact definition into campaign/test-send evidence, and blocks incompatible gateway, adapter, minimum-version or message-capability routes. Genuine engine operation remains an external validation gate."
-  },
-  "CRV-001": {
-    "status": "IMPLEMENTED_TESTED",
-    "evidence": [
-      "internal/consent/review.go",
-      "internal/consent/review_test.go",
-      "internal/persistence/postgres/consent.go",
-      "internal/platform/httpserver/consent_reviews.go",
-      "contracts/openapi/control-api.yaml",
-      "database/migrations/0061_trusted_assets_and_consent_review_governance.sql"
-    ],
-    "notes": "Consent reviews are created as governed drafts at organisation, source or exact campaign scope; scope-specific identifiers are validated, persisted and rechecked during campaign eligibility."
-  },
-  "CRV-005": {
-    "status": "IMPLEMENTED_TESTED",
-    "evidence": [
-      "internal/storage/asset.go",
-      "internal/storage/asset_test.go",
-      "internal/consent/review.go",
-      "internal/consent/review_test.go",
-      "internal/persistence/postgres/consent.go",
-      "database/migrations/0061_trusted_assets_and_consent_review_governance.sql"
-    ],
-    "notes": "Uploaded evidence derives its SHA-256 checksum from stored bytes and external evidence references require an explicit SHA-256 fingerprint. Clean asset bytes are rechecked before use."
-  },
-  "CRV-006": {
-    "status": "IMPLEMENTED_TESTED",
-    "evidence": [
-      "internal/storage/asset.go",
-      "internal/storage/asset_test.go",
-      "internal/security/malware/scanner.go",
-      "internal/platform/httpserver/assets.go",
-      "database/migrations/0061_trusted_assets_and_consent_review_governance.sql"
-    ],
-    "notes": "Evidence and campaign media remain unavailable until trusted intake has completed malware scanning; infected, indeterminate, failed or revoked assets fail closed."
-  },
-  "CRV-010": {
-    "status": "IMPLEMENTED_TESTED",
-    "evidence": [
-      "internal/consent/review.go",
-      "internal/consent/review_test.go",
-      "internal/persistence/postgres/consent.go",
-      "contracts/openapi/control-api.yaml",
-      "database/migrations/0061_trusted_assets_and_consent_review_governance.sql"
-    ],
-    "notes": "Consent reviews store bounded aggregate sample-review notes and reject telephone-number or email-address patterns to reduce unnecessary sample PII."
-  },
-  "CRV-012": {
-    "status": "PARTIAL",
-    "evidence": [
-      "internal/campaign/service.go",
-      "internal/campaign/consent_review_gate_test.go",
-      "internal/consent/review.go",
-      "internal/persistence/postgres/consent.go"
-    ],
-    "notes": "Campaign release requires a valid, correctly scoped, unexpired approved consent review. The separately approved non-consent lawful-basis alternative remains unimplemented."
-  },
-  "GWY-011": {
-    "status": "IMPLEMENTED_TESTED",
-    "evidence": [
-      "services/openwa-gateway/src/openwa-webhook.controller.ts",
-      "services/openwa-gateway/src/inbound-message-outbox.service.ts",
-      "services/openwa-gateway/src/inbound-message-publisher.service.ts",
-      "internal/gateway/callback.go",
-      "internal/gateway/inbound.go",
-      "internal/gateway/inbound_test.go",
-      "internal/platform/httpserver/server.go"
-    ],
-    "notes": "Delivery/read and inbound events are normalised, durably queued by the gateway and forwarded through signed callbacks. The control plane verifies signatures, replay windows and event identity; genuine WhatsApp event shapes remain a live validation gate."
-  },
-  "GWY-013": {
-    "status": "IMPLEMENTED_TESTED",
-    "evidence": [
-      "internal/storage/asset.go",
-      "internal/storage/asset_test.go",
-      "internal/message/service.go",
-      "internal/campaign/service.go",
-      "internal/dispatch/handler.go",
-      "internal/provider/registry.go",
-      "database/migrations/0061_trusted_assets_and_consent_review_governance.sql"
-    ],
-    "notes": "Messages freeze trusted object references, derived media type/size/checksum and route capability evidence. Dispatch resolves short-lived object access and enforces the frozen provider attachment ceiling without loading campaign batches into memory."
-  },
   "SND-019": {
-    "status": "IMPLEMENTED_TESTED",
     "evidence": [
       "internal/platform/httpserver/server.go",
       "internal/platform/httpserver/sender_governance.go",
       "internal/sender/session_lifecycle.go",
       "contracts/openapi/control-api.yaml"
     ],
-    "notes": "QR and pairing-code routes require sender-administrator permission and recent MFA step-up before gateway pairing material can be requested."
+    "notes": "QR and pairing-code routes require sender-administrator permission and recent MFA step-up before gateway pairing material can be requested.",
+    "status": "IMPLEMENTED_TESTED"
   },
   "SND-021": {
-    "status": "PARTIAL",
     "evidence": [
       "internal/sender/session_lifecycle.go",
       "internal/sender/session_lifecycle_test.go",
       "internal/sender/governance.go",
       "database/migrations/0060_sender_lifecycle_and_gateway_fencing.sql"
     ],
-    "notes": "Retirement is governed, fenced, blocked while active work exists and evidenced. Cryptographic or storage-level deletion of the real engine session-state volume still requires gateway/runtime implementation and live validation."
+    "notes": "Retirement is governed, fenced, blocked while active work exists and evidenced. Cryptographic or storage-level deletion of the real engine session-state volume still requires gateway/runtime implementation and live validation.",
+    "status": "PARTIAL"
+  },
+  "UX-013": {
+    "evidence": [
+      "internal/operations/service.go",
+      "internal/operations/export_worker.go",
+      "internal/platform/httpserver/operations.go",
+      "database/migrations/0062_secure_exports_and_audit_search.sql"
+    ],
+    "notes": "Exports require purpose, maker-checker approval, expiry and actor-bound single-use download grants; revocation and all download outcomes are audited.",
+    "status": "IMPLEMENTED_TESTED"
+  },
+  "UX-015": {
+    "evidence": [
+      "internal/platform/httpserver/server.go",
+      "internal/platform/httpserver/server_test.go"
+    ],
+    "status": "IMPLEMENTED_TESTED"
   }
 }

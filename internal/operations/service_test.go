@@ -29,14 +29,17 @@ func TestIncidentLifecycleAndAudit(t *testing.T) {
 	if out.Status != IncidentResolved || out.ResolvedAt == nil || out.Version != 2 {
 		t.Fatalf("unexpected resolved: %+v", out)
 	}
-	events, err := svc.SearchAudit(ctx, 0, 10)
+	page, err := svc.SearchAudit(ctx, audit.Query{Limit: 10})
+	events := page.Items
 	if err != nil || len(events) != 2 {
 		t.Fatalf("audit events=%d err=%v", len(events), err)
 	}
 }
 func TestExportMakerChecker(t *testing.T) {
 	ctx := context.Background()
-	svc := &Service{Repo: NewMemoryRepository(), Clock: func() time.Time { return time.Date(2026, 8, 5, 8, 0, 0, 0, time.UTC) }}
+	repo := NewMemoryRepository()
+	repo.reports["00000000-0000-4000-8000-000000000010"] = CampaignReport{CampaignID: "00000000-0000-4000-8000-000000000010", Audience: map[string]int64{}, Delivery: map[string]int64{}, Engagement: map[string]int64{}, Exceptions: map[string]int64{}}
+	svc := &Service{Repo: repo, Clock: func() time.Time { return time.Date(2026, 8, 5, 8, 0, 0, 0, time.UTC) }}
 	req, err := svc.RequestExport(ctx, "CAMPAIGN_REPORT", "00000000-0000-4000-8000-000000000010", "PDF", "client report", "00000000-0000-4000-8000-000000000001", "r1")
 	if err != nil {
 		t.Fatal(err)

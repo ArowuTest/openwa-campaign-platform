@@ -64,14 +64,25 @@ func (s *IngestService) Process(ctx context.Context, importID string, reader io.
 // A separate heartbeat prevents lease expiry while parsing long files that may
 // contain no valid rows and therefore do not trigger StageBatch renewals.
 func (s *IngestService) ProcessClaimed(ctx context.Context, importID string, lease ValidationLease, reader io.Reader, options PreviewOptions) (PreviewResult, error) {
+	if reader == nil {
+		return PreviewResult{}, errors.New("import reader is required")
+	}
+	return s.ProcessClaimedWithProcessor(ctx, importID, lease, func(processCtx context.Context, consumer CandidateConsumer) (PreviewResult, error) {
+		return ProcessCSV(processCtx, reader, options, consumer)
+	})
+}
+
+type CandidateProcessor func(context.Context, CandidateConsumer) (PreviewResult, error)
+
+func (s *IngestService) ProcessClaimedWithProcessor(ctx context.Context, importID string, lease ValidationLease, processor CandidateProcessor) (PreviewResult, error) {
 	if s == nil || s.Repository == nil {
 		return PreviewResult{}, errors.New("staging repository is required")
 	}
 	if strings.TrimSpace(importID) == "" || strings.TrimSpace(lease.Owner) == "" || lease.Version <= 0 || lease.ExpiresAt.IsZero() {
 		return PreviewResult{}, errors.New("valid import ID and validation lease are required")
 	}
-	if reader == nil {
-		return PreviewResult{}, errors.New("import reader is required")
+	if processor == nil {
+		return PreviewResult{}, errors.New("import processor is required")
 	}
 	processingCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -100,7 +111,7 @@ func (s *IngestService) ProcessClaimed(ctx context.Context, importID string, lea
 		batch = batch[:0]
 		return err
 	}
-	result, err := ProcessCSV(processingCtx, reader, options, func(_ context.Context, candidate ContactCandidate) (bool, error) {
+	result, err := processor(processingCtx, func(_ context.Context, candidate ContactCandidate) (bool, error) {
 		batch = append(batch, candidate)
 		if len(batch) >= batchSize {
 			if err := flush(); err != nil {

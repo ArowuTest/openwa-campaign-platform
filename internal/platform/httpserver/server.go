@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"campaign-platform/internal/audience/cohort"
+	"campaign-platform/internal/audience/contactlife"
 	audiencefilter "campaign-platform/internal/audience/filter"
 	"campaign-platform/internal/audience/importer"
 	"campaign-platform/internal/audience/materialisation"
@@ -35,6 +36,7 @@ import (
 	"campaign-platform/internal/operations"
 	"campaign-platform/internal/orchestration"
 	"campaign-platform/internal/organisation"
+	"campaign-platform/internal/privacy"
 	"campaign-platform/internal/provider"
 	"campaign-platform/internal/segment"
 	"campaign-platform/internal/sender"
@@ -89,7 +91,12 @@ type Dependencies struct {
 	ShardReallocations       *execution.ReallocationAdministration
 	JobOperations            *jobs.AdministrationService
 	Operations               *operations.Service
+	PrivacyCases             *privacy.Service
 	AudienceImports          *importer.ImportService
+	ContactLifecycle         *contactlife.Service
+	AudienceImportMappings   *importer.MappingAdministration
+	AudienceImportRollback   *importer.RollbackService
+	AudienceImportIssues     *importer.IssueExportService
 	AudienceConflicts        *importer.ConflictService
 	AudienceReconciliation   *importer.ReconciliationService
 	AudienceSourceTrust      *importer.SourceTrustService
@@ -210,6 +217,20 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/audience-imports", s.require("audience.write", s.intakeAudienceImport))
 	mux.Handle("GET /api/v1/audience-imports/{id}", s.require("audience.read", s.getAudienceImport))
 	mux.Handle("POST /api/v1/audience-imports/{id}/approve", s.require("audience.approve", s.approveAudienceImport))
+	mux.Handle("POST /api/v1/audience-imports/{id}/rollback", s.require("audience.import.rollback", s.rollbackAudienceImport))
+	mux.Handle("GET /api/v1/audience-imports/{id}/issues.csv", s.require("audience.read", s.downloadAudienceImportIssues))
+	mux.Handle("GET /api/v1/contacts/{id}/lifecycle", s.require("audience.read", s.getContactLifecycle))
+	mux.Handle("GET /api/v1/contacts/{id}/lifecycle/events", s.require("audience.read", s.listContactLifecycleEvents))
+	mux.Handle("POST /api/v1/contacts/{id}/lifecycle", s.require("audience.contact_status.write", s.transitionContactLifecycle))
+	mux.Handle("GET /api/v1/audience-import-templates/{version}", s.require("audience.read", s.downloadAudienceImportTemplate))
+	mux.Handle("GET /api/v1/admin/audience-import-mappings", s.require("audience.import_mapping.write", s.listAudienceImportMappings))
+	mux.Handle("POST /api/v1/admin/audience-import-mappings", s.require("audience.import_mapping.write", s.createAudienceImportMapping))
+	mux.Handle("GET /api/v1/admin/audience-import-mappings/{id}", s.require("audience.import_mapping.write", s.getAudienceImportMapping))
+	mux.Handle("GET /api/v1/admin/audience-import-mappings/{id}/events", s.require("audience.import_mapping.write", s.listAudienceImportMappingEvents))
+	mux.Handle("POST /api/v1/admin/audience-import-mappings/{id}/submit", s.require("audience.import_mapping.write", s.submitAudienceImportMapping))
+	mux.Handle("POST /api/v1/admin/audience-import-mappings/{id}/decision", s.require("audience.import_mapping.approve", s.decideAudienceImportMapping))
+	mux.Handle("POST /api/v1/admin/audience-import-mappings/{id}/retire", s.require("audience.import_mapping.approve", s.retireAudienceImportMapping))
+	mux.Handle("GET /api/v1/admin/audience-import-mappings/resolve", s.require("audience.import_mapping.write", s.resolveAudienceImportMapping))
 	mux.Handle("GET /api/v1/audience-imports/{id}/conflicts", s.require("audience.read", s.listAudienceImportConflicts))
 	mux.Handle("GET /api/v1/audience-imports/{id}/reconciliation", s.require("audience.read", s.getAudienceImportReconciliation))
 	mux.Handle("POST /api/v1/audience-imports/{id}/reconciliation", s.require("audience.approve", s.closeAudienceImportReconciliation))
@@ -280,8 +301,36 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/campaigns/{id}/report", s.require("report.read", s.getCampaignReport))
 	mux.Handle("GET /api/v1/campaigns/{id}/financial-reconciliation", s.require("finance.read", s.getCampaignFinancialReconciliation))
 	mux.Handle("GET /api/v1/organisations/{id}/performance-report", s.require("report.read", s.getOrganisationPerformanceReport))
+	mux.Handle("GET /api/v1/exports", s.require("export.request", s.listExports))
 	mux.Handle("POST /api/v1/exports", s.require("export.request", s.requestExport))
+	mux.Handle("GET /api/v1/exports/{id}", s.require("export.request", s.getExport))
 	mux.Handle("POST /api/v1/exports/{id}/decision", s.require("export.approve", s.decideExport))
+	mux.Handle("POST /api/v1/exports/{id}/download-authorisations", s.require("export.request", s.authorizeExportDownload))
+	mux.Handle("GET /api/v1/exports/{id}/download", s.require("export.request", s.downloadExport))
+	mux.Handle("POST /api/v1/exports/{id}/revoke", s.require("export.approve", s.revokeExport))
+	mux.Handle("GET /api/v1/admin/reporting-privacy-policies", s.require("reporting_privacy.write", s.listReportingPrivacyPolicies))
+	mux.Handle("POST /api/v1/admin/reporting-privacy-policies", s.require("reporting_privacy.write", s.createReportingPrivacyPolicy))
+	mux.Handle("GET /api/v1/admin/reporting-privacy-policies/{id}", s.require("reporting_privacy.write", s.getReportingPrivacyPolicy))
+	mux.Handle("GET /api/v1/admin/reporting-privacy-policies/{id}/events", s.require("reporting_privacy.write", s.listReportingPrivacyPolicyEvents))
+	mux.Handle("POST /api/v1/admin/reporting-privacy-policies/{id}/submit", s.require("reporting_privacy.write", s.submitReportingPrivacyPolicy))
+	mux.Handle("POST /api/v1/admin/reporting-privacy-policies/{id}/decision", s.require("reporting_privacy.approve", s.decideReportingPrivacyPolicy))
+	mux.Handle("POST /api/v1/admin/reporting-privacy-policies/{id}/retire", s.require("reporting_privacy.approve", s.retireReportingPrivacyPolicy))
+	mux.Handle("GET /api/v1/admin/reporting-privacy-policies/resolve", s.require("reporting_privacy.write", s.resolveReportingPrivacyPolicy))
+	mux.Handle("GET /api/v1/privacy/cases", s.require("privacy.read", s.listPrivacyCases))
+	mux.Handle("POST /api/v1/privacy/cases", s.require("privacy.write", s.createPrivacyCase))
+	mux.Handle("GET /api/v1/privacy/cases/{id}", s.require("privacy.read", s.getPrivacyCase))
+	mux.Handle("GET /api/v1/privacy/cases/{id}/events", s.require("privacy.read", s.listPrivacyCaseEvents))
+	mux.Handle("POST /api/v1/privacy/cases/{id}/assign", s.require("privacy.write", s.assignPrivacyCase))
+	mux.Handle("POST /api/v1/privacy/cases/{id}/submit", s.require("privacy.write", s.submitPrivacyCase))
+	mux.Handle("POST /api/v1/privacy/cases/{id}/decision", s.require("privacy.approve", s.decidePrivacyCase))
+	mux.Handle("POST /api/v1/privacy/cases/{id}/execute", s.require("privacy.execute", s.executePrivacyCase))
+	mux.Handle("POST /api/v1/privacy/cases/{id}/exports", s.require("privacy.read", s.requestPrivacyCaseExport))
+	mux.Handle("GET /api/v1/privacy/legal-holds", s.require("privacy.hold", s.listPrivacyLegalHolds))
+	mux.Handle("POST /api/v1/privacy/legal-holds", s.require("privacy.hold", s.createPrivacyLegalHold))
+	mux.Handle("POST /api/v1/privacy/legal-holds/{id}/submit", s.require("privacy.hold", s.submitPrivacyLegalHold))
+	mux.Handle("POST /api/v1/privacy/legal-holds/{id}/decision", s.require("privacy.approve", s.decidePrivacyLegalHold))
+	mux.Handle("GET /api/v1/privacy/legal-holds/{id}/events", s.require("privacy.hold", s.listPrivacyLegalHoldEvents))
+	mux.Handle("POST /api/v1/privacy/legal-holds/{id}/release", s.require("privacy.hold", s.releasePrivacyLegalHold))
 	mux.Handle("POST /api/v1/campaigns/{id}/execution/{action}", s.require("campaign.operate", s.executeCampaignAction))
 	mux.Handle("GET /api/v1/campaigns/{id}/inbound-metrics", s.require("campaign.read", s.getCampaignInboundMetrics))
 	mux.Handle("GET /api/v1/audience-snapshots/{id}", s.require("audience.read", s.getAudienceSnapshot))
@@ -689,7 +738,11 @@ func (s *Server) listSegments(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, http.StatusServiceUnavailable, "SEGMENTS_UNAVAILABLE", "Saved segments are unavailable.", nil)
 		return
 	}
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	limit, err := optionalPositiveIntQuery(r, "limit", 500)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_LIMIT", "The page limit must be between 1 and 500.", nil)
+		return
+	}
 	items, err := s.deps.SegmentDefinitions.List(r.Context(), r.URL.Query().Get("organisationId"), limit)
 	if err != nil {
 		s.internalError(w, r, err)
@@ -776,7 +829,11 @@ func (s *Server) listSegmentVersions(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, http.StatusServiceUnavailable, "SEGMENTS_UNAVAILABLE", "Saved segments are unavailable.", nil)
 		return
 	}
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	limit, err := optionalPositiveIntQuery(r, "limit", 500)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_LIMIT", "The page limit must be between 1 and 500.", nil)
+		return
+	}
 	items, err := s.deps.SegmentDefinitions.Versions(r.Context(), r.PathValue("id"), limit)
 	if errors.Is(err, segment.ErrDefinitionNotFound) {
 		httpx.WriteError(w, r, http.StatusNotFound, "SEGMENT_NOT_FOUND", "The segment was not found.", nil)
@@ -1512,17 +1569,18 @@ func (s *Server) listCampaignMaterialChanges(w http.ResponseWriter, r *http.Requ
 }
 
 type audienceImportMetadata struct {
-	OrganisationID     string                 `json:"organisationId"`
-	ConsentReviewID    string                 `json:"consentReviewId"`
-	PurposeID          string                 `json:"purposeId"`
-	Channel            string                 `json:"channel"`
-	WordingVersion     string                 `json:"wordingVersion"`
-	SourceName         string                 `json:"sourceName"`
-	SourceSystem       string                 `json:"sourceSystem,omitempty"`
-	DefaultCountryISO2 string                 `json:"defaultCountryIso2,omitempty"`
-	TemplateVersion    string                 `json:"templateVersion"`
-	Mapping            importer.ColumnMapping `json:"mapping"`
-	UpdatePolicy       importer.UpdatePolicy  `json:"updatePolicy"`
+	OrganisationID      string                 `json:"organisationId"`
+	ConsentReviewID     string                 `json:"consentReviewId"`
+	PurposeID           string                 `json:"purposeId"`
+	Channel             string                 `json:"channel"`
+	WordingVersion      string                 `json:"wordingVersion"`
+	SourceName          string                 `json:"sourceName"`
+	SourceSystem        string                 `json:"sourceSystem,omitempty"`
+	DefaultCountryISO2  string                 `json:"defaultCountryIso2,omitempty"`
+	TemplateVersion     string                 `json:"templateVersion"`
+	MappingDefinitionID string                 `json:"mappingDefinitionId,omitempty"`
+	Mapping             importer.ColumnMapping `json:"mapping"`
+	UpdatePolicy        importer.UpdatePolicy  `json:"updatePolicy"`
 }
 
 func (s *Server) intakeAudienceImport(w http.ResponseWriter, r *http.Request) {
@@ -1564,6 +1622,20 @@ func (s *Server) intakeAudienceImport(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, http.StatusBadRequest, "IMPORT_METADATA_INVALID", "Import metadata contains trailing JSON.", nil)
 		return
 	}
+	if strings.TrimSpace(metadata.MappingDefinitionID) != "" {
+		if s.deps.AudienceImportMappings == nil {
+			httpx.WriteError(w, r, http.StatusServiceUnavailable, "IMPORT_MAPPING_UNAVAILABLE", "Audience import mapping administration is unavailable.", nil)
+			return
+		}
+		definition, mappingErr := s.deps.AudienceImportMappings.Get(r.Context(), metadata.MappingDefinitionID)
+		if mappingErr != nil || definition.Status != importer.MappingActive || (definition.OrganisationID != "" && definition.OrganisationID != metadata.OrganisationID) || (definition.SourceSystem != "" && !strings.EqualFold(definition.SourceSystem, metadata.SourceSystem)) {
+			httpx.WriteError(w, r, http.StatusUnprocessableEntity, "IMPORT_MAPPING_INVALID", "The selected import mapping is not active or does not match the organisation and source.", nil)
+			return
+		}
+		metadata.Mapping = definition.Mapping
+		metadata.Mapping.Worksheet = definition.Worksheet
+		metadata.TemplateVersion = definition.TemplateVersion
+	}
 	filePart, err := reader.NextPart()
 	if err != nil || filePart.FormName() != "file" || strings.TrimSpace(filePart.FileName()) == "" {
 		httpx.WriteError(w, r, http.StatusBadRequest, "IMPORT_FILE_REQUIRED", "The metadata part must be followed by exactly one file part.", nil)
@@ -1574,7 +1646,7 @@ func (s *Server) intakeAudienceImport(w http.ResponseWriter, r *http.Request) {
 		OrganisationID: metadata.OrganisationID, ConsentReviewID: metadata.ConsentReviewID, PurposeID: metadata.PurposeID,
 		Channel: metadata.Channel, WordingVersion: metadata.WordingVersion, SourceName: metadata.SourceName,
 		SourceSystem: metadata.SourceSystem, DefaultCountryISO2: metadata.DefaultCountryISO2,
-		OriginalFilename: filePart.FileName(), TemplateVersion: metadata.TemplateVersion, Mapping: metadata.Mapping,
+		OriginalFilename: filePart.FileName(), TemplateVersion: metadata.TemplateVersion, MappingDefinitionID: metadata.MappingDefinitionID, Mapping: metadata.Mapping,
 		UpdatePolicy: metadata.UpdatePolicy, UploadedBy: principal.User.ID, ClientRequestID: requestKey,
 	}, filePart)
 	_ = filePart.Close()
@@ -1685,7 +1757,11 @@ func (s *Server) listAudienceImportConflicts(w http.ResponseWriter, r *http.Requ
 		httpx.WriteError(w, r, http.StatusServiceUnavailable, "AUDIENCE_CONFLICTS_UNAVAILABLE", "Audience conflict review is not configured.", nil)
 		return
 	}
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	limit, err := optionalPositiveIntQuery(r, "limit", 500)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_LIMIT", "The page limit must be between 1 and 500.", nil)
+		return
+	}
 	items, err := s.deps.AudienceConflicts.List(r.Context(), r.PathValue("id"), importer.ConflictStatus(strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("status")))), limit)
 	if err != nil {
 		httpx.WriteError(w, r, http.StatusBadRequest, "AUDIENCE_CONFLICT_QUERY_INVALID", "The conflict query is invalid.", map[string]any{"detail": err.Error()})
@@ -1863,9 +1939,9 @@ func (s *Server) previewAudienceImport(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_MULTIPART", "The import request must be multipart form data.", map[string]any{"detail": err.Error()})
 		return
 	}
-	file, _, err := r.FormFile("file")
+	file, header, err := r.FormFile("file")
 	if err != nil {
-		httpx.WriteError(w, r, http.StatusBadRequest, "FILE_REQUIRED", "A CSV file is required.", nil)
+		httpx.WriteError(w, r, http.StatusBadRequest, "FILE_REQUIRED", "A CSV or XLSX file is required.", nil)
 		return
 	}
 	defer file.Close()
@@ -1878,13 +1954,21 @@ func (s *Server) previewAudienceImport(w http.ResponseWriter, r *http.Request) {
 		Age:     formOrDefault(r.MultipartForm, "ageColumn", "age"),
 		Gender:  formOrDefault(r.MultipartForm, "genderColumn", "gender"),
 	}
-	result, err := importer.PreviewCSV(file, importer.PreviewOptions{
+	options := importer.PreviewOptions{
 		DefaultCountryISO2: strings.ToUpper(formOrDefault(r.MultipartForm, "defaultCountry", "NG")),
 		MaxRows:            s.deps.MaxImportPreviewRows,
 		Mapping:            mapping,
 		Protector:          s.deps.MSISDNProtector,
 		GeographyValidator: s.deps.Geography.Validate,
-	})
+	}
+	var result importer.PreviewResult
+	if strings.EqualFold(filepath.Ext(header.Filename), ".xlsx") {
+		mapping.Worksheet = formOrDefault(r.MultipartForm, "worksheet", "")
+		options.Mapping = mapping
+		result, err = importer.PreviewXLSX(r.Context(), file, header.Size, mapping.Worksheet, options)
+	} else {
+		result, err = importer.PreviewCSV(file, options)
+	}
 	if err != nil {
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "IMPORT_PREVIEW_FAILED", "The audience file could not be previewed.", map[string]any{"detail": err.Error()})
 		return
@@ -2882,7 +2966,11 @@ func (s *Server) listInboundReplies(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, http.StatusServiceUnavailable, "INBOUND_REPLIES_UNAVAILABLE", "Inbound reply operations are not configured.", nil)
 		return
 	}
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	limit, err := optionalPositiveIntQuery(r, "limit", 500)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_LIMIT", "The page limit must be between 1 and 500.", nil)
+		return
+	}
 	items, err := s.deps.InboundReplies.List(r.Context(), limit)
 	if err != nil {
 		s.internalError(w, r, err)

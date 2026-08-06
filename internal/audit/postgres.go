@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 
 	pgretry "campaign-platform/internal/persistence/postgres"
 )
@@ -67,8 +68,8 @@ func (r *PostgreSQLRepository) Append(ctx context.Context, event Event, expected
 		if len(event.After) > 0 {
 			after = []byte(event.After)
 		}
-		const insert = `INSERT INTO audit_events(id,actor_id,actor_type,action,entity_type,entity_id,request_id,source_ip,user_agent,before_state,after_state,created_at,sequence,previous_hash,event_hash,reason_code,reason,correlation_id) VALUES($1,NULLIF($2,'')::uuid,$3,$4,$5,$6,$7,NULLIF($8,'')::inet,NULLIF($9,''),$10,$11,$12,$13,$14,$15,NULLIF($16,''),NULLIF($17,''),$18)`
-		_, err = tx.ExecContext(ctx, insert, event.ID, event.ActorID, event.ActorType, event.Action, event.ObjectType, event.ObjectID, event.CorrelationID, event.IPAddress, event.Device, before, after, event.OccurredAt, event.Sequence, event.PreviousHash, event.Hash, event.ReasonCode, event.Reason, event.CorrelationID)
+		const insert = `INSERT INTO audit_events(id,actor_id,actor_type,action,entity_type,entity_id,organisation_id,outcome,sensitivity,request_id,source_ip,user_agent,before_state,after_state,created_at,sequence,previous_hash,event_hash,reason_code,reason,correlation_id) VALUES($1,NULLIF($2,'')::uuid,$3,$4,$5,$6,NULLIF($7,'')::uuid,NULLIF($8,''),NULLIF($9,''),$10,NULLIF($11,'')::inet,NULLIF($12,''),$13,$14,$15,$16,$17,$18,NULLIF($19,''),NULLIF($20,''),$21)`
+		_, err = tx.ExecContext(ctx, insert, event.ID, event.ActorID, event.ActorType, event.Action, event.ObjectType, event.ObjectID, event.OrganisationID, event.Outcome, event.Sensitivity, event.CorrelationID, event.IPAddress, event.Device, before, after, event.OccurredAt, event.Sequence, event.PreviousHash, event.Hash, event.ReasonCode, event.Reason, event.CorrelationID)
 		if err != nil {
 			return Event{}, fmt.Errorf("insert audit event: %w", err)
 		}
@@ -90,14 +91,14 @@ func (r *PostgreSQLRepository) Append(ctx context.Context, event Event, expected
 	})
 }
 
-const auditEventSelect = `SELECT id,sequence,actor_type,coalesce(actor_id::text,''),action,entity_type,coalesce(entity_id,''),coalesce(before_state,'null'::jsonb)::text,coalesce(after_state,'null'::jsonb)::text,coalesce(reason_code,''),coalesce(reason,''),coalesce(source_ip::text,''),coalesce(user_agent,''),coalesce(correlation_id,request_id,''),created_at,coalesce(previous_hash,''),coalesce(event_hash,'') FROM audit_events`
+const auditEventSelect = `SELECT id,sequence,actor_type,coalesce(actor_id::text,''),action,entity_type,coalesce(entity_id,''),coalesce(organisation_id::text,''),coalesce(outcome,''),coalesce(sensitivity,''),coalesce(before_state,'null'::jsonb)::text,coalesce(after_state,'null'::jsonb)::text,coalesce(reason_code,''),coalesce(reason,''),coalesce(source_ip::text,''),coalesce(user_agent,''),coalesce(correlation_id,request_id,''),created_at,coalesce(previous_hash,''),coalesce(event_hash,'') FROM audit_events`
 
 type auditScanner interface{ Scan(...any) error }
 
 func scanAuditEvent(row auditScanner) (Event, error) {
 	var event Event
 	var before, afterJSON string
-	if err := row.Scan(&event.ID, &event.Sequence, &event.ActorType, &event.ActorID, &event.Action, &event.ObjectType, &event.ObjectID, &before, &afterJSON, &event.ReasonCode, &event.Reason, &event.IPAddress, &event.Device, &event.CorrelationID, &event.OccurredAt, &event.PreviousHash, &event.Hash); err != nil {
+	if err := row.Scan(&event.ID, &event.Sequence, &event.ActorType, &event.ActorID, &event.Action, &event.ObjectType, &event.ObjectID, &event.OrganisationID, &event.Outcome, &event.Sensitivity, &before, &afterJSON, &event.ReasonCode, &event.Reason, &event.IPAddress, &event.Device, &event.CorrelationID, &event.OccurredAt, &event.PreviousHash, &event.Hash); err != nil {
 		return Event{}, err
 	}
 	if before != "null" {
@@ -118,24 +119,83 @@ func getAuditEventByID(ctx context.Context, tx *sql.Tx, identifier string) (Even
 }
 
 func (r *PostgreSQLRepository) List(ctx context.Context, after uint64, limit int) ([]Event, error) {
+	page, err := r.Search(ctx, Query{AfterSequence: after, Limit: limit})
+	return page.Items, err
+}
+
+func (r *PostgreSQLRepository) Search(ctx context.Context, query Query) (Page, error) {
+	if r.DB == nil {
+		return Page{}, errors.New("database is required")
+	}
+	limit := query.Limit
 	if limit <= 0 || limit > 1000 {
 		limit = 100
 	}
-	rows, err := r.DB.QueryContext(ctx, auditEventSelect+` WHERE sequence>$1 ORDER BY sequence LIMIT $2`, after, limit)
+	clauses := []string{"sequence>$1"}
+	args := []any{query.AfterSequence}
+	add := func(clause string, value any) {
+		args = append(args, value)
+		clauses = append(clauses, fmt.Sprintf(clause, len(args)))
+	}
+	if value := strings.TrimSpace(query.ActorID); value != "" {
+		add("actor_id=NULLIF($%d,'')::uuid", value)
+	}
+	if value := strings.TrimSpace(query.Action); value != "" {
+		add("action=$%d", value)
+	}
+	if value := strings.TrimSpace(query.ObjectType); value != "" {
+		add("entity_type=$%d", value)
+	}
+	if value := strings.TrimSpace(query.ObjectID); value != "" {
+		add("entity_id=$%d", value)
+	}
+	if value := strings.TrimSpace(query.OrganisationID); value != "" {
+		add("organisation_id=NULLIF($%d,'')::uuid", value)
+	}
+	if value := strings.TrimSpace(query.Outcome); value != "" {
+		add("upper(coalesce(outcome,''))=upper($%d)", value)
+	}
+	if value := strings.TrimSpace(query.Sensitivity); value != "" {
+		add("upper(coalesce(sensitivity,''))=upper($%d)", value)
+	}
+	if value := strings.TrimSpace(query.CorrelationID); value != "" {
+		add("correlation_id=$%d", value)
+	}
+	if value := strings.TrimSpace(query.IPAddress); value != "" {
+		add("source_ip=NULLIF($%d,'')::inet", value)
+	}
+	if query.From != nil {
+		add("created_at >= $%d", query.From.UTC())
+	}
+	if query.To != nil {
+		add("created_at < $%d", query.To.UTC())
+	}
+	args = append(args, limit+1)
+	statement := auditEventSelect + " WHERE " + strings.Join(clauses, " AND ") + fmt.Sprintf(" ORDER BY sequence LIMIT $%d", len(args))
+	rows, err := r.DB.QueryContext(ctx, statement, args...)
 	if err != nil {
-		return nil, err
+		return Page{}, err
 	}
 	defer rows.Close()
-	items := []Event{}
+	items := make([]Event, 0, limit+1)
 	for rows.Next() {
 		event, err := scanAuditEvent(rows)
 		if err != nil {
-			return nil, err
+			return Page{}, err
 		}
 		items = append(items, event)
 	}
-	return items, rows.Err()
+	if err := rows.Err(); err != nil {
+		return Page{}, err
+	}
+	var next uint64
+	if len(items) > limit {
+		items = items[:limit]
+		next = items[len(items)-1].Sequence
+	}
+	return Page{Items: items, NextSequence: next}, nil
 }
+
 func (r *PostgreSQLRepository) Verify(ctx context.Context) error {
 	var after uint64
 	var previous string

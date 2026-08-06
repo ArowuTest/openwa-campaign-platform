@@ -2,9 +2,14 @@ package operations
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -25,14 +30,19 @@ type Repository interface {
 	ListExceptions(context.Context, string, int) ([]DeliveryException, error)
 	CreateExport(context.Context, ExportRequest) (ExportRequest, error)
 	GetExport(context.Context, string) (ExportRequest, error)
+	ListExports(context.Context, ExportQuery) (ExportPage, error)
 	UpdateExport(context.Context, ExportRequest, int64) (ExportRequest, error)
+	CreateDownloadGrant(context.Context, DownloadGrant) (DownloadGrant, error)
+	ConsumeDownloadGrant(context.Context, string, string, string, time.Time) (ExportRequest, DownloadGrant, error)
+	RevokeDownloadGrants(context.Context, string, time.Time) error
 }
 type Service struct {
-	Repo            Repository
-	AuditRepository audit.Repository
-	Audit           *audit.Recorder
-	Deliveries      *delivery.Service
-	Clock           func() time.Time
+	Repo             Repository
+	AuditRepository  audit.Repository
+	Audit            *audit.Recorder
+	Deliveries       *delivery.Service
+	ReportingPrivacy *ReportingPrivacyAdministration
+	Clock            func() time.Time
 }
 
 func (s *Service) now() time.Time {
@@ -42,11 +52,21 @@ func (s *Service) now() time.Time {
 	return time.Now().UTC()
 }
 
-func (s *Service) SearchAudit(ctx context.Context, after uint64, limit int) ([]audit.Event, error) {
+func (s *Service) SearchAudit(ctx context.Context, query audit.Query) (audit.Page, error) {
 	if s.AuditRepository == nil {
-		return nil, errors.New("audit query is unavailable")
+		return audit.Page{}, errors.New("audit query is unavailable")
 	}
-	return s.AuditRepository.List(ctx, after, limit)
+	return s.AuditRepository.Search(ctx, query)
+}
+func (s *Service) SearchAuditWithAccess(ctx context.Context, query audit.Query, actor, correlation string) (audit.Page, error) {
+	page, err := s.SearchAudit(ctx, query)
+	if err != nil {
+		return page, err
+	}
+	if s.Audit != nil {
+		_, err = s.Audit.Record(ctx, audit.Input{ActorType: "USER", ActorID: actor, Action: "AUDIT_LOG_SEARCHED", ObjectType: "AUDIT_LOG", ObjectID: "AUDIT_SEARCH", OrganisationID: query.OrganisationID, Outcome: "SUCCESS", Sensitivity: "HIGH", After: map[string]any{"actorId": query.ActorID, "action": query.Action, "objectType": query.ObjectType, "objectId": query.ObjectID, "organisationId": query.OrganisationID, "outcome": query.Outcome, "sensitivity": query.Sensitivity, "resultCount": len(page.Items)}, Reason: "authorised audit search", CorrelationID: correlation, OccurredAt: s.now()})
+	}
+	return page, err
 }
 func (s *Service) Dashboard(ctx context.Context) (Dashboard, error) {
 	return s.Repo.Dashboard(ctx, s.now())
@@ -107,7 +127,17 @@ func (s *Service) ListExceptions(ctx context.Context, campaignID string, limit i
 }
 
 func (s *Service) CampaignReport(ctx context.Context, id string) (CampaignReport, error) {
-	return s.Repo.CampaignReport(ctx, id, s.now())
+	now := s.now()
+	report, err := s.Repo.CampaignReport(ctx, id, now)
+	if err != nil {
+		return report, err
+	}
+	policy, err := s.reportingPrivacyPolicy(ctx, report.OrganisationID, now)
+	if err != nil {
+		return report, err
+	}
+	applyCampaignReportingPrivacy(&report, policy, now)
+	return report, nil
 }
 
 func (s *Service) CampaignFinancialReconciliation(ctx context.Context, id string) (CampaignFinancialReconciliation, error) {
@@ -115,34 +145,142 @@ func (s *Service) CampaignFinancialReconciliation(ctx context.Context, id string
 }
 
 func (s *Service) OrganisationPerformanceReport(ctx context.Context, id string) (OrganisationPerformanceReport, error) {
-	return s.Repo.OrganisationPerformanceReport(ctx, id, s.now())
+	now := s.now()
+	report, err := s.Repo.OrganisationPerformanceReport(ctx, id, now)
+	if err != nil {
+		return report, err
+	}
+	policy, err := s.reportingPrivacyPolicy(ctx, report.OrganisationID, now)
+	if err != nil {
+		return report, err
+	}
+	applyOrganisationReportingPrivacy(&report, policy, now)
+	return report, nil
 }
+
+func (s *Service) reportingPrivacyPolicy(ctx context.Context, organisationID string, at time.Time) (ReportingPrivacyPolicy, error) {
+	if s.ReportingPrivacy == nil {
+		return conservativeReportingPrivacyPolicy(at), nil
+	}
+	return s.ReportingPrivacy.Resolve(ctx, organisationID, at)
+}
+
+func applyCampaignReportingPrivacy(report *CampaignReport, policy ReportingPrivacyPolicy, at time.Time) {
+	report.Breakdowns, report.Privacy = protectReportBreakdowns(report.RawBreakdowns, policy, at)
+	report.RawBreakdowns = nil
+}
+func applyOrganisationReportingPrivacy(report *OrganisationPerformanceReport, policy ReportingPrivacyPolicy, at time.Time) {
+	report.Breakdowns, report.Privacy = protectReportBreakdowns(report.RawBreakdowns, policy, at)
+	report.RawBreakdowns = nil
+}
+func protectReportBreakdowns(raw map[string]map[string]int64, policy ReportingPrivacyPolicy, at time.Time) (map[string][]ReportBreakdownCell, ReportPrivacyEvidence) {
+	protected := map[string][]ReportBreakdownCell{}
+	suppressed := 0
+	dimensions := make([]string, 0, len(raw))
+	for dimension := range raw {
+		dimensions = append(dimensions, dimension)
+	}
+	sort.Strings(dimensions)
+	for _, dimension := range dimensions {
+		if (dimension == "state" || dimension == "lga") && !policy.ApplyGeography {
+			continue
+		}
+		if (dimension == "ageBand" || dimension == "gender") && !policy.ApplyDemographics {
+			continue
+		}
+		if strings.HasPrefix(dimension, "attribute:") && !policy.ApplyAttributes {
+			continue
+		}
+		labels := make([]string, 0, len(raw[dimension]))
+		for label := range raw[dimension] {
+			labels = append(labels, label)
+		}
+		sort.Strings(labels)
+		cells := make([]ReportBreakdownCell, 0, len(labels))
+		for _, label := range labels {
+			count := raw[dimension][label]
+			cell := ReportBreakdownCell{Label: label}
+			if count < int64(policy.MinimumCohortSize) {
+				cell.Suppressed = true
+				suppressed++
+			} else {
+				value := count
+				cell.Count = &value
+			}
+			cells = append(cells, cell)
+		}
+		protected[dimension] = cells
+	}
+	return protected, ReportPrivacyEvidence{PolicyID: policy.ID, PolicyVersion: policy.Version, MinimumCohortSize: policy.MinimumCohortSize, SuppressionLabel: policy.SuppressionLabel, SuppressedCellCount: suppressed, AppliedAt: at.UTC()}
+}
+
+type ExportOptions struct {
+	Criteria        any
+	TemplateVersion string
+	WatermarkText   string
+	FrozenPayload   json.RawMessage
+}
+
 func (s *Service) RequestExport(ctx context.Context, kind, objectID, format, reason, actor, correlation string) (ExportRequest, error) {
+	return s.RequestExportWithOptions(ctx, kind, objectID, format, reason, actor, correlation, ExportOptions{})
+}
+
+func (s *Service) RequestExportWithOptions(ctx context.Context, kind, objectID, format, reason, actor, correlation string, options ExportOptions) (ExportRequest, error) {
 	kind = strings.ToUpper(strings.TrimSpace(kind))
 	format = strings.ToUpper(strings.TrimSpace(format))
-	if kind != "CAMPAIGN_REPORT" && kind != "AUDIT_LOG" {
+	if kind != "CAMPAIGN_REPORT" && kind != "AUDIT_LOG" && kind != "PRIVACY_PACKAGE" {
 		return ExportRequest{}, ErrInvalid
 	}
 	if format != "CSV" && format != "JSON" && format != "PDF" && format != "XLSX" {
 		return ExportRequest{}, ErrInvalid
 	}
-	if strings.TrimSpace(reason) == "" {
+	if strings.TrimSpace(reason) == "" || strings.TrimSpace(actor) == "" {
 		return ExportRequest{}, ErrInvalid
 	}
-	ident, err := id.New()
+	if (kind == "CAMPAIGN_REPORT" || kind == "PRIVACY_PACKAGE") && strings.TrimSpace(objectID) == "" {
+		return ExportRequest{}, ErrInvalid
+	}
+	criteria, err := json.Marshal(options.Criteria)
+	if err != nil {
+		return ExportRequest{}, fmt.Errorf("marshal export criteria: %w", err)
+	}
+	if string(criteria) == "null" {
+		criteria = json.RawMessage(`{}`)
+	}
+	if len(criteria) > 64<<10 {
+		return ExportRequest{}, ErrInvalid
+	}
+	identifier, err := id.New()
 	if err != nil {
 		return ExportRequest{}, err
 	}
+	templateVersion := strings.TrimSpace(options.TemplateVersion)
+	if templateVersion == "" {
+		templateVersion = "EXPORT-V1"
+	}
 	now := s.now()
-	in := ExportRequest{ID: ident, Kind: kind, ObjectID: objectID, Format: format, Status: ExportPending, RequestedBy: actor, Reason: reason, CreatedAt: now, UpdatedAt: now, Version: 1}
+	frozenPayload := append(json.RawMessage(nil), options.FrozenPayload...)
+	if kind == "PRIVACY_PACKAGE" && len(frozenPayload) == 0 {
+		return ExportRequest{}, errors.New("privacy package payload is required")
+	}
+	in := ExportRequest{ID: identifier, Kind: kind, ObjectID: strings.TrimSpace(objectID), Format: format, Status: ExportPending, RequestedBy: actor, Reason: strings.TrimSpace(reason), Criteria: criteria, TemplateVersion: templateVersion, WatermarkText: strings.TrimSpace(options.WatermarkText), FrozenPayload: frozenPayload, CreatedAt: now, UpdatedAt: now, Version: 1}
 	out, err := s.Repo.CreateExport(ctx, in)
 	if err == nil && s.Audit != nil {
-		_, err = s.Audit.Record(ctx, audit.Input{ActorType: "USER", ActorID: actor, Action: "EXPORT_REQUESTED", ObjectType: "EXPORT_REQUEST", ObjectID: out.ID, After: map[string]any{"kind": kind, "format": format, "objectId": objectID}, Reason: reason, CorrelationID: correlation, OccurredAt: now})
+		_, err = s.Audit.Record(ctx, audit.Input{ActorType: "USER", ActorID: actor, Action: "EXPORT_REQUESTED", ObjectType: "EXPORT_REQUEST", ObjectID: out.ID, After: map[string]any{"kind": kind, "format": format, "objectId": objectID, "templateVersion": templateVersion}, Reason: reason, CorrelationID: correlation, OccurredAt: now})
 	}
 	return out, err
 }
-func (s *Service) DecideExport(ctx context.Context, id string, expected int64, approve bool, reason, actor, correlation string) (ExportRequest, error) {
-	current, err := s.Repo.GetExport(ctx, id)
+
+func (s *Service) GetExport(ctx context.Context, identifier string) (ExportRequest, error) {
+	return s.Repo.GetExport(ctx, strings.TrimSpace(identifier))
+}
+
+func (s *Service) ListExports(ctx context.Context, query ExportQuery) (ExportPage, error) {
+	return s.Repo.ListExports(ctx, query)
+}
+
+func (s *Service) DecideExport(ctx context.Context, identifier string, expected int64, approve bool, reason, actor, correlation string) (ExportRequest, error) {
+	current, err := s.Repo.GetExport(ctx, identifier)
 	if err != nil {
 		return ExportRequest{}, err
 	}
@@ -158,12 +296,44 @@ func (s *Service) DecideExport(ctx context.Context, id string, expected int64, a
 	if approve {
 		current.Status = ExportApproved
 		current.ExpiresAt = nil
+		current.AsOf = &now
+		if strings.TrimSpace(current.WatermarkText) == "" {
+			current.WatermarkText = "CONFIDENTIAL • export " + current.ID
+		}
+		switch current.Kind {
+		case "CAMPAIGN_REPORT":
+			report, reportErr := s.CampaignReport(ctx, current.ObjectID)
+			if reportErr != nil {
+				return ExportRequest{}, reportErr
+			}
+			payload, marshalErr := json.Marshal(report)
+			if marshalErr != nil {
+				return ExportRequest{}, marshalErr
+			}
+			current.FrozenPayload = payload
+		case "AUDIT_LOG":
+			if s.AuditRepository == nil {
+				return ExportRequest{}, errors.New("audit repository unavailable")
+			}
+			sequence, hash, headErr := s.AuditRepository.Head(ctx)
+			if headErr != nil {
+				return ExportRequest{}, headErr
+			}
+			current.AuditHeadSequence = sequence
+			current.AuditHeadHash = hash
+		case "PRIVACY_PACKAGE":
+			// The privacy service injects an encrypted, immutable package into
+			// FrozenPayload before approval. Empty payloads fail closed.
+			if len(current.FrozenPayload) == 0 {
+				return ExportRequest{}, errors.New("privacy package is not frozen")
+			}
+		}
 	} else {
 		if strings.TrimSpace(reason) == "" {
 			return ExportRequest{}, ErrInvalid
 		}
 		current.Status = ExportRejected
-		current.RejectionReason = reason
+		current.RejectionReason = strings.TrimSpace(reason)
 	}
 	out, err := s.Repo.UpdateExport(ctx, current, expected)
 	if err == nil && s.Audit != nil {
@@ -171,7 +341,112 @@ func (s *Service) DecideExport(ctx context.Context, id string, expected int64, a
 		if approve {
 			action = "EXPORT_APPROVED"
 		}
-		_, err = s.Audit.Record(ctx, audit.Input{ActorType: "USER", ActorID: actor, Action: action, ObjectType: "EXPORT_REQUEST", ObjectID: id, After: map[string]any{"status": out.Status, "expiresAt": out.ExpiresAt}, Reason: reason, CorrelationID: correlation, OccurredAt: now})
+		_, err = s.Audit.Record(ctx, audit.Input{ActorType: "USER", ActorID: actor, Action: action, ObjectType: "EXPORT_REQUEST", ObjectID: identifier, After: map[string]any{"status": out.Status, "asOf": out.AsOf, "auditHeadSequence": out.AuditHeadSequence}, Reason: reason, CorrelationID: correlation, OccurredAt: now})
+	}
+	return out, err
+}
+
+func (s *Service) AuthorizeDownload(ctx context.Context, identifier, actor, requestID string, ttl time.Duration) (DownloadAuthorization, error) {
+	current, err := s.Repo.GetExport(ctx, identifier)
+	if err != nil {
+		return DownloadAuthorization{}, err
+	}
+	now := s.now()
+	if current.Status != ExportReady || current.RevokedAt != nil || current.ExpiresAt == nil || !current.ExpiresAt.After(now) {
+		return DownloadAuthorization{}, ErrConflict
+	}
+	if ttl <= 0 {
+		ttl = 5 * time.Minute
+	}
+	if ttl > 15*time.Minute {
+		return DownloadAuthorization{}, ErrInvalid
+	}
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return DownloadAuthorization{}, err
+	}
+	token := base64.RawURLEncoding.EncodeToString(raw)
+	digest := sha256.Sum256([]byte(token))
+	grantID, err := id.New()
+	if err != nil {
+		return DownloadAuthorization{}, err
+	}
+	grant := DownloadGrant{ID: grantID, ExportID: current.ID, ActorID: strings.TrimSpace(actor), TokenHash: hex.EncodeToString(digest[:]), RequestID: strings.TrimSpace(requestID), ExpiresAt: now.Add(ttl), CreatedAt: now}
+	stored, err := s.Repo.CreateDownloadGrant(ctx, grant)
+	if err != nil {
+		return DownloadAuthorization{}, err
+	}
+	if s.Audit != nil {
+		_, err = s.Audit.Record(ctx, audit.Input{ActorType: "USER", ActorID: actor, Action: "EXPORT_DOWNLOAD_AUTHORISED", ObjectType: "EXPORT_REQUEST", ObjectID: current.ID, After: map[string]any{"grantId": stored.ID, "expiresAt": stored.ExpiresAt}, CorrelationID: requestID, OccurredAt: now})
+		if err != nil {
+			return DownloadAuthorization{}, err
+		}
+	}
+	return DownloadAuthorization{Grant: stored, Token: token}, nil
+}
+
+func (s *Service) ConsumeDownload(ctx context.Context, identifier, token, actor, requestID string) (ExportRequest, DownloadGrant, error) {
+	digest := sha256.Sum256([]byte(strings.TrimSpace(token)))
+	export, grant, err := s.Repo.ConsumeDownloadGrant(ctx, strings.TrimSpace(identifier), hex.EncodeToString(digest[:]), strings.TrimSpace(actor), s.now())
+	if err != nil {
+		return ExportRequest{}, DownloadGrant{}, err
+	}
+	if s.Audit != nil {
+		_, auditErr := s.Audit.Record(ctx, audit.Input{ActorType: "USER", ActorID: actor, Action: "EXPORT_DOWNLOAD_AUTHENTICATED", ObjectType: "EXPORT_REQUEST", ObjectID: export.ID, Outcome: "SUCCESS", Sensitivity: "HIGH", After: map[string]any{"grantId": grant.ID, "sha256": export.SHA256, "sizeBytes": export.SizeBytes}, CorrelationID: requestID, OccurredAt: s.now()})
+		if auditErr != nil {
+			return ExportRequest{}, DownloadGrant{}, auditErr
+		}
+	}
+	return export, grant, nil
+}
+
+func (s *Service) RecordDownloadOutcome(ctx context.Context, identifier, actor, requestID, outcome, reasonCode string, detail map[string]any) error {
+	if s == nil || s.Audit == nil {
+		return nil
+	}
+	outcome = strings.ToUpper(strings.TrimSpace(outcome))
+	if outcome != "SUCCESS" && outcome != "FAILURE" {
+		return ErrInvalid
+	}
+	action := "EXPORT_DOWNLOAD_COMPLETED"
+	if outcome == "FAILURE" {
+		action = "EXPORT_DOWNLOAD_FAILED"
+	}
+	_, err := s.Audit.Record(ctx, audit.Input{
+		ActorType: "USER", ActorID: strings.TrimSpace(actor), Action: action,
+		ObjectType: "EXPORT_REQUEST", ObjectID: strings.TrimSpace(identifier),
+		Outcome: outcome, Sensitivity: "HIGH", After: detail,
+		ReasonCode: strings.TrimSpace(reasonCode), CorrelationID: strings.TrimSpace(requestID), OccurredAt: s.now(),
+	})
+	return err
+}
+
+func (s *Service) RevokeExport(ctx context.Context, identifier string, expected int64, reason, actor, correlation string) (ExportRequest, error) {
+	current, err := s.Repo.GetExport(ctx, identifier)
+	if err != nil {
+		return ExportRequest{}, err
+	}
+	if current.Status == ExportExpired || current.Status == ExportRejected || current.Status == ExportRevoked {
+		return ExportRequest{}, ErrConflict
+	}
+	if len(strings.TrimSpace(reason)) < 8 {
+		return ExportRequest{}, ErrInvalid
+	}
+	now := s.now()
+	current.Status = ExportRevoked
+	current.RevokedAt = &now
+	current.RevokedBy = actor
+	current.RevocationReason = strings.TrimSpace(reason)
+	current.UpdatedAt = now
+	out, err := s.Repo.UpdateExport(ctx, current, expected)
+	if err != nil {
+		return ExportRequest{}, err
+	}
+	if err := s.Repo.RevokeDownloadGrants(ctx, identifier, now); err != nil {
+		return ExportRequest{}, err
+	}
+	if s.Audit != nil {
+		_, err = s.Audit.Record(ctx, audit.Input{ActorType: "USER", ActorID: actor, Action: "EXPORT_REVOKED", ObjectType: "EXPORT_REQUEST", ObjectID: identifier, After: map[string]any{"status": out.Status}, Reason: reason, CorrelationID: correlation, OccurredAt: now})
 	}
 	return out, err
 }

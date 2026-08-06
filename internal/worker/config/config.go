@@ -27,6 +27,7 @@ type AudienceConfig struct {
 	DBConnMaxIdleTime            time.Duration
 	DBPingTimeout                time.Duration
 	WorkerID                     string
+	ObjectStoreDriver            string
 	ObjectStoreRoot              string
 	MSISDNEncryptionKey          string
 	MSISDNLookupKey              string
@@ -45,6 +46,9 @@ type AudienceConfig struct {
 	MergeLeaseDuration           time.Duration
 	MergePollInterval            time.Duration
 	MergeFailureBackoff          time.Duration
+	SourceRetentionBatchSize     int
+	SourceRetentionLeaseDuration time.Duration
+	SourceRetentionPollInterval  time.Duration
 	StageBatchSize               int
 	MaxRows                      int
 	MaxIssues                    int
@@ -59,6 +63,7 @@ func LoadAudience() (AudienceConfig, error) {
 		DatabaseDriver:      strings.TrimSpace(env("POSTGRES_DRIVER", "pgx")),
 		DatabaseURL:         strings.TrimSpace(os.Getenv("DATABASE_URL")),
 		WorkerID:            strings.TrimSpace(env("WORKER_ID", hostname("audience-worker"))),
+		ObjectStoreDriver:   strings.ToLower(strings.TrimSpace(env("OBJECT_STORE_DRIVER", "filesystem"))),
 		ObjectStoreRoot:     strings.TrimSpace(os.Getenv("OBJECT_STORE_ROOT")),
 		MSISDNEncryptionKey: strings.TrimSpace(os.Getenv("MSISDN_ENCRYPTION_KEY_BASE64")),
 		MSISDNLookupKey:     strings.TrimSpace(os.Getenv("MSISDN_LOOKUP_KEY_BASE64")),
@@ -90,6 +95,9 @@ func LoadAudience() (AudienceConfig, error) {
 		return AudienceConfig{}, err
 	}
 	if cfg.StageBatchSize, err = integer("AUDIENCE_STAGE_BATCH_SIZE", 1000); err != nil {
+		return AudienceConfig{}, err
+	}
+	if cfg.SourceRetentionBatchSize, err = integer("AUDIENCE_SOURCE_RETENTION_BATCH_SIZE", 50); err != nil {
 		return AudienceConfig{}, err
 	}
 	if cfg.MaxRows, err = integer("MAX_IMPORT_ROWS", 2_000_000); err != nil {
@@ -134,6 +142,12 @@ func LoadAudience() (AudienceConfig, error) {
 	if cfg.MaterialisationPollInterval, err = duration("AUDIENCE_MATERIALISATION_POLL_INTERVAL", time.Second); err != nil {
 		return AudienceConfig{}, err
 	}
+	if cfg.SourceRetentionLeaseDuration, err = duration("AUDIENCE_SOURCE_RETENTION_LEASE_DURATION", 2*time.Minute); err != nil {
+		return AudienceConfig{}, err
+	}
+	if cfg.SourceRetentionPollInterval, err = duration("AUDIENCE_SOURCE_RETENTION_POLL_INTERVAL", time.Minute); err != nil {
+		return AudienceConfig{}, err
+	}
 	if cfg.ShutdownTimeout, err = duration("WORKER_SHUTDOWN_TIMEOUT", 30*time.Second); err != nil {
 		return AudienceConfig{}, err
 	}
@@ -161,13 +175,17 @@ func (c AudienceConfig) Validate() error {
 	if c.WorkerID == "" || len(c.WorkerID) > 128 {
 		return errors.New("WORKER_ID must contain 1 to 128 characters")
 	}
-	if c.ObjectStoreRoot == "" {
-		return errors.New("OBJECT_STORE_ROOT is required")
-	}
-	if c.Environment == "staging" || c.Environment == "production" {
-		if !filepath.IsAbs(c.ObjectStoreRoot) {
-			return errors.New("deployed workers require an absolute OBJECT_STORE_ROOT")
+	switch c.ObjectStoreDriver {
+	case "filesystem":
+		if c.ObjectStoreRoot == "" {
+			return errors.New("OBJECT_STORE_ROOT is required for filesystem storage")
 		}
+		if (c.Environment == "staging" || c.Environment == "production") && !filepath.IsAbs(c.ObjectStoreRoot) {
+			return errors.New("deployed workers require an absolute OBJECT_STORE_ROOT for filesystem storage")
+		}
+	case "s3", "minio":
+	default:
+		return errors.New("OBJECT_STORE_DRIVER must be filesystem or s3")
 	}
 	if err := validateKey("MSISDN_ENCRYPTION_KEY_BASE64", c.MSISDNEncryptionKey, 32, true); err != nil {
 		return err
@@ -201,6 +219,15 @@ func (c AudienceConfig) Validate() error {
 	}
 	if c.StageBatchSize < 1 || c.StageBatchSize > 10_000 {
 		return errors.New("AUDIENCE_STAGE_BATCH_SIZE must be between 1 and 10000")
+	}
+	if c.SourceRetentionBatchSize < 1 || c.SourceRetentionBatchSize > 500 {
+		return errors.New("AUDIENCE_SOURCE_RETENTION_BATCH_SIZE must be between 1 and 500")
+	}
+	if c.SourceRetentionLeaseDuration < 15*time.Second || c.SourceRetentionLeaseDuration > 30*time.Minute {
+		return errors.New("AUDIENCE_SOURCE_RETENTION_LEASE_DURATION must be between 15 seconds and 30 minutes")
+	}
+	if c.SourceRetentionPollInterval <= 0 || c.SourceRetentionPollInterval > time.Hour {
+		return errors.New("AUDIENCE_SOURCE_RETENTION_POLL_INTERVAL must be positive and no more than one hour")
 	}
 	if c.MaxRows < 1 || c.MaxRows > 20_000_000 {
 		return errors.New("MAX_IMPORT_ROWS must be between 1 and 20000000")

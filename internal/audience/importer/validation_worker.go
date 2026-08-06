@@ -150,9 +150,6 @@ func (w *ValidationWorker) process(ctx context.Context, work ValidationWork) err
 	if metadata.Size != work.ByteSize || !strings.EqualFold(metadata.SHA256, work.FileSHA256) {
 		return w.failBeforeProcessing(work, errors.New("quarantined import object no longer matches immutable file evidence"))
 	}
-	if !strings.EqualFold(work.DetectedMediaType, "text/csv") {
-		return w.failBeforeProcessing(work, fmt.Errorf("%w: %s", ErrUnsupportedImportFormat, work.DetectedMediaType))
-	}
 	mapping, err := decodeColumnMapping(work.Mapping)
 	if err != nil {
 		return w.failBeforeProcessing(work, err)
@@ -162,7 +159,16 @@ func (w *ValidationWorker) process(ctx context.Context, work ValidationWork) err
 	if strings.TrimSpace(options.DefaultCountryISO2) == "" {
 		options.DefaultCountryISO2 = work.DefaultCountryISO2
 	}
-	_, err = w.Ingest.ProcessClaimed(ctx, work.ImportID, work.Lease, object, options)
+	switch {
+	case strings.EqualFold(work.DetectedMediaType, "text/csv"):
+		_, err = w.Ingest.ProcessClaimed(ctx, work.ImportID, work.Lease, object, options)
+	case strings.EqualFold(work.DetectedMediaType, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"):
+		_, err = w.Ingest.ProcessClaimedWithProcessor(ctx, work.ImportID, work.Lease, func(processCtx context.Context, consumer CandidateConsumer) (PreviewResult, error) {
+			return ProcessXLSX(processCtx, object, metadata.Size, mapping.Worksheet, options, consumer)
+		})
+	default:
+		err = fmt.Errorf("%w: %s", ErrUnsupportedImportFormat, work.DetectedMediaType)
+	}
 	return err
 }
 

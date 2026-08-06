@@ -66,3 +66,36 @@ func TestRenderCSVCampaignReportIncludesCommercialPoolsAndWarnings(t *testing.T)
 		}
 	}
 }
+
+func TestPrivacyPackageRendersCSVXLSXAndMultiPagePDF(t *testing.T) {
+	value := map[string]any{
+		"subject":   map[string]any{"maskedMsisdn": "+234***1234", "status": "ACTIVE"},
+		"records":   []any{map[string]any{"type": "consent", "purpose": "events"}},
+		"dangerous": "=HYPERLINK(\"https://example.invalid\")",
+	}
+	csvPayload, err := renderCSV(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(csvPayload, []byte("subject.maskedMsisdn")) || !bytes.Contains(csvPayload, []byte("'=HYPERLINK")) {
+		t.Fatalf("generic CSV missing flattened or injection-safe values: %s", csvPayload)
+	}
+	xlsxPayload, err := renderSimpleXLSX(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := zip.NewReader(bytes.NewReader(xlsxPayload), int64(len(xlsxPayload))); err != nil {
+		t.Fatalf("invalid xlsx: %v", err)
+	}
+	long := map[string]any{"lines": strings.Repeat("abcdefghij", 1000)}
+	pdfPayload, err := renderSimplePDFWithWatermark(long, "CONFIDENTIAL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(pdfPayload, []byte("/Count 2")) && !bytes.Contains(pdfPayload, []byte("/Count 3")) {
+		t.Fatalf("expected multi-page PDF, got %d bytes", len(pdfPayload))
+	}
+	if bytes.Contains(pdfPayload, []byte("report truncated")) {
+		t.Fatal("PDF must not silently truncate report evidence")
+	}
+}

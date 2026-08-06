@@ -3,7 +3,10 @@ package operations
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 )
 
@@ -225,6 +228,10 @@ ORDER BY sp.name,p.sender_pool_id`, id)
 	if unk > 0 {
 		v.Warnings = append(v.Warnings, "UNKNOWN_OUTCOMES_REQUIRE_RECONCILIATION")
 	}
+	v.RawBreakdowns, err = r.campaignBreakdowns(ctx, id)
+	if err != nil {
+		return v, err
+	}
 	v.GeneratedAt = now
 	if started.Valid {
 		t := started.Time
@@ -295,8 +302,110 @@ func (r *PostgreSQLRepository) OrganisationPerformanceReport(ctx context.Context
 	if len(v.Commercial) == 0 && len(v.Campaigns) > 0 {
 		v.Warnings = append(v.Warnings, "NO_APPROVED_COMMERCIAL_RECORDS")
 	}
+	v.RawBreakdowns, err = r.organisationBreakdowns(ctx, id)
+	if err != nil {
+		return v, err
+	}
 	v.GeneratedAt = now
 	return v, nil
+}
+
+func scanBreakdowns(rows *sql.Rows) (map[string]map[string]int64, error) {
+	defer rows.Close()
+	out := map[string]map[string]int64{}
+	for rows.Next() {
+		var dimension, label string
+		var count int64
+		if err := rows.Scan(&dimension, &label, &count); err != nil {
+			return nil, err
+		}
+		if out[dimension] == nil {
+			out[dimension] = map[string]int64{}
+		}
+		out[dimension][label] = count
+	}
+	return out, rows.Err()
+}
+
+const campaignBreakdownSQL = `
+WITH population AS (
+ SELECT c.state_id,c.lga_id,c.gender_code,c.reported_age
+ FROM campaign_recipients cr
+ JOIN contacts c ON c.id=cr.contact_id
+ WHERE cr.campaign_id=$1::uuid
+)
+SELECT 'state' AS dimension,coalesce(a.name,'UNKNOWN') AS label,count(*)::bigint
+FROM population p LEFT JOIN administrative_areas a ON a.id=p.state_id
+GROUP BY coalesce(a.name,'UNKNOWN')
+UNION ALL
+SELECT 'lga',coalesce(a.name,'UNKNOWN'),count(*)::bigint
+FROM population p LEFT JOIN administrative_areas a ON a.id=p.lga_id
+GROUP BY coalesce(a.name,'UNKNOWN')
+UNION ALL
+SELECT 'gender',coalesce(g.display_name,'UNKNOWN'),count(*)::bigint
+FROM population p LEFT JOIN gender_options g ON g.code=p.gender_code
+GROUP BY coalesce(g.display_name,'UNKNOWN')
+UNION ALL
+SELECT 'ageBand',CASE
+ WHEN reported_age IS NULL THEN 'UNKNOWN'
+ WHEN reported_age < 18 THEN 'UNDER_18'
+ WHEN reported_age <= 24 THEN '18-24'
+ WHEN reported_age <= 34 THEN '25-34'
+ WHEN reported_age <= 44 THEN '35-44'
+ WHEN reported_age <= 54 THEN '45-54'
+ WHEN reported_age <= 64 THEN '55-64'
+ ELSE '65_PLUS' END,count(*)::bigint
+FROM population
+GROUP BY 2
+ORDER BY 1,2`
+
+func (r *PostgreSQLRepository) campaignBreakdowns(ctx context.Context, campaignID string) (map[string]map[string]int64, error) {
+	rows, err := r.DB.QueryContext(ctx, campaignBreakdownSQL, campaignID)
+	if err != nil {
+		return nil, err
+	}
+	return scanBreakdowns(rows)
+}
+
+const organisationBreakdownSQL = `
+WITH population AS (
+ SELECT ct.state_id,ct.lga_id,ct.gender_code,ct.reported_age
+ FROM campaign_recipients cr
+ JOIN campaigns c ON c.id=cr.campaign_id
+ JOIN contacts ct ON ct.id=cr.contact_id
+ WHERE c.organisation_id=$1::uuid
+)
+SELECT 'state' AS dimension,coalesce(a.name,'UNKNOWN') AS label,count(*)::bigint
+FROM population p LEFT JOIN administrative_areas a ON a.id=p.state_id
+GROUP BY coalesce(a.name,'UNKNOWN')
+UNION ALL
+SELECT 'lga',coalesce(a.name,'UNKNOWN'),count(*)::bigint
+FROM population p LEFT JOIN administrative_areas a ON a.id=p.lga_id
+GROUP BY coalesce(a.name,'UNKNOWN')
+UNION ALL
+SELECT 'gender',coalesce(g.display_name,'UNKNOWN'),count(*)::bigint
+FROM population p LEFT JOIN gender_options g ON g.code=p.gender_code
+GROUP BY coalesce(g.display_name,'UNKNOWN')
+UNION ALL
+SELECT 'ageBand',CASE
+ WHEN reported_age IS NULL THEN 'UNKNOWN'
+ WHEN reported_age < 18 THEN 'UNDER_18'
+ WHEN reported_age <= 24 THEN '18-24'
+ WHEN reported_age <= 34 THEN '25-34'
+ WHEN reported_age <= 44 THEN '35-44'
+ WHEN reported_age <= 54 THEN '45-54'
+ WHEN reported_age <= 64 THEN '55-64'
+ ELSE '65_PLUS' END,count(*)::bigint
+FROM population
+GROUP BY 2
+ORDER BY 1,2`
+
+func (r *PostgreSQLRepository) organisationBreakdowns(ctx context.Context, organisationID string) (map[string]map[string]int64, error) {
+	rows, err := r.DB.QueryContext(ctx, organisationBreakdownSQL, organisationID)
+	if err != nil {
+		return nil, err
+	}
+	return scanBreakdowns(rows)
 }
 
 func (r *PostgreSQLRepository) CampaignFinancialReconciliation(ctx context.Context, id string, now time.Time) (CampaignFinancialReconciliation, error) {
@@ -358,30 +467,74 @@ func (r *PostgreSQLRepository) CampaignFinancialReconciliation(ctx context.Conte
 
 func scanExport(s interface{ Scan(...any) error }) (ExportRequest, error) {
 	var v ExportRequest
-	var exp sql.NullTime
-	var generated, leaseExp sql.NullTime
-	err := s.Scan(&v.ID, &v.Kind, &v.ObjectID, &v.Format, &v.Status, &v.RequestedBy, &v.ApprovedBy, &v.Reason, &v.RejectionReason, &v.CreatedAt, &v.UpdatedAt, &exp, &v.ObjectKey, &v.ContentType, &v.SHA256, &v.SizeBytes, &v.FailureCode, &v.FailureDetail, &generated, &v.LeaseOwner, &leaseExp, &v.Version)
+	var exp, asOf, generated, leaseExp, lastDownloaded, revoked sql.NullTime
+	var criteria, frozen []byte
+	err := s.Scan(
+		&v.ID, &v.Kind, &v.ObjectID, &v.Format, &v.Status, &v.RequestedBy, &v.ApprovedBy,
+		&v.Reason, &v.RejectionReason, &criteria, &v.TemplateVersion, &asOf, &frozen,
+		&v.AuditHeadSequence, &v.AuditHeadHash, &v.WatermarkText,
+		&v.CreatedAt, &v.UpdatedAt, &exp, &v.ObjectKey, &v.ContentType, &v.SHA256,
+		&v.SizeBytes, &v.FailureCode, &v.FailureDetail, &generated,
+		&v.DownloadCount, &lastDownloaded, &revoked, &v.RevokedBy, &v.RevocationReason,
+		&v.LeaseOwner, &leaseExp, &v.Version,
+	)
 	if exp.Valid {
-		t := exp.Time
+		t := exp.Time.UTC()
 		v.ExpiresAt = &t
 	}
+	if asOf.Valid {
+		t := asOf.Time.UTC()
+		v.AsOf = &t
+	}
 	if generated.Valid {
-		t := generated.Time
+		t := generated.Time.UTC()
 		v.GeneratedAt = &t
 	}
+	if lastDownloaded.Valid {
+		t := lastDownloaded.Time.UTC()
+		v.LastDownloadedAt = &t
+	}
+	if revoked.Valid {
+		t := revoked.Time.UTC()
+		v.RevokedAt = &t
+	}
 	if leaseExp.Valid {
-		t := leaseExp.Time
+		t := leaseExp.Time.UTC()
 		v.LeaseExpiresAt = &t
+	}
+	if len(criteria) > 0 {
+		v.Criteria = append(json.RawMessage(nil), criteria...)
+	}
+	if len(frozen) > 0 {
+		v.FrozenPayload = append(json.RawMessage(nil), frozen...)
 	}
 	return v, err
 }
 
-const exportSelect = `SELECT id::text,kind,coalesce(object_id::text,''),format,status,requested_by::text,coalesce(approved_by::text,''),reason,coalesce(rejection_reason,''),created_at,updated_at,expires_at,coalesce(object_key,''),coalesce(content_type,''),coalesce(sha256,''),coalesce(size_bytes,0),coalesce(failure_code,''),coalesce(failure_detail,''),generated_at,coalesce(lease_owner,''),lease_expires_at,version FROM export_requests`
+const exportSelect = `SELECT
+ id::text,kind,coalesce(object_id::text,''),format,status,requested_by::text,coalesce(approved_by::text,''),
+ reason,coalesce(rejection_reason,''),criteria,template_version,as_of,frozen_payload,
+ coalesce(audit_head_sequence,0),coalesce(audit_head_hash,''),coalesce(watermark_text,''),
+ created_at,updated_at,expires_at,coalesce(object_key,''),coalesce(content_type,''),coalesce(sha256,''),
+ coalesce(size_bytes,0),coalesce(failure_code,''),coalesce(failure_detail,''),generated_at,
+ download_count,last_downloaded_at,revoked_at,coalesce(revoked_by::text,''),coalesce(revocation_reason,''),
+ coalesce(lease_owner,''),lease_expires_at,version
+ FROM export_requests`
 
 func (r *PostgreSQLRepository) CreateExport(ctx context.Context, v ExportRequest) (ExportRequest, error) {
-	_, err := r.DB.ExecContext(ctx, `INSERT INTO export_requests(id,kind,object_id,format,status,requested_by,reason,created_at,updated_at,version) VALUES($1::uuid,$2,NULLIF($3,'')::uuid,$4,$5,$6::uuid,$7,$8,$9,$10)`, v.ID, v.Kind, v.ObjectID, v.Format, v.Status, v.RequestedBy, v.Reason, v.CreatedAt, v.UpdatedAt, v.Version)
+	criteria := []byte(v.Criteria)
+	if len(criteria) == 0 {
+		criteria = []byte(`{}`)
+	}
+	_, err := r.DB.ExecContext(ctx, `INSERT INTO export_requests(
+ id,kind,object_id,format,status,requested_by,reason,criteria,template_version,watermark_text,
+ created_at,updated_at,version
+) VALUES($1::uuid,$2,NULLIF($3,'')::uuid,$4,$5,$6::uuid,$7,$8::jsonb,$9,NULLIF($10,''),$11,$12,$13)`,
+		v.ID, v.Kind, v.ObjectID, v.Format, v.Status, v.RequestedBy, v.Reason, criteria,
+		v.TemplateVersion, v.WatermarkText, v.CreatedAt, v.UpdatedAt, v.Version)
 	return v, err
 }
+
 func (r *PostgreSQLRepository) GetExport(ctx context.Context, id string) (ExportRequest, error) {
 	v, err := scanExport(r.DB.QueryRowContext(ctx, exportSelect+` WHERE id=$1::uuid`, id))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -389,8 +542,79 @@ func (r *PostgreSQLRepository) GetExport(ctx context.Context, id string) (Export
 	}
 	return v, err
 }
+
+func (r *PostgreSQLRepository) ListExports(ctx context.Context, query ExportQuery) (ExportPage, error) {
+	if r == nil || r.DB == nil {
+		return ExportPage{}, errors.New("database is required")
+	}
+	limit := query.Limit
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	clauses := []string{"1=1"}
+	args := []any{}
+	add := func(format string, value any) {
+		args = append(args, value)
+		clauses = append(clauses, fmt.Sprintf(format, len(args)))
+	}
+	if query.Status != "" {
+		add("status=$%d", query.Status)
+	}
+	if value := strings.ToUpper(strings.TrimSpace(query.Kind)); value != "" {
+		add("kind=$%d", value)
+	}
+	if value := strings.TrimSpace(query.RequestedBy); value != "" {
+		add("requested_by=NULLIF($%d,'')::uuid", value)
+	}
+	if query.AfterCreatedAt != nil {
+		args = append(args, query.AfterCreatedAt.UTC(), strings.TrimSpace(query.AfterID))
+		createdArg, idArg := len(args)-1, len(args)
+		clauses = append(clauses, fmt.Sprintf("(created_at < $%d OR (created_at=$%d AND id::text < $%d))", createdArg, createdArg, idArg))
+	}
+	args = append(args, limit+1)
+	statement := exportSelect + " WHERE " + strings.Join(clauses, " AND ") + fmt.Sprintf(" ORDER BY created_at DESC,id DESC LIMIT $%d", len(args))
+	rows, err := r.DB.QueryContext(ctx, statement, args...)
+	if err != nil {
+		return ExportPage{}, err
+	}
+	defer rows.Close()
+	items := make([]ExportRequest, 0, limit+1)
+	for rows.Next() {
+		item, scanErr := scanExport(rows)
+		if scanErr != nil {
+			return ExportPage{}, scanErr
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return ExportPage{}, err
+	}
+	page := ExportPage{}
+	if len(items) > limit {
+		page.Items = items[:limit]
+		last := page.Items[len(page.Items)-1]
+		page.NextAfter = last.CreatedAt.UTC().Format(time.RFC3339Nano) + "|" + last.ID
+	} else {
+		page.Items = items
+	}
+	return page, nil
+}
+
 func (r *PostgreSQLRepository) UpdateExport(ctx context.Context, v ExportRequest, expected int64) (ExportRequest, error) {
-	res, err := r.DB.ExecContext(ctx, `UPDATE export_requests SET status=$2,approved_by=NULLIF($3,'')::uuid,rejection_reason=NULLIF($4,''),expires_at=$5,updated_at=$6,version=version+1 WHERE id=$1::uuid AND version=$7`, v.ID, v.Status, v.ApprovedBy, v.RejectionReason, v.ExpiresAt, v.UpdatedAt, expected)
+	var frozen any
+	if len(v.FrozenPayload) > 0 {
+		frozen = []byte(v.FrozenPayload)
+	}
+	res, err := r.DB.ExecContext(ctx, `UPDATE export_requests SET
+ status=$2,approved_by=NULLIF($3,'')::uuid,rejection_reason=NULLIF($4,''),expires_at=$5,
+ criteria=$6::jsonb,template_version=$7,as_of=$8,frozen_payload=$9::jsonb,
+ audit_head_sequence=NULLIF($10,0),audit_head_hash=NULLIF($11,''),watermark_text=NULLIF($12,''),
+ revoked_at=$13,revoked_by=NULLIF($14,'')::uuid,revocation_reason=NULLIF($15,''),
+ updated_at=$16,version=version+1
+ WHERE id=$1::uuid AND version=$17`,
+		v.ID, v.Status, v.ApprovedBy, v.RejectionReason, v.ExpiresAt, []byte(v.Criteria),
+		v.TemplateVersion, v.AsOf, frozen, v.AuditHeadSequence, v.AuditHeadHash, v.WatermarkText,
+		v.RevokedAt, v.RevokedBy, v.RevocationReason, v.UpdatedAt, expected)
 	if err != nil {
 		return v, err
 	}
@@ -403,6 +627,78 @@ func (r *PostgreSQLRepository) UpdateExport(ctx context.Context, v ExportRequest
 	}
 	v.Version = expected + 1
 	return v, nil
+}
+
+func (r *PostgreSQLRepository) CreateDownloadGrant(ctx context.Context, grant DownloadGrant) (DownloadGrant, error) {
+	_, err := r.DB.ExecContext(ctx, `INSERT INTO export_download_grants(
+ id,export_id,actor_id,token_hash,request_id,expires_at,created_at
+) VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5,$6,$7)`,
+		grant.ID, grant.ExportID, grant.ActorID, grant.TokenHash, grant.RequestID, grant.ExpiresAt, grant.CreatedAt)
+	return grant, err
+}
+
+func (r *PostgreSQLRepository) ConsumeDownloadGrant(ctx context.Context, exportID, tokenHash, actorID string, now time.Time) (ExportRequest, DownloadGrant, error) {
+	tx, err := r.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		return ExportRequest{}, DownloadGrant{}, err
+	}
+	defer tx.Rollback()
+	export, err := scanExport(tx.QueryRowContext(ctx, exportSelect+` WHERE id=$1::uuid FOR UPDATE`, exportID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return ExportRequest{}, DownloadGrant{}, ErrNotFound
+	}
+	if err != nil {
+		return ExportRequest{}, DownloadGrant{}, err
+	}
+	if export.Status != ExportReady || export.RevokedAt != nil || export.ExpiresAt == nil || !export.ExpiresAt.After(now) {
+		return ExportRequest{}, DownloadGrant{}, ErrConflict
+	}
+	var grant DownloadGrant
+	var used, revoked sql.NullTime
+	err = tx.QueryRowContext(ctx, `SELECT id::text,export_id::text,actor_id::text,token_hash,request_id,expires_at,used_at,revoked_at,created_at
+ FROM export_download_grants
+ WHERE export_id=$1::uuid AND token_hash=$2 AND actor_id=$3::uuid
+ FOR UPDATE`, exportID, tokenHash, actorID).Scan(
+		&grant.ID, &grant.ExportID, &grant.ActorID, &grant.TokenHash, &grant.RequestID,
+		&grant.ExpiresAt, &used, &revoked, &grant.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ExportRequest{}, DownloadGrant{}, ErrNotFound
+	}
+	if err != nil {
+		return ExportRequest{}, DownloadGrant{}, err
+	}
+	if used.Valid || revoked.Valid || !grant.ExpiresAt.After(now) {
+		return ExportRequest{}, DownloadGrant{}, ErrConflict
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE export_download_grants SET used_at=$2 WHERE id=$1::uuid AND used_at IS NULL AND revoked_at IS NULL`, grant.ID, now)
+	if err != nil {
+		return ExportRequest{}, DownloadGrant{}, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return ExportRequest{}, DownloadGrant{}, err
+	}
+	if n != 1 {
+		return ExportRequest{}, DownloadGrant{}, ErrConflict
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE export_requests SET download_count=download_count+1,last_downloaded_at=$2,updated_at=$2,version=version+1 WHERE id=$1::uuid`, exportID, now); err != nil {
+		return ExportRequest{}, DownloadGrant{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return ExportRequest{}, DownloadGrant{}, err
+	}
+	usedAt := now.UTC()
+	grant.UsedAt = &usedAt
+	export.DownloadCount++
+	export.LastDownloadedAt = &usedAt
+	export.UpdatedAt = usedAt
+	export.Version++
+	return export, grant, nil
+}
+
+func (r *PostgreSQLRepository) RevokeDownloadGrants(ctx context.Context, exportID string, now time.Time) error {
+	_, err := r.DB.ExecContext(ctx, `UPDATE export_download_grants SET revoked_at=$2 WHERE export_id=$1::uuid AND used_at IS NULL AND revoked_at IS NULL`, exportID, now)
+	return err
 }
 
 func (r *PostgreSQLRepository) ListExceptions(ctx context.Context, campaignID string, limit int) ([]DeliveryException, error) {
@@ -472,7 +768,7 @@ func (r *PostgreSQLRepository) FailExport(ctx context.Context, id, code, detail 
 	_, err := r.DB.ExecContext(ctx, `UPDATE export_requests SET status='FAILED',failure_code=$2,failure_detail=$3,lease_owner=NULL,lease_expires_at=NULL,updated_at=$4,version=version+1 WHERE id=$1::uuid AND status='PROCESSING'`, id, code, detail, now)
 	return err
 }
-func (r *PostgreSQLRepository) ExpireExports(ctx context.Context, now time.Time, limit int) ([]ExportRequest, error) {
+func (r *PostgreSQLRepository) ClaimExpiringExports(ctx context.Context, now time.Time, limit int) ([]ExportRequest, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
@@ -485,25 +781,60 @@ func (r *PostgreSQLRepository) ExpireExports(ctx context.Context, now time.Time,
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	var out []ExportRequest
 	for rows.Next() {
-		v, e := scanExport(rows)
-		if e != nil {
-			return nil, e
+		v, scanErr := scanExport(rows)
+		if scanErr != nil {
+			_ = rows.Close()
+			return nil, scanErr
 		}
 		out = append(out, v)
+	}
+	if err = rows.Close(); err != nil {
+		return nil, err
 	}
 	if err = rows.Err(); err != nil {
 		return nil, err
 	}
-	for _, v := range out {
-		if _, err = tx.ExecContext(ctx, `UPDATE export_requests SET status='EXPIRED',updated_at=$2,version=version+1 WHERE id=$1::uuid`, v.ID, now); err != nil {
+	for index := range out {
+		if _, err = tx.ExecContext(ctx, `UPDATE export_requests SET status='EXPIRING',updated_at=$2,version=version+1 WHERE id=$1::uuid AND status='READY'`, out[index].ID, now); err != nil {
 			return nil, err
 		}
+		out[index].Status = ExportExpiring
+		out[index].Version++
 	}
 	if err = tx.Commit(); err != nil {
 		return nil, err
 	}
 	return out, nil
+}
+
+func (r *PostgreSQLRepository) CompleteExpiration(ctx context.Context, id string, now time.Time) error {
+	res, err := r.DB.ExecContext(ctx, `UPDATE export_requests SET status='EXPIRED',object_key=NULL,updated_at=$2,version=version+1 WHERE id=$1::uuid AND status='EXPIRING'`, id, now)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return ErrConflict
+	}
+	return nil
+}
+
+func (r *PostgreSQLRepository) FailExpiration(ctx context.Context, id, detail string, now time.Time) error {
+	res, err := r.DB.ExecContext(ctx, `UPDATE export_requests SET status='READY',failure_code='EXPIRY_DELETE_FAILED',failure_detail=$2,updated_at=$3,version=version+1 WHERE id=$1::uuid AND status='EXPIRING'`, id, detail, now)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n != 1 {
+		return ErrConflict
+	}
+	return nil
 }

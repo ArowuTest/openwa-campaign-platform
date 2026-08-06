@@ -102,6 +102,9 @@ func (r *PostgreSQLMergeRepository) mergeOnce(ctx context.Context, importID stri
 	}
 
 	result := MergeResult{}
+	if _, err := tx.ExecContext(ctx, captureExistingImportMutationsSQL, importID, now.UTC()); err != nil {
+		return MergeResult{}, fmt.Errorf("capture existing contact state: %w", err)
+	}
 	upsertSQL := upsertContactsNewestSQL
 	if basis.UpdatePolicy == UpdateInsertOnly {
 		upsertSQL = insertContactsOnlySQL
@@ -119,6 +122,9 @@ func (r *PostgreSQLMergeRepository) mergeOnce(ctx context.Context, importID stri
 	}
 	if err := tx.QueryRowContext(ctx, upsertSQL, importID, now.UTC()).Scan(&result.InsertedContacts, &result.UpdatedContacts); err != nil {
 		return MergeResult{}, fmt.Errorf("merge canonical contacts: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, captureInsertedImportMutationsSQL, importID, now.UTC()); err != nil {
+		return MergeResult{}, fmt.Errorf("capture inserted contact state: %w", err)
 	}
 	if err := tx.QueryRowContext(ctx, insertContactSourcesSQL, importID, now.UTC()).Scan(&result.SourceLinks); err != nil {
 		return MergeResult{}, fmt.Errorf("merge contact sources: %w", err)
@@ -275,6 +281,34 @@ basis AS MATERIALIZED (
  RETURNING msisdn_lookup_hmac
 )
 SELECT (SELECT count(*) FROM merged)-(SELECT count(*) FROM existing),(SELECT count(*) FROM existing)`
+
+const captureExistingImportMutationsSQL = resolvedStagingCTE + `,
+existing AS (
+ INSERT INTO audience_import_contact_mutations(
+   audience_import_id,contact_id,was_inserted,before_encrypted_msisdn,before_masked_msisdn,
+   before_country_id,before_state_id,before_lga_id,before_reported_age,before_age_recorded_at,
+   before_age_source,before_age_verified,before_gender_code,before_status,before_source_system,
+   before_source_record_id,before_profile_recorded_at,recorded_at
+ )
+ SELECT $1::uuid,c.id,false,c.encrypted_msisdn,c.masked_msisdn,c.country_id,c.state_id,c.lga_id,
+        c.reported_age,c.age_recorded_at,c.age_source,c.age_verified,c.gender_code,c.status,
+        c.source_system,c.source_record_id,c.profile_recorded_at,$2
+ FROM resolved r JOIN contacts c ON c.msisdn_lookup_hmac=r.msisdn_lookup_hmac
+ ON CONFLICT(audience_import_id,contact_id) DO NOTHING
+ RETURNING 1
+) SELECT count(*) FROM existing`
+
+const captureInsertedImportMutationsSQL = `
+WITH inserted AS (
+ INSERT INTO audience_import_contact_mutations(audience_import_id,contact_id,was_inserted,recorded_at)
+ SELECT $1::uuid,c.id,true,$2
+ FROM audience_import_staging s
+ JOIN contacts c ON c.msisdn_lookup_hmac=s.msisdn_lookup_hmac
+ WHERE s.audience_import_id=$1::uuid
+   AND NOT EXISTS (SELECT 1 FROM audience_import_contact_mutations m WHERE m.audience_import_id=$1::uuid AND m.contact_id=c.id)
+ ON CONFLICT(audience_import_id,contact_id) DO NOTHING
+ RETURNING 1
+) SELECT count(*) FROM inserted`
 
 const insertContactSourcesSQL = `
 WITH candidates AS MATERIALIZED (

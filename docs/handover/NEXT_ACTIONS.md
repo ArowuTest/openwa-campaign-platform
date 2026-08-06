@@ -1,13 +1,21 @@
 # Next actions
 
-## Next backend package — 0.8.26
+## Next backend package — 0.8.27
 
-1. Complete secure export list/detail/download authorisation, immutable render criteria, revocation, expiry, download audit and production-quality XLSX/PDF output.
-2. Add safe streaming XLSX audience import with worksheet, formula, external-link, archive-size and row/column controls.
-3. Add privacy/data-subject cases for access, correction, objection, restriction, deletion/anonymisation, portability and legal-hold conflicts.
-4. Enforce governed small-cohort privacy thresholds and complete report audience-waterfall evidence.
-5. Expand contact lifecycle/provenance and sensitive-operation audit search.
-6. Add a production S3/MinIO-compatible object-store adapter with streaming, checksums, version evidence and short-lived signed access.
+1. Complete gateway-pool and runtime-node administration, signed registration/heartbeat and declared-versus-observed capability reconciliation.
+2. Standardise common configuration governance across material policy families: draft, submission, maker-checker approval, activation, effective dating, supersession, retirement and rollback-by-replacement.
+3. Add unified maintenance and emergency controls consumed consistently by the API, schedulers, workers and gateway admission paths.
+4. Complete cross-domain retention and archive automation for campaigns, recipients, imports, evidence, media, raw provider events, audit, incidents, alerts, commercial records and exports, while respecting legal holds.
+5. Complete governed alert escalation, portal notifications, privacy-deadline alerts and append-only incident timelines.
+
+## Planned production-engineering package — 0.8.28
+
+- Prometheus-compatible metrics and W3C trace propagation;
+- service-specific database identities, secret-file support and rotation-safe internal credentials;
+- durable gateway nonce/replay governance and unknown-submission reconciliation;
+- repository-wide pagination and explicit-error consistency;
+- partition-ready high-growth schemas and maintenance tooling;
+- PostgreSQL-backed concurrency and failure-injection suites.
 
 ## External gates retained
 
@@ -15,5 +23,5 @@
 - dependency-resolved gateway build and real OpenWA sessions;
 - target-volume performance and endurance evidence;
 - Hostinger deployment, backup, restore and disaster-recovery proof;
-- security assessment and operational key management;
+- independent security assessment and operational key management;
 - production frontend completion.

@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"campaign-platform/internal/audience/importer"
@@ -125,7 +124,11 @@ func (s *Server) listConsentEvents(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, http.StatusServiceUnavailable, "CONSENT_LEDGER_UNAVAILABLE", "The consent ledger is not configured.", nil)
 		return
 	}
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	limit, err := optionalPositiveIntQuery(r, "limit", 500)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_LIMIT", "The page limit must be between 1 and 500.", nil)
+		return
+	}
 	events, err := s.deps.ConsentLedger.Events(r.Context(), strings.TrimSpace(r.URL.Query().Get("contactId")), limit)
 	if err != nil {
 		s.internalError(w, r, err)

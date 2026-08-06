@@ -1,6 +1,7 @@
 package operations
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"time"
@@ -88,22 +89,40 @@ type CampaignCommercialReport struct {
 	PaymentReceivedAt  *time.Time `json:"paymentReceivedAt,omitempty"`
 }
 
+type ReportBreakdownCell struct {
+	Label      string `json:"label"`
+	Count      *int64 `json:"count,omitempty"`
+	Suppressed bool   `json:"suppressed"`
+}
+
+type ReportPrivacyEvidence struct {
+	PolicyID            string    `json:"policyId"`
+	PolicyVersion       int64     `json:"policyVersion"`
+	MinimumCohortSize   int       `json:"minimumCohortSize"`
+	SuppressionLabel    string    `json:"suppressionLabel"`
+	SuppressedCellCount int       `json:"suppressedCellCount"`
+	AppliedAt           time.Time `json:"appliedAt"`
+}
+
 type CampaignReport struct {
-	CampaignID     string                   `json:"campaignId"`
-	OrganisationID string                   `json:"organisationId"`
-	Name           string                   `json:"name"`
-	Purpose        string                   `json:"purpose"`
-	Status         string                   `json:"status"`
-	Audience       map[string]int64         `json:"audience"`
-	Delivery       map[string]int64         `json:"delivery"`
-	Engagement     map[string]int64         `json:"engagement"`
-	Exceptions     map[string]int64         `json:"exceptions"`
-	Commercial     CampaignCommercialReport `json:"commercial"`
-	Pools          []CampaignPoolReport     `json:"pools"`
-	Warnings       []string                 `json:"warnings"`
-	StartedAt      *time.Time               `json:"startedAt,omitempty"`
-	CompletedAt    *time.Time               `json:"completedAt,omitempty"`
-	GeneratedAt    time.Time                `json:"generatedAt"`
+	CampaignID     string                           `json:"campaignId"`
+	OrganisationID string                           `json:"organisationId"`
+	Name           string                           `json:"name"`
+	Purpose        string                           `json:"purpose"`
+	Status         string                           `json:"status"`
+	Audience       map[string]int64                 `json:"audience"`
+	Delivery       map[string]int64                 `json:"delivery"`
+	Engagement     map[string]int64                 `json:"engagement"`
+	Exceptions     map[string]int64                 `json:"exceptions"`
+	Commercial     CampaignCommercialReport         `json:"commercial"`
+	Pools          []CampaignPoolReport             `json:"pools"`
+	Warnings       []string                         `json:"warnings"`
+	Breakdowns     map[string][]ReportBreakdownCell `json:"breakdowns,omitempty"`
+	RawBreakdowns  map[string]map[string]int64      `json:"-"`
+	Privacy        ReportPrivacyEvidence            `json:"privacy"`
+	StartedAt      *time.Time                       `json:"startedAt,omitempty"`
+	CompletedAt    *time.Time                       `json:"completedAt,omitempty"`
+	GeneratedAt    time.Time                        `json:"generatedAt"`
 }
 
 type CurrencyCommercialSummary struct {
@@ -114,14 +133,17 @@ type CurrencyCommercialSummary struct {
 }
 
 type OrganisationPerformanceReport struct {
-	OrganisationID   string                      `json:"organisationId"`
-	OrganisationName string                      `json:"organisationName"`
-	Campaigns        map[string]int64            `json:"campaigns"`
-	Recipients       map[string]int64            `json:"recipients"`
-	Delivery         map[string]int64            `json:"delivery"`
-	Commercial       []CurrencyCommercialSummary `json:"commercial"`
-	Warnings         []string                    `json:"warnings"`
-	GeneratedAt      time.Time                   `json:"generatedAt"`
+	OrganisationID   string                           `json:"organisationId"`
+	OrganisationName string                           `json:"organisationName"`
+	Campaigns        map[string]int64                 `json:"campaigns"`
+	Recipients       map[string]int64                 `json:"recipients"`
+	Delivery         map[string]int64                 `json:"delivery"`
+	Commercial       []CurrencyCommercialSummary      `json:"commercial"`
+	Warnings         []string                         `json:"warnings"`
+	Breakdowns       map[string][]ReportBreakdownCell `json:"breakdowns,omitempty"`
+	RawBreakdowns    map[string]map[string]int64      `json:"-"`
+	Privacy          ReportPrivacyEvidence            `json:"privacy"`
+	GeneratedAt      time.Time                        `json:"generatedAt"`
 }
 
 type FinancialReconciliationStatus string
@@ -169,33 +191,78 @@ const (
 	ExportProcessing ExportStatus = "PROCESSING"
 	ExportRejected   ExportStatus = "REJECTED"
 	ExportReady      ExportStatus = "READY"
+	ExportExpiring   ExportStatus = "EXPIRING"
 	ExportExpired    ExportStatus = "EXPIRED"
 	ExportFailed     ExportStatus = "FAILED"
+	ExportRevoked    ExportStatus = "REVOKED"
 )
 
 type ExportRequest struct {
-	ID              string       `json:"id"`
-	Kind            string       `json:"kind"`
-	ObjectID        string       `json:"objectId"`
-	Format          string       `json:"format"`
-	Status          ExportStatus `json:"status"`
-	RequestedBy     string       `json:"requestedBy"`
-	ApprovedBy      string       `json:"approvedBy,omitempty"`
-	Reason          string       `json:"reason"`
-	RejectionReason string       `json:"rejectionReason,omitempty"`
-	CreatedAt       time.Time    `json:"createdAt"`
-	UpdatedAt       time.Time    `json:"updatedAt"`
-	ExpiresAt       *time.Time   `json:"expiresAt,omitempty"`
-	ObjectKey       string       `json:"objectKey,omitempty"`
-	ContentType     string       `json:"contentType,omitempty"`
-	SHA256          string       `json:"sha256,omitempty"`
-	SizeBytes       int64        `json:"sizeBytes,omitempty"`
-	FailureCode     string       `json:"failureCode,omitempty"`
-	FailureDetail   string       `json:"failureDetail,omitempty"`
-	GeneratedAt     *time.Time   `json:"generatedAt,omitempty"`
-	LeaseOwner      string       `json:"-"`
-	LeaseExpiresAt  *time.Time   `json:"-"`
-	Version         int64        `json:"version"`
+	ID                string          `json:"id"`
+	Kind              string          `json:"kind"`
+	ObjectID          string          `json:"objectId"`
+	Format            string          `json:"format"`
+	Status            ExportStatus    `json:"status"`
+	RequestedBy       string          `json:"requestedBy"`
+	ApprovedBy        string          `json:"approvedBy,omitempty"`
+	Reason            string          `json:"reason"`
+	RejectionReason   string          `json:"rejectionReason,omitempty"`
+	Criteria          json.RawMessage `json:"criteria,omitempty"`
+	TemplateVersion   string          `json:"templateVersion"`
+	AsOf              *time.Time      `json:"asOf,omitempty"`
+	FrozenPayload     json.RawMessage `json:"-"`
+	AuditHeadSequence uint64          `json:"auditHeadSequence,omitempty"`
+	AuditHeadHash     string          `json:"auditHeadHash,omitempty"`
+	WatermarkText     string          `json:"watermarkText,omitempty"`
+	CreatedAt         time.Time       `json:"createdAt"`
+	UpdatedAt         time.Time       `json:"updatedAt"`
+	ExpiresAt         *time.Time      `json:"expiresAt,omitempty"`
+	ObjectKey         string          `json:"objectKey,omitempty"`
+	ContentType       string          `json:"contentType,omitempty"`
+	SHA256            string          `json:"sha256,omitempty"`
+	SizeBytes         int64           `json:"sizeBytes,omitempty"`
+	FailureCode       string          `json:"failureCode,omitempty"`
+	FailureDetail     string          `json:"failureDetail,omitempty"`
+	GeneratedAt       *time.Time      `json:"generatedAt,omitempty"`
+	DownloadCount     int64           `json:"downloadCount"`
+	LastDownloadedAt  *time.Time      `json:"lastDownloadedAt,omitempty"`
+	RevokedAt         *time.Time      `json:"revokedAt,omitempty"`
+	RevokedBy         string          `json:"revokedBy,omitempty"`
+	RevocationReason  string          `json:"revocationReason,omitempty"`
+	LeaseOwner        string          `json:"-"`
+	LeaseExpiresAt    *time.Time      `json:"-"`
+	Version           int64           `json:"version"`
+}
+
+type ExportQuery struct {
+	AfterCreatedAt *time.Time
+	AfterID        string
+	Status         ExportStatus
+	Kind           string
+	RequestedBy    string
+	Limit          int
+}
+
+type ExportPage struct {
+	Items     []ExportRequest `json:"items"`
+	NextAfter string          `json:"nextAfter,omitempty"`
+}
+
+type DownloadGrant struct {
+	ID        string     `json:"id"`
+	ExportID  string     `json:"exportId"`
+	ActorID   string     `json:"actorId"`
+	TokenHash string     `json:"-"`
+	RequestID string     `json:"requestId"`
+	ExpiresAt time.Time  `json:"expiresAt"`
+	UsedAt    *time.Time `json:"usedAt,omitempty"`
+	RevokedAt *time.Time `json:"revokedAt,omitempty"`
+	CreatedAt time.Time  `json:"createdAt"`
+}
+
+type DownloadAuthorization struct {
+	Grant DownloadGrant `json:"grant"`
+	Token string        `json:"token"`
 }
 
 var (

@@ -27,7 +27,7 @@ External organisations do not receive portal access in the initial release. They
 
 ## Current checkpoint
 
-Version `0.8.25` is a transport trust-boundary and consent-evidence hardening checkpoint based on `0.8.24`. It is pre-production and must not be represented as deployment-certified.
+Version `0.8.26` is a data privacy, secure export and audience-import governance checkpoint based on `0.8.25`. It remains pre-production and must not be represented as deployment-certified.
 
 The repository includes:
 
@@ -36,16 +36,18 @@ The repository includes:
 - Immutable audience snapshots, approved message versions and recipient entitlements.
 - Durable workers, fenced leases, queue reconstruction and unknown-outcome protection.
 - Multi-pool routing across separately governed OpenWA `WHATSAPP_WEB_JS` and `BAILEYS` gateway pools.
-- Versioned pacing policies, route capacity reservations and campaign admission forecasting.
-- Exact provider-capability definition and gateway-version evidence frozen into campaigns, routes and controlled test sends.
-- Runtime provider, engine, adapter, capability, gateway-node, session-lease and route-fence revalidation before submission.
-- Canonical governed sender lifecycle with control-plane pairing, drain, recovery, logout and retirement operations.
-- Trusted malware-scanned message/evidence assets with derived checksum, type and size evidence.
-- Organisation-, source- and campaign-scoped consent reviews with independent approval, expiry, revocation and superseding revisions.
-- Durable signed inbound-message forwarding and protected opt-out correlation.
-- Monotonic delivery evidence, signed callbacks, reconciliation and governed operational reporting.
-- PostgreSQL migrations through `0061_trusted_assets_and_consent_review_governance.sql`.
-- An SRS traceability catalogue containing 398 granular requirement records.
+- Exact provider-capability, gateway-node, session-lease and route-fence evidence revalidated before submission.
+- Canonical sender lifecycle, trusted malware-scanned media/evidence and durable signed inbound-message forwarding.
+- Secure export requests with immutable criteria, maker-checker approval, actor-bound single-use download grants, expiry, revocation and complete download-outcome audit.
+- Valid deterministic PDF, CSV and XLSX export rendering with spreadsheet-formula neutralisation and no fixed audit-export ceiling.
+- Governed privacy cases for access, portability, rectification, objection, restriction and erasure/anonymisation, with deadlines, assignment, independent approval, encrypted result packages and legal holds.
+- Server-side small-cohort suppression using the exact effective reporting-privacy policy version.
+- Real bounded XLSX audience imports, governed reusable mappings, templates, row-level issue exports, safe rollback and durable source-file retention/deletion evidence.
+- Governed contact lifecycle transitions and immutable profile/lifecycle history.
+- Filesystem or S3/MinIO-compatible object storage selected through one production configuration contract.
+- PostgreSQL migrations through `0064_import_mapping_rollback_and_retention.sql`.
+- OpenAPI coverage for all 229 implemented `/api/v1` method/path pairs.
+- An SRS traceability catalogue containing 398 granular requirement records: 96 implemented/tested, 38 partial and 264 not started.
 - Imported OpenWA source under the repository's governed third-party-source model; see `UPSTREAM.md` and `THIRD_PARTY_NOTICES.md`.
 
 ## Verified code-level checks

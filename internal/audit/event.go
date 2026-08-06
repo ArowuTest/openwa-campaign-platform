@@ -17,39 +17,45 @@ import (
 // Event is append-only evidence for a security or business operation. Before and
 // After must contain redacted summaries rather than secrets or raw personal data.
 type Event struct {
-	ID            string          `json:"id"`
-	Sequence      uint64          `json:"sequence"`
-	ActorType     string          `json:"actorType"`
-	ActorID       string          `json:"actorId"`
-	Action        string          `json:"action"`
-	ObjectType    string          `json:"objectType"`
-	ObjectID      string          `json:"objectId"`
-	Before        json.RawMessage `json:"before,omitempty"`
-	After         json.RawMessage `json:"after,omitempty"`
-	ReasonCode    string          `json:"reasonCode,omitempty"`
-	Reason        string          `json:"reason,omitempty"`
-	IPAddress     string          `json:"ipAddress,omitempty"`
-	Device        string          `json:"device,omitempty"`
-	CorrelationID string          `json:"correlationId"`
-	OccurredAt    time.Time       `json:"occurredAt"`
-	PreviousHash  string          `json:"previousHash,omitempty"`
-	Hash          string          `json:"hash"`
+	ID             string          `json:"id"`
+	Sequence       uint64          `json:"sequence"`
+	ActorType      string          `json:"actorType"`
+	ActorID        string          `json:"actorId"`
+	Action         string          `json:"action"`
+	ObjectType     string          `json:"objectType"`
+	ObjectID       string          `json:"objectId"`
+	OrganisationID string          `json:"organisationId,omitempty"`
+	Outcome        string          `json:"outcome,omitempty"`
+	Sensitivity    string          `json:"sensitivity,omitempty"`
+	Before         json.RawMessage `json:"before,omitempty"`
+	After          json.RawMessage `json:"after,omitempty"`
+	ReasonCode     string          `json:"reasonCode,omitempty"`
+	Reason         string          `json:"reason,omitempty"`
+	IPAddress      string          `json:"ipAddress,omitempty"`
+	Device         string          `json:"device,omitempty"`
+	CorrelationID  string          `json:"correlationId"`
+	OccurredAt     time.Time       `json:"occurredAt"`
+	PreviousHash   string          `json:"previousHash,omitempty"`
+	Hash           string          `json:"hash"`
 }
 
 type Input struct {
-	ActorType     string
-	ActorID       string
-	Action        string
-	ObjectType    string
-	ObjectID      string
-	Before        any
-	After         any
-	ReasonCode    string
-	Reason        string
-	IPAddress     string
-	Device        string
-	CorrelationID string
-	OccurredAt    time.Time
+	ActorType      string
+	ActorID        string
+	Action         string
+	ObjectType     string
+	ObjectID       string
+	OrganisationID string
+	Outcome        string
+	Sensitivity    string
+	Before         any
+	After          any
+	ReasonCode     string
+	Reason         string
+	IPAddress      string
+	Device         string
+	CorrelationID  string
+	OccurredAt     time.Time
 }
 
 var (
@@ -88,6 +94,7 @@ func New(input Input) (Event, error) {
 	return Event{
 		ID: identifier, ActorType: clean(input.ActorType), ActorID: clean(input.ActorID),
 		Action: clean(input.Action), ObjectType: clean(input.ObjectType), ObjectID: clean(input.ObjectID),
+		OrganisationID: clean(input.OrganisationID), Outcome: clean(input.Outcome), Sensitivity: clean(input.Sensitivity),
 		Before: before, After: after, ReasonCode: clean(input.ReasonCode), Reason: clean(input.Reason),
 		IPAddress: clean(input.IPAddress), Device: clean(input.Device), CorrelationID: clean(input.CorrelationID),
 		OccurredAt: occurred,
@@ -112,24 +119,27 @@ func clean(value string) string { return strings.TrimSpace(value) }
 
 func calculateHash(event Event) (string, error) {
 	canonical := struct {
-		ID            string          `json:"id"`
-		Sequence      uint64          `json:"sequence"`
-		ActorType     string          `json:"actorType"`
-		ActorID       string          `json:"actorId"`
-		Action        string          `json:"action"`
-		ObjectType    string          `json:"objectType"`
-		ObjectID      string          `json:"objectId"`
-		Before        json.RawMessage `json:"before,omitempty"`
-		After         json.RawMessage `json:"after,omitempty"`
-		ReasonCode    string          `json:"reasonCode,omitempty"`
-		Reason        string          `json:"reason,omitempty"`
-		IPAddress     string          `json:"ipAddress,omitempty"`
-		Device        string          `json:"device,omitempty"`
-		CorrelationID string          `json:"correlationId"`
-		OccurredAt    time.Time       `json:"occurredAt"`
-		PreviousHash  string          `json:"previousHash,omitempty"`
+		ID             string          `json:"id"`
+		Sequence       uint64          `json:"sequence"`
+		ActorType      string          `json:"actorType"`
+		ActorID        string          `json:"actorId"`
+		Action         string          `json:"action"`
+		ObjectType     string          `json:"objectType"`
+		ObjectID       string          `json:"objectId"`
+		OrganisationID string          `json:"organisationId,omitempty"`
+		Outcome        string          `json:"outcome,omitempty"`
+		Sensitivity    string          `json:"sensitivity,omitempty"`
+		Before         json.RawMessage `json:"before,omitempty"`
+		After          json.RawMessage `json:"after,omitempty"`
+		ReasonCode     string          `json:"reasonCode,omitempty"`
+		Reason         string          `json:"reason,omitempty"`
+		IPAddress      string          `json:"ipAddress,omitempty"`
+		Device         string          `json:"device,omitempty"`
+		CorrelationID  string          `json:"correlationId"`
+		OccurredAt     time.Time       `json:"occurredAt"`
+		PreviousHash   string          `json:"previousHash,omitempty"`
 	}{event.ID, event.Sequence, event.ActorType, event.ActorID, event.Action, event.ObjectType, event.ObjectID,
-		event.Before, event.After, event.ReasonCode, event.Reason, event.IPAddress, event.Device,
+		event.OrganisationID, event.Outcome, event.Sensitivity, event.Before, event.After, event.ReasonCode, event.Reason, event.IPAddress, event.Device,
 		event.CorrelationID, event.OccurredAt.UTC(), event.PreviousHash}
 	payload, err := json.Marshal(canonical)
 	if err != nil {
@@ -143,15 +153,38 @@ func sameEventIntent(left, right Event) bool {
 	return left.ID == right.ID &&
 		left.ActorType == right.ActorType && left.ActorID == right.ActorID &&
 		left.Action == right.Action && left.ObjectType == right.ObjectType && left.ObjectID == right.ObjectID &&
+		left.OrganisationID == right.OrganisationID && left.Outcome == right.Outcome && left.Sensitivity == right.Sensitivity &&
 		string(left.Before) == string(right.Before) && string(left.After) == string(right.After) &&
 		left.ReasonCode == right.ReasonCode && left.Reason == right.Reason &&
 		left.IPAddress == right.IPAddress && left.Device == right.Device &&
 		left.CorrelationID == right.CorrelationID && left.OccurredAt.UTC().Equal(right.OccurredAt.UTC())
 }
 
+type Query struct {
+	AfterSequence  uint64
+	ActorID        string
+	Action         string
+	ObjectType     string
+	ObjectID       string
+	OrganisationID string
+	Outcome        string
+	Sensitivity    string
+	CorrelationID  string
+	IPAddress      string
+	From           *time.Time
+	To             *time.Time
+	Limit          int
+}
+
+type Page struct {
+	Items        []Event `json:"items"`
+	NextSequence uint64  `json:"nextSequence,omitempty"`
+}
+
 type Repository interface {
 	Append(context.Context, Event, uint64, string) (Event, error)
 	List(context.Context, uint64, int) ([]Event, error)
+	Search(context.Context, Query) (Page, error)
 	Verify(context.Context) error
 	Head(context.Context) (uint64, string, error)
 }
@@ -239,23 +272,68 @@ func (r *MemoryRepository) Append(_ context.Context, event Event, expectedSequen
 	return clone(event), nil
 }
 
-func (r *MemoryRepository) List(_ context.Context, after uint64, limit int) ([]Event, error) {
+func (r *MemoryRepository) List(ctx context.Context, after uint64, limit int) ([]Event, error) {
+	page, err := r.Search(ctx, Query{AfterSequence: after, Limit: limit})
+	return page.Items, err
+}
+
+func (r *MemoryRepository) Search(_ context.Context, query Query) (Page, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
+	limit := query.Limit
 	if limit <= 0 || limit > 1000 {
 		limit = 100
 	}
 	out := make([]Event, 0, limit)
+	var next uint64
 	for _, event := range r.events {
-		if event.Sequence <= after {
+		if event.Sequence <= query.AfterSequence || !matchesQuery(event, query) {
 			continue
 		}
-		out = append(out, clone(event))
 		if len(out) == limit {
+			next = out[len(out)-1].Sequence
 			break
 		}
+		out = append(out, clone(event))
 	}
-	return out, nil
+	return Page{Items: out, NextSequence: next}, nil
+}
+
+func matchesQuery(event Event, query Query) bool {
+	if value := strings.TrimSpace(query.ActorID); value != "" && event.ActorID != value {
+		return false
+	}
+	if value := strings.TrimSpace(query.Action); value != "" && event.Action != value {
+		return false
+	}
+	if value := strings.TrimSpace(query.ObjectType); value != "" && event.ObjectType != value {
+		return false
+	}
+	if value := strings.TrimSpace(query.ObjectID); value != "" && event.ObjectID != value {
+		return false
+	}
+	if value := strings.TrimSpace(query.OrganisationID); value != "" && event.OrganisationID != value {
+		return false
+	}
+	if value := strings.TrimSpace(query.Outcome); value != "" && !strings.EqualFold(event.Outcome, value) {
+		return false
+	}
+	if value := strings.TrimSpace(query.Sensitivity); value != "" && !strings.EqualFold(event.Sensitivity, value) {
+		return false
+	}
+	if value := strings.TrimSpace(query.CorrelationID); value != "" && event.CorrelationID != value {
+		return false
+	}
+	if value := strings.TrimSpace(query.IPAddress); value != "" && event.IPAddress != value {
+		return false
+	}
+	if query.From != nil && event.OccurredAt.Before(query.From.UTC()) {
+		return false
+	}
+	if query.To != nil && !event.OccurredAt.Before(query.To.UTC()) {
+		return false
+	}
+	return true
 }
 
 func (r *MemoryRepository) Verify(_ context.Context) error {

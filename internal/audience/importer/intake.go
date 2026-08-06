@@ -9,34 +9,38 @@ import (
 	"io"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"campaign-platform/internal/security/malware"
 	"campaign-platform/internal/storage"
 )
 
 type IntakeInput struct {
-	OrganisationID     string
-	ConsentReviewID    string
-	PurposeID          string
-	Channel            string
-	WordingVersion     string
-	SourceName         string
-	SourceSystem       string
-	DefaultCountryISO2 string
-	OriginalFilename   string
-	TemplateVersion    string
-	Mapping            any
-	UpdatePolicy       UpdatePolicy
-	UploadedBy         string
-	ClientRequestID    string
+	OrganisationID      string
+	ConsentReviewID     string
+	PurposeID           string
+	Channel             string
+	WordingVersion      string
+	SourceName          string
+	SourceSystem        string
+	DefaultCountryISO2  string
+	OriginalFilename    string
+	TemplateVersion     string
+	MappingDefinitionID string
+	Mapping             any
+	SourceExpiresAt     *time.Time
+	UpdatePolicy        UpdatePolicy
+	UploadedBy          string
+	ClientRequestID     string
 }
 
 type IntakeService struct {
-	Store       storage.ObjectStore
-	Scanner     malware.Scanner
-	Imports     *ImportService
-	MaxFileSize int64
-	KeyPrefix   string
+	Store                  storage.ObjectStore
+	Scanner                malware.Scanner
+	Imports                *ImportService
+	MaxFileSize            int64
+	KeyPrefix              string
+	DefaultSourceRetention time.Duration
 }
 
 // Intake streams an upload into private quarantine storage, validates its actual
@@ -66,6 +70,14 @@ func (s *IntakeService) Intake(ctx context.Context, input IntakeInput, source io
 	if err != nil {
 		return ImportBatch{}, false, err
 	}
+	if input.SourceExpiresAt == nil {
+		retention := s.DefaultSourceRetention
+		if retention <= 0 {
+			retention = 30 * 24 * time.Hour
+		}
+		expires := metadata.CreatedAt.UTC().Add(retention)
+		input.SourceExpiresAt = &expires
+	}
 	object, _, err := s.Store.Open(ctx, objectKey)
 	if err != nil {
 		return ImportBatch{}, false, err
@@ -82,8 +94,8 @@ func (s *IntakeService) Intake(ctx context.Context, input IntakeInput, source io
 		Channel: input.Channel, WordingVersion: input.WordingVersion, SourceName: input.SourceName,
 		SourceSystem: input.SourceSystem, DefaultCountryISO2: input.DefaultCountryISO2,
 		ObjectKey: objectKey, OriginalFilename: filename, DetectedMediaType: mediaType,
-		FileSHA256: metadata.SHA256, ByteSize: metadata.Size, TemplateVersion: input.TemplateVersion,
-		Mapping: input.Mapping, UpdatePolicy: input.UpdatePolicy, UploadedBy: input.UploadedBy,
+		FileSHA256: metadata.SHA256, ByteSize: metadata.Size, TemplateVersion: input.TemplateVersion, MappingDefinitionID: input.MappingDefinitionID,
+		Mapping: input.Mapping, SourceExpiresAt: input.SourceExpiresAt, UpdatePolicy: input.UpdatePolicy, UploadedBy: input.UploadedBy,
 		ClientRequestID: input.ClientRequestID, ContentSignatureValid: signatureValid,
 	})
 	if createErr != nil {

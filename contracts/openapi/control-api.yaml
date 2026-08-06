@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Internal Audience & Campaign Control API
-  version: 0.8.24
+  version: 0.8.26
   description: >
     Internal-only API for organisation records, offline consent reviews, secure audience imports,
     governed cohort definitions and controlled campaign lifecycle management.
@@ -1324,6 +1324,14 @@ paths:
         '200': { description: Organisation performance report }
         '404': { description: Organisation not found }
   /exports:
+    get:
+      operationId: listControlledExports
+      summary: List controlled exports using bounded cursor pagination
+      parameters:
+        - { name: cursor, in: query, required: false, schema: { type: string } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        '200': { description: Controlled export page }
     post:
       operationId: requestControlledExport
       summary: Request a purpose-bound controlled report or audit export
@@ -2133,6 +2141,358 @@ paths:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
         '200': { description: Commercial record revoked }
+
+  /exports/{id}:
+    get:
+      operationId: getControlledExport
+      summary: Get one controlled export and its immutable rendering evidence
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Controlled export record }
+        '404': { description: Export not found }
+  /exports/{id}/download-authorisations:
+    post:
+      operationId: authoriseControlledExportDownload
+      summary: Create a short-lived actor-bound single-use export download authorisation
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '201': { description: Download authorisation created }
+        '403': { description: Recent MFA step-up required }
+        '409': { description: Export unavailable, expired or revoked }
+  /exports/{id}/download:
+    get:
+      operationId: downloadControlledExport
+      summary: Consume a short-lived single-use authorisation and stream a verified export
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: token, in: query, required: true, schema: { type: string } }
+      responses:
+        '200': { description: Verified export file }
+        '403': { description: Download authorisation invalid or belongs to another actor }
+        '410': { description: Export or authorisation expired or revoked }
+  /exports/{id}/revoke:
+    post:
+      operationId: revokeControlledExport
+      summary: Revoke an export and invalidate unused download authorisations
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Export revoked }
+        '403': { description: Recent MFA step-up required }
+  /audience-import-templates/{version}:
+    get:
+      operationId: downloadAudienceImportTemplate
+      summary: Download a versioned CSV or XLSX audience import template
+      parameters:
+        - { name: version, in: path, required: true, schema: { type: string } }
+        - { name: format, in: query, required: false, schema: { type: string, enum: [csv, xlsx], default: csv } }
+      responses:
+        '200': { description: Versioned audience import template }
+        '404': { description: Template version or format not supported }
+  /audience-imports/{id}/rollback:
+    post:
+      operationId: rollbackAudienceImport
+      summary: Safely roll back an unconsumed import using captured pre-import contact state
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Import rollback completed }
+        '403': { description: Recent MFA step-up required }
+        '409': { description: Import consumed, superseded or version conflict }
+  /audience-imports/{id}/issues.csv:
+    get:
+      operationId: downloadAudienceImportIssues
+      summary: Download a masked and spreadsheet-safe row-level validation issue report
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: CSV validation issue report }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+        '404': { description: Audience import not found }
+  /contacts/{id}/lifecycle:
+    get:
+      operationId: getContactLifecycle
+      summary: Get the protected lifecycle status for one contact
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Contact lifecycle status }
+        '404': { description: Contact not found }
+    post:
+      operationId: transitionContactLifecycle
+      summary: Apply an MFA-protected and optimistically locked contact lifecycle transition
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [status, processingRestricted, expectedVersion, reason]
+              properties:
+                status: { type: string, enum: [ACTIVE, INACTIVE, SUPPRESSED, INVALID, RECYCLED, DECEASED] }
+                processingRestricted: { type: boolean }
+                expectedVersion: { type: integer, minimum: 1 }
+                reason: { type: string, minLength: 12 }
+      responses:
+        '200': { description: Lifecycle transition recorded }
+        '403': { description: Permission or MFA step-up required }
+        '404': { description: Contact not found }
+        '409': { description: Version conflict or immutable privacy state }
+        '422': { description: Invalid lifecycle transition }
+  /contacts/{id}/lifecycle/events:
+    get:
+      operationId: listContactLifecycleEvents
+      summary: List immutable contact lifecycle events
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+      responses:
+        '200': { description: Contact lifecycle event list }
+        '404': { description: Contact not found }
+  /admin/audience-import-mappings:
+    get:
+      operationId: listAudienceImportMappings
+      summary: List governed reusable audience import mappings
+      responses:
+        '200': { description: Mapping list }
+    post:
+      operationId: createAudienceImportMapping
+      summary: Create a draft reusable audience import mapping
+      responses:
+        '201': { description: Draft mapping created }
+  /admin/audience-import-mappings/resolve:
+    get:
+      operationId: resolveAudienceImportMapping
+      summary: Resolve the effective approved mapping for organisation, source and name
+      responses:
+        '200': { description: Effective mapping }
+        '404': { description: No effective mapping found }
+  /admin/audience-import-mappings/{id}:
+    get:
+      operationId: getAudienceImportMapping
+      summary: Get one governed audience import mapping
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Mapping definition }
+        '404': { description: Mapping not found }
+  /admin/audience-import-mappings/{id}/events:
+    get:
+      operationId: listAudienceImportMappingEvents
+      summary: List immutable mapping lifecycle events
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Mapping event list }
+  /admin/audience-import-mappings/{id}/submit:
+    post:
+      operationId: submitAudienceImportMapping
+      summary: Submit a mapping for independent approval
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Mapping submitted }
+  /admin/audience-import-mappings/{id}/decision:
+    post:
+      operationId: decideAudienceImportMapping
+      summary: Approve or reject a submitted mapping
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Mapping decision recorded }
+        '403': { description: Recent MFA step-up required }
+  /admin/audience-import-mappings/{id}/retire:
+    post:
+      operationId: retireAudienceImportMapping
+      summary: Retire an active mapping while retaining historical evidence
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Mapping retired }
+        '403': { description: Recent MFA step-up required }
+  /privacy/cases:
+    get:
+      operationId: listPrivacyCases
+      summary: List governed privacy and data-subject cases
+      responses:
+        '200': { description: Privacy case list }
+    post:
+      operationId: createPrivacyCase
+      summary: Create a governed access, portability, rectification, erasure, objection or restriction case
+      responses:
+        '201': { description: Privacy case created }
+  /privacy/cases/{id}:
+    get:
+      operationId: getPrivacyCase
+      summary: Get privacy-case metadata without exposing encrypted result evidence
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Privacy case metadata }
+        '404': { description: Privacy case not found }
+  /privacy/cases/{id}/events:
+    get:
+      operationId: listPrivacyCaseEvents
+      summary: List immutable privacy-case lifecycle events
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Privacy case event list }
+  /privacy/cases/{id}/assign:
+    post:
+      operationId: assignPrivacyCase
+      summary: Assign a privacy case to an authorised handler
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Privacy case assigned }
+  /privacy/cases/{id}/submit:
+    post:
+      operationId: submitPrivacyCase
+      summary: Submit a privacy case for independent decision
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Privacy case submitted }
+  /privacy/cases/{id}/decision:
+    post:
+      operationId: decidePrivacyCase
+      summary: Approve or reject a privacy case under maker-checker control
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Privacy case decision recorded }
+        '403': { description: Recent MFA step-up required }
+  /privacy/cases/{id}/execute:
+    post:
+      operationId: executePrivacyCase
+      summary: Execute an approved privacy case atomically with its contact mutation or protected response package
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Privacy case executed }
+        '403': { description: Recent MFA step-up required }
+        '409': { description: Legal hold, version or workflow conflict }
+  /privacy/cases/{id}/exports:
+    post:
+      operationId: requestPrivacyCaseExport
+      summary: Request a controlled export of an approved encrypted access or portability package
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '202': { description: Privacy export requested }
+        '409': { description: Case is not completed or has no exportable package }
+  /privacy/legal-holds:
+    get:
+      operationId: listPrivacyLegalHolds
+      summary: List active and released privacy legal holds
+      responses:
+        '200': { description: Legal hold list }
+    post:
+      operationId: createPrivacyLegalHold
+      summary: Create a legal hold preventing erasure or conflicting retention action
+      responses:
+        '201': { description: Legal hold created }
+        '403': { description: Recent MFA step-up required }
+  /privacy/legal-holds/{id}/submit:
+    post:
+      operationId: submitPrivacyLegalHold
+      summary: Submit a draft privacy legal hold for independent approval
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Legal hold submitted }
+  /privacy/legal-holds/{id}/decision:
+    post:
+      operationId: decidePrivacyLegalHold
+      summary: Independently approve or reject a submitted privacy legal hold
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Legal hold decision recorded }
+        '403': { description: Recent MFA step-up required }
+  /privacy/legal-holds/{id}/events:
+    get:
+      operationId: listPrivacyLegalHoldEvents
+      summary: List immutable privacy legal hold lifecycle events
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Legal hold event list }
+  /privacy/legal-holds/{id}/release:
+    post:
+      operationId: releasePrivacyLegalHold
+      summary: Release one active legal hold without clearing other active holds
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Legal hold released }
+        '403': { description: Recent MFA step-up required }
+  /admin/reporting-privacy-policies:
+    get:
+      operationId: listReportingPrivacyPolicies
+      summary: List governed minimum-cohort reporting privacy policies
+      responses:
+        '200': { description: Reporting privacy policy list }
+    post:
+      operationId: createReportingPrivacyPolicy
+      summary: Create a draft reporting privacy policy
+      responses:
+        '201': { description: Draft reporting privacy policy created }
+  /admin/reporting-privacy-policies/resolve:
+    get:
+      operationId: resolveReportingPrivacyPolicy
+      summary: Resolve the effective organisation or platform reporting privacy policy
+      responses:
+        '200': { description: Effective reporting privacy policy }
+  /admin/reporting-privacy-policies/{id}:
+    get:
+      operationId: getReportingPrivacyPolicy
+      summary: Get one reporting privacy policy
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Reporting privacy policy }
+  /admin/reporting-privacy-policies/{id}/events:
+    get:
+      operationId: listReportingPrivacyPolicyEvents
+      summary: List immutable reporting privacy policy events
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Reporting privacy policy event list }
+  /admin/reporting-privacy-policies/{id}/submit:
+    post:
+      operationId: submitReportingPrivacyPolicy
+      summary: Submit a reporting privacy policy for independent approval
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Reporting privacy policy submitted }
+  /admin/reporting-privacy-policies/{id}/decision:
+    post:
+      operationId: decideReportingPrivacyPolicy
+      summary: Approve or reject a submitted reporting privacy policy
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Reporting privacy policy decision recorded }
+        '403': { description: Recent MFA step-up required }
+  /admin/reporting-privacy-policies/{id}/retire:
+    post:
+      operationId: retireReportingPrivacyPolicy
+      summary: Retire an effective reporting privacy policy
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Reporting privacy policy retired }
+        '403': { description: Recent MFA step-up required }
 components:
   securitySchemes:
     internalSession:

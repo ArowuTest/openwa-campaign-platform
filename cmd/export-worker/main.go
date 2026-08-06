@@ -2,16 +2,21 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"campaign-platform/internal/audit"
 	"campaign-platform/internal/operations"
 	"campaign-platform/internal/persistence/database"
+	"campaign-platform/internal/privacy"
+	sharedcrypto "campaign-platform/internal/shared/crypto"
 	"campaign-platform/internal/storage"
 )
 
@@ -38,13 +43,19 @@ func main() {
 		os.Exit(1)
 	}
 	defer db.Close()
-	objects, err := storage.NewFileSystemStore(root)
+	objects, err := storage.NewObjectStoreFromEnvironment(root)
 	if err != nil {
 		logger.Error("open object store", "error", err)
 		os.Exit(1)
 	}
 	repo := &operations.PostgreSQLRepository{DB: db}
-	worker := &operations.ExportWorker{Repository: repo, AuditRepository: &audit.PostgreSQLRepository{DB: db}, Objects: objects, WorkerID: workerID, LeaseDuration: 2 * time.Minute, ReadyTTL: envDuration("EXPORT_READY_TTL", 24*time.Hour)}
+	privacyKeyring, err := privacyEvidenceKeyringFromEnvironment()
+	if err != nil {
+		logger.Error("initialise privacy evidence keyring", "error", err)
+		os.Exit(2)
+	}
+	privacyResolver := &privacy.Service{Evidence: privacyKeyring}
+	worker := &operations.ExportWorker{Repository: repo, AuditRepository: &audit.PostgreSQLRepository{DB: db}, PrivacyPackages: privacyResolver, Objects: objects, WorkerID: workerID, LeaseDuration: 2 * time.Minute, ReadyTTL: envDuration("EXPORT_READY_TTL", 24*time.Hour)}
 	poll := envDuration("EXPORT_POLL_INTERVAL", 2*time.Second)
 	expireEvery := envDuration("EXPORT_EXPIRY_INTERVAL", time.Minute)
 	ticker := time.NewTicker(poll)
@@ -77,6 +88,20 @@ func main() {
 		}
 	}
 }
+func privacyEvidenceKeyringFromEnvironment() (*sharedcrypto.SecretKeyring, error) {
+	if value := strings.TrimSpace(os.Getenv("PRIVACY_EVIDENCE_KEYS_JSON")); value != "" {
+		active := strings.TrimSpace(os.Getenv("PRIVACY_EVIDENCE_ACTIVE_KEY_VERSION"))
+		if active == "" {
+			active = "v1"
+		}
+		return sharedcrypto.NewSecretKeyringFromJSON(active, value)
+	}
+	if value := strings.TrimSpace(os.Getenv("PRIVACY_EVIDENCE_KEY_BASE64")); value != "" {
+		return sharedcrypto.NewSecretKeyringFromJSON("v1", fmt.Sprintf(`{"v1":%q}`, value))
+	}
+	return nil, errors.New("PRIVACY_EVIDENCE_KEY_BASE64 or PRIVACY_EVIDENCE_KEYS_JSON is required")
+}
+
 func envDuration(name string, fallback time.Duration) time.Duration {
 	if raw := os.Getenv(name); raw != "" {
 		if d, e := time.ParseDuration(raw); e == nil {

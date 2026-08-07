@@ -188,6 +188,25 @@ func (m *MemoryGovernanceStore) RegisterSession(_ context.Context, v GovernedSes
 	m.sessions[v.ID] = v
 	return v, nil
 }
+func (m *MemoryGovernanceStore) UpdateSessionMetadata(_ context.Context, id string, expected int64, value SessionOperationalMetadata, _, _ string) (GovernedSession, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	current, ok := m.sessions[id]
+	if !ok {
+		return GovernedSession{}, ErrSenderNotFound
+	}
+	if current.Version != expected {
+		return GovernedSession{}, ErrSenderConflict
+	}
+	current.OwnerReference = value.OwnerReference
+	current.RegistrationCountryISO2 = value.RegistrationCountryISO2
+	current.ProfileDisplayName = value.ProfileDisplayName
+	current.RecoveryReference = value.RecoveryReference
+	current.RecoveryReferenceConfigured = value.RecoveryReference != ""
+	current.Version++
+	m.sessions[id] = current
+	return current, nil
+}
 func (m *MemoryGovernanceStore) TransitionSession(_ context.Context, id string, e int64, status Status, _, reason string) (GovernedSession, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

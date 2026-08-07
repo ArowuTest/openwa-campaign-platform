@@ -63,7 +63,7 @@ func lifecycleFixture(t *testing.T) (*SessionLifecycleService, GovernedSession) 
 	gov := &GovernanceService{Store: store}
 	pool, _ := gov.CreatePool(ctx, Pool{Name: "p", Status: "ACTIVE", MaxMessagesPerMinute: 10, DailyCapacity: 100}, "actor", "create pool")
 	node, _ := gov.RegisterNode(ctx, Node{Name: "node", Status: "READY", InternalURL: "https://gateway.internal", GatewayPoolID: "gateway", Provider: "OPENWA", Engine: "WHATSAPP_WEB_JS", AdapterVersion: "1", Capacity: 2}, "actor", "register node")
-	session, err := gov.RegisterSession(ctx, GovernedSession{NodeID: node.ID, PoolID: pool.ID, GatewayPoolID: "gateway", MaskedMSISDN: "+234 ***", EngineType: "WHATSAPP_WEB_JS", Status: StatusNew, SafeMessagesPerMinute: 1, SafeDailyCapacity: 10, InFlightLimit: 1}, []byte("cipher"), "actor", "register sender")
+	session, err := gov.RegisterSession(ctx, GovernedSession{NodeID: node.ID, PoolID: pool.ID, GatewayPoolID: "gateway", MaskedMSISDN: "+234 ***", OwnerReference: "test-operations", RegistrationCountryISO2: "NG", ProfileDisplayName: "Lifecycle sender", RecoveryReference: "vault://test/lifecycle-recovery", EngineType: "WHATSAPP_WEB_JS", Status: StatusNew, SafeMessagesPerMinute: 1, SafeDailyCapacity: 10, InFlightLimit: 1}, []byte("cipher"), "actor", "register sender")
 	if err != nil {
 		t.Fatal(err)
 	}

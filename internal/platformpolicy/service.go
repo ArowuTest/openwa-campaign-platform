@@ -62,7 +62,7 @@ func validateScope(scope ScopeType, scopeID string) error {
 		if scopeID != "" {
 			return ErrInvalid
 		}
-	case ScopeEnvironment, ScopeOrganisation, ScopeCampaign, ScopeProvider, ScopeGatewayPool, ScopeSenderPool:
+	case ScopeEnvironment, ScopeOrganisation, ScopeCampaign, ScopeProvider, ScopeGatewayPool, ScopeSenderPool, ScopeSenderSession:
 		if scopeID == "" || len(scopeID) > 200 {
 			return ErrInvalid
 		}

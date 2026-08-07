@@ -2148,9 +2148,17 @@
     "requirement": "Record ownership, registration country, profile/display name, recovery information reference and lifecycle status.",
     "priority": "Must",
     "acceptance": "Operational record is complete without exposing secrets.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": ""
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/sender/governance.go",
+      "internal/sender/postgres_governance.go",
+      "internal/sender/sender_metadata_postgres_integration_test.go",
+      "internal/platform/httpserver/sender_governance.go",
+      "internal/platform/httpserver/sender_governance_test.go",
+      "database/migrations/0067_sender_health_and_account_metadata.sql",
+      "contracts/openapi/control-api.yaml"
+    ],
+    "notes": "New sender sessions require ownership, registration-country, display-name and non-secret recovery-reference metadata. Existing installations remain upgrade-safe through nullable migration columns and can be completed through an MFA-protected optimistic update. Recovery references are write-only and suppressed from ordinary sender JSON and audit evidence; live PostgreSQL tests prove persistence, audit and masking."
   },
   {
     "id": "SND-004",
@@ -2315,14 +2323,21 @@
     "requirement": "Maintain per-sender failure, disconnect and delivery-health thresholds.",
     "priority": "Must",
     "acceptance": "Threshold breach pauses or drains sender.",
-    "status": "PARTIAL",
+    "status": "IMPLEMENTED_TESTED",
     "evidence": [
-      "internal/sender/pacing.go",
-      "internal/sender/health.go",
       "internal/sender/governance.go",
-      "internal/dispatch/throttle.go"
+      "internal/sender/health_policy.go",
+      "internal/sender/health_policy_test.go",
+      "internal/sender/health_enforcer.go",
+      "internal/sender/health_enforcer_test.go",
+      "internal/sender/health_enforcer_postgres_integration_test.go",
+      "internal/delivery/postgres.go",
+      "internal/delivery/sender_success_postgres_integration_test.go",
+      "internal/platformpolicy/model.go",
+      "cmd/campaign-worker/main.go",
+      "database/migrations/0067_sender_health_and_account_metadata.sql"
     ],
-    "notes": "Failure, disconnect and health thresholds are represented and influence allocation/throttling; fully automatic threshold-driven quarantine requires live telemetry calibration."
+    "notes": "Maker-checker SENDER.HEALTH_THRESHOLDS configuration resolves at sender-session, sender-pool, gateway-pool and platform scope with safe defaults. Health assessment uses measured failure rate, disconnect count, heartbeat recency, successful-delivery recency and capacity evidence. Threshold breach automatically drains an active sender, preventing new allocation while preserving in-flight work; live PostgreSQL integration proves the state transition, optimistic governance version and immutable service-attributed audit event. Genuine WhatsApp telemetry remains required for production calibration of threshold values, not for the implemented enforcement contract."
   },
   {
     "id": "SND-016",

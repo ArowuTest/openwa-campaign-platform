@@ -9,7 +9,7 @@ import (
 )
 
 func TestGovernanceQueryFilterValidation(t *testing.T) {
-	if !validPlatformScope(platformpolicy.ScopeGatewayPool) || validPlatformScope("ARBITRARY") {
+	if !validPlatformScope(platformpolicy.ScopeGatewayPool) || !validPlatformScope(platformpolicy.ScopeSenderSession) || validPlatformScope("ARBITRARY") {
 		t.Fatal("platform scope validation failed")
 	}
 	if !validConfigurationStatus(platformpolicy.StatusActive) || validConfigurationStatus("BROKEN") {

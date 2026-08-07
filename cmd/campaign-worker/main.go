@@ -76,9 +76,18 @@ func main() {
 		ShutdownGrace: cfg.ShutdownTimeout,
 	}
 
-	maintenance := &platformpolicy.MaintenanceAdministration{Store: &platformpolicy.PostgreSQLStore{DB: db}}
+	platformPolicyStore := &platformpolicy.PostgreSQLStore{DB: db}
+	maintenance := &platformpolicy.MaintenanceAdministration{Store: platformPolicyStore}
+	configurations := &platformpolicy.ConfigurationAdministration{Store: platformPolicyStore}
 	ledger := delivery.NewService(&delivery.PostgreSQLRepository{DB: db})
 	pacingPolicies := &sender.PacingAdministration{Store: &postgresrepo.PacingPolicyRepository{DB: db}}
+	senderStore := &sender.PostgreSQLGovernanceStore{DB: db}
+	senderGovernance := &sender.GovernanceService{Store: senderStore, HealthPolicies: &sender.PlatformHealthPolicyResolver{Configurations: configurations}, HealthSignals: &sender.PostgreSQLHealthSignalSource{DB: db}}
+	healthPoll := cfg.SenderHeartbeatTTL / 2
+	if healthPoll < 5*time.Second {
+		healthPoll = 5 * time.Second
+	}
+	senderHealthEnforcer := &sender.HealthEnforcer{Governance: senderGovernance, ActorID: sender.HealthProtectionServiceActorID, PollInterval: healthPoll}
 	allocator := &sender.PostgreSQLAllocator{DB: db, HeartbeatTTL: cfg.SenderHeartbeatTTL}
 	materials := &dispatch.PostgreSQLMaterialLoader{
 		DB: db, Protector: protector, Allocator: allocator,
@@ -146,7 +155,7 @@ func main() {
 	}
 
 	health := workerruntime.NewHealth("campaign-worker", db, func() int64 {
-		return jobRunner.Active() + outboxRunner.Active() + executionRunner.Active() + shardRunner.Active() + queueRepairRunner.Active() + testMessageRunner.Active()
+		return jobRunner.Active() + outboxRunner.Active() + executionRunner.Active() + shardRunner.Active() + queueRepairRunner.Active() + testMessageRunner.Active() + senderHealthEnforcer.Active()
 	})
 	healthServer := &http.Server{
 		Addr: cfg.HealthAddr, Handler: health.Handler(),
@@ -162,13 +171,14 @@ func main() {
 		}
 	}()
 
-	runnerErrors := make(chan error, 6)
+	runnerErrors := make(chan error, 7)
 	go func() { runnerErrors <- outboxRunner.Run(rootCtx) }()
 	go func() { runnerErrors <- jobRunner.Run(rootCtx) }()
 	go func() { runnerErrors <- executionRunner.Run(rootCtx) }()
 	go func() { runnerErrors <- shardRunner.Run(rootCtx) }()
 	go func() { runnerErrors <- queueRepairRunner.Run(rootCtx) }()
 	go func() { runnerErrors <- testMessageRunner.Run(rootCtx) }()
+	go func() { runnerErrors <- senderHealthEnforcer.Run(rootCtx) }()
 	health.SetReady(true)
 	logger.Info("campaign worker started",
 		"workerId", cfg.WorkerID,
@@ -200,7 +210,7 @@ func main() {
 	if err := healthServer.Shutdown(shutdownCtx); err != nil {
 		logger.Error("campaign worker health shutdown failed", "error", err)
 	}
-	for runnersStopped < 6 {
+	for runnersStopped < 7 {
 		select {
 		case err := <-runnerErrors:
 			runnersStopped++

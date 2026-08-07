@@ -121,6 +121,6 @@ func (s *PostgreSQLStore) RecordEvent(ctx context.Context, campaignID, eventType
 	if err != nil {
 		return err
 	}
-	_, err = s.DB.ExecContext(ctx, `INSERT INTO campaign_execution_events(campaign_id,event_type,actor_id,reason,details,created_at) VALUES($1::uuid,$2,$3,NULLIF($4,''),$5,$6)`, campaignID, eventType, actor, reason, b, now.UTC())
+	_, err = s.DB.ExecContext(ctx, `INSERT INTO campaign_execution_events(campaign_id,event_type,actor_id,reason,details,created_at) VALUES($1::uuid,$2,$3,NULLIF($4,''),$5::jsonb,$6)`, campaignID, eventType, actor, reason, string(b), now.UTC())
 	return err
 }

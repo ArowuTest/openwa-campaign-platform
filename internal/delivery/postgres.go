@@ -59,7 +59,7 @@ func (r *PostgreSQLRepository) ApplyEvent(ctx context.Context, id string, event 
 	payload, _ := json.Marshal(map[string]any{"errorCode": event.ErrorCode, "errorDetail": event.ErrorDetail})
 	fingerprint := Fingerprint(event)
 	var eventID string
-	err = tx.QueryRowContext(ctx, `INSERT INTO delivery_events(campaign_recipient_id,provider_event_id,provider_message_id,event_type,occurred_at,payload,event_deduplication_key,event_fingerprint) VALUES($1,NULLIF($2,''),NULLIF($3,''),$4,$5,$6,$7,$8) ON CONFLICT(event_deduplication_key) DO NOTHING RETURNING id`, id, event.ProviderEventID, event.ProviderMessageID, event.Type, event.OccurredAt.UTC(), payload, event.DeduplicationKey, fingerprint).Scan(&eventID)
+	err = tx.QueryRowContext(ctx, `INSERT INTO delivery_events(campaign_recipient_id,provider_event_id,provider_message_id,event_type,occurred_at,payload,event_deduplication_key,event_fingerprint) VALUES($1,NULLIF($2,''),NULLIF($3,''),$4,$5,$6,$7,$8) ON CONFLICT(event_deduplication_key) WHERE event_deduplication_key IS NOT NULL DO NOTHING RETURNING id`, id, event.ProviderEventID, event.ProviderMessageID, event.Type, event.OccurredAt.UTC(), string(payload), event.DeduplicationKey, fingerprint).Scan(&eventID)
 	if errors.Is(err, sql.ErrNoRows) {
 		var existingRecipientID, existingFingerprint string
 		lookupErr := tx.QueryRowContext(ctx, `SELECT campaign_recipient_id::text,event_fingerprint FROM delivery_events WHERE event_deduplication_key=$1`, event.DeduplicationKey).Scan(&existingRecipientID, &existingFingerprint)
@@ -114,11 +114,32 @@ ON CONFLICT (campaign_id) DO UPDATE SET
 		if err != nil {
 			return Recipient{}, false, fmt.Errorf("update campaign metrics: %w", err)
 		}
+		if canonicalSenderSuccessEvent(event, next) {
+			_, err = tx.ExecContext(ctx, `UPDATE sender_sessions
+SET last_success_at=CASE WHEN last_success_at IS NULL OR last_success_at<$2 THEN $2 ELSE last_success_at END
+WHERE id=(SELECT assigned_session_id FROM campaign_recipients WHERE id=$1::uuid)`, id, event.OccurredAt.UTC())
+			if err != nil {
+				return Recipient{}, false, fmt.Errorf("update sender success evidence: %w", err)
+			}
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return Recipient{}, false, err
 	}
 	return next, changed, nil
+}
+
+func canonicalSenderSuccessEvent(event Event, next Recipient) bool {
+	providerMessageID := strings.TrimSpace(event.ProviderMessageID)
+	if providerMessageID == "" || providerMessageID != strings.TrimSpace(next.ProviderMessageID) {
+		return false
+	}
+	switch event.Type {
+	case EventSent, EventDelivered, EventRead:
+		return true
+	default:
+		return false
+	}
 }
 
 const recipientSelect = `SELECT id,campaign_id,contact_id,message_version_id,idempotency_key,status,coalesce(highest_acknowledgement,''),coalesce(provider_message_id,''),attempt_count,coalesce(last_error_code,''),coalesce(last_error_detail,''),submitted_at,completed_at,updated_at,last_event_at,reconciliation_required,contradictory_event_count FROM campaign_recipients`

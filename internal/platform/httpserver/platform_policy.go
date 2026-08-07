@@ -265,7 +265,7 @@ func (s *Server) listMaintenanceWindows(w http.ResponseWriter, r *http.Request) 
 
 func validPlatformScope(v platformpolicy.ScopeType) bool {
 	switch v {
-	case "", platformpolicy.ScopePlatform, platformpolicy.ScopeEnvironment, platformpolicy.ScopeOrganisation, platformpolicy.ScopeCampaign, platformpolicy.ScopeProvider, platformpolicy.ScopeGatewayPool, platformpolicy.ScopeSenderPool:
+	case "", platformpolicy.ScopePlatform, platformpolicy.ScopeEnvironment, platformpolicy.ScopeOrganisation, platformpolicy.ScopeCampaign, platformpolicy.ScopeProvider, platformpolicy.ScopeGatewayPool, platformpolicy.ScopeSenderPool, platformpolicy.ScopeSenderSession:
 		return true
 	default:
 		return false

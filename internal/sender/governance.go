@@ -9,8 +9,9 @@ import (
 )
 
 var (
-	ErrSenderNotFound = errors.New("sender record not found")
-	ErrSenderConflict = errors.New("sender record version conflict")
+	ErrSenderNotFound        = errors.New("sender record not found")
+	ErrSenderConflict        = errors.New("sender record version conflict")
+	ErrSenderMetadataInvalid = errors.New("sender operational metadata is invalid")
 )
 
 type Pool struct {
@@ -55,25 +56,37 @@ type Node struct {
 }
 
 type GovernedSession struct {
-	ID                    string     `json:"id"`
-	NodeID                string     `json:"nodeId,omitempty"`
-	PoolID                string     `json:"poolId,omitempty"`
-	GatewayPoolID         string     `json:"gatewayPoolId,omitempty"`
-	MaskedMSISDN          string     `json:"maskedMsisdn"`
-	EngineType            string     `json:"engineType"`
-	EngineVersion         string     `json:"engineVersion,omitempty"`
-	StateVolumeReference  string     `json:"stateVolumeReference,omitempty"`
-	Status                Status     `json:"status"`
-	SafeMessagesPerMinute int        `json:"safeMessagesPerMinute"`
-	SafeDailyCapacity     int64      `json:"safeDailyCapacity"`
-	InFlightLimit         int        `json:"inFlightLimit"`
-	SentToday             int64      `json:"sentToday"`
-	LastHeartbeatAt       *time.Time `json:"lastHeartbeatAt,omitempty"`
-	LastSuccessAt         *time.Time `json:"lastSuccessAt,omitempty"`
-	QuarantinedAt         *time.Time `json:"quarantinedAt,omitempty"`
-	QuarantineReason      string     `json:"quarantineReason,omitempty"`
-	ReinstatedAt          *time.Time `json:"reinstatedAt,omitempty"`
-	Version               int64      `json:"version"`
+	ID                          string     `json:"id"`
+	NodeID                      string     `json:"nodeId,omitempty"`
+	PoolID                      string     `json:"poolId,omitempty"`
+	GatewayPoolID               string     `json:"gatewayPoolId,omitempty"`
+	MaskedMSISDN                string     `json:"maskedMsisdn"`
+	OwnerReference              string     `json:"ownerReference"`
+	RegistrationCountryISO2     string     `json:"registrationCountryIso2"`
+	ProfileDisplayName          string     `json:"profileDisplayName"`
+	RecoveryReference           string     `json:"-"`
+	RecoveryReferenceConfigured bool       `json:"recoveryReferenceConfigured"`
+	EngineType                  string     `json:"engineType"`
+	EngineVersion               string     `json:"engineVersion,omitempty"`
+	StateVolumeReference        string     `json:"stateVolumeReference,omitempty"`
+	Status                      Status     `json:"status"`
+	SafeMessagesPerMinute       int        `json:"safeMessagesPerMinute"`
+	SafeDailyCapacity           int64      `json:"safeDailyCapacity"`
+	InFlightLimit               int        `json:"inFlightLimit"`
+	SentToday                   int64      `json:"sentToday"`
+	LastHeartbeatAt             *time.Time `json:"lastHeartbeatAt,omitempty"`
+	LastSuccessAt               *time.Time `json:"lastSuccessAt,omitempty"`
+	QuarantinedAt               *time.Time `json:"quarantinedAt,omitempty"`
+	QuarantineReason            string     `json:"quarantineReason,omitempty"`
+	ReinstatedAt                *time.Time `json:"reinstatedAt,omitempty"`
+	Version                     int64      `json:"version"`
+}
+
+type SessionOperationalMetadata struct {
+	OwnerReference          string
+	RegistrationCountryISO2 string
+	ProfileDisplayName      string
+	RecoveryReference       string
 }
 
 type CapacitySummary struct {
@@ -101,12 +114,50 @@ type GovernanceStore interface {
 	ListSessions(context.Context) ([]GovernedSession, error)
 	GetSession(context.Context, string) (GovernedSession, error)
 	RegisterSession(context.Context, GovernedSession, []byte, string, string) (GovernedSession, error)
+	UpdateSessionMetadata(context.Context, string, int64, SessionOperationalMetadata, string, string) (GovernedSession, error)
 	TransitionSession(context.Context, string, int64, Status, string, string) (GovernedSession, error)
 	HeartbeatSession(context.Context, string, int64, GovernedSession, time.Time) (GovernedSession, error)
 	Capacity(context.Context, string, time.Time) (CapacitySummary, error)
 }
 
-type GovernanceService struct{ Store GovernanceStore }
+func normaliseSessionOperationalMetadata(value SessionOperationalMetadata) (SessionOperationalMetadata, error) {
+	value.OwnerReference = strings.TrimSpace(value.OwnerReference)
+	value.RegistrationCountryISO2 = strings.ToUpper(strings.TrimSpace(value.RegistrationCountryISO2))
+	value.ProfileDisplayName = strings.TrimSpace(value.ProfileDisplayName)
+	value.RecoveryReference = strings.TrimSpace(value.RecoveryReference)
+	if len(value.OwnerReference) < 2 || len(value.OwnerReference) > 200 ||
+		len(value.ProfileDisplayName) < 1 || len(value.ProfileDisplayName) > 160 ||
+		len(value.RecoveryReference) < 3 || len(value.RecoveryReference) > 500 {
+		return SessionOperationalMetadata{}, ErrSenderMetadataInvalid
+	}
+	if len(value.RegistrationCountryISO2) != 2 || value.RegistrationCountryISO2[0] < 'A' || value.RegistrationCountryISO2[0] > 'Z' || value.RegistrationCountryISO2[1] < 'A' || value.RegistrationCountryISO2[1] > 'Z' {
+		return SessionOperationalMetadata{}, ErrSenderMetadataInvalid
+	}
+	for _, field := range []string{value.OwnerReference, value.ProfileDisplayName, value.RecoveryReference} {
+		if strings.ContainsAny(field, "\r\n\x00") {
+			return SessionOperationalMetadata{}, ErrSenderMetadataInvalid
+		}
+	}
+	return value, nil
+}
+
+type HealthPolicyEvidence struct {
+	Source          string
+	ConfigurationID string
+	ScopeType       string
+	ScopeID         string
+	Version         int64
+}
+
+type HealthPolicyResolver interface {
+	ResolveHealthPolicy(context.Context, GovernedSession, time.Time) (HealthPolicy, HealthPolicyEvidence, error)
+}
+
+type GovernanceService struct {
+	Store          GovernanceStore
+	HealthPolicies HealthPolicyResolver
+	HealthSignals  HealthSignalSource
+}
 
 func (s *GovernanceService) CreatePool(ctx context.Context, value Pool, actor, reason string) (Pool, error) {
 	if s == nil || s.Store == nil {
@@ -199,6 +250,18 @@ func (s *GovernanceService) TransitionNode(ctx context.Context, id string, expec
 func (s *GovernanceService) RegisterSession(ctx context.Context, value GovernedSession, encryptedMSISDN []byte, actor, reason string) (GovernedSession, error) {
 	value.MaskedMSISDN = strings.TrimSpace(value.MaskedMSISDN)
 	value.EngineType = strings.TrimSpace(value.EngineType)
+	metadata, err := normaliseSessionOperationalMetadata(SessionOperationalMetadata{
+		OwnerReference: value.OwnerReference, RegistrationCountryISO2: value.RegistrationCountryISO2,
+		ProfileDisplayName: value.ProfileDisplayName, RecoveryReference: value.RecoveryReference,
+	})
+	if err != nil {
+		return GovernedSession{}, err
+	}
+	value.OwnerReference = metadata.OwnerReference
+	value.RegistrationCountryISO2 = metadata.RegistrationCountryISO2
+	value.ProfileDisplayName = metadata.ProfileDisplayName
+	value.RecoveryReference = metadata.RecoveryReference
+	value.RecoveryReferenceConfigured = true
 	if value.MaskedMSISDN == "" || value.EngineType == "" || len(encryptedMSISDN) == 0 || actor == "" || strings.TrimSpace(reason) == "" {
 		return GovernedSession{}, errors.New("sender identity, engine, actor and reason are required")
 	}
@@ -212,6 +275,24 @@ func (s *GovernanceService) RegisterSession(ctx context.Context, value GovernedS
 		return GovernedSession{}, errors.New("session capacity limits are invalid")
 	}
 	return s.Store.RegisterSession(ctx, value, encryptedMSISDN, actor, reason)
+}
+
+func (s *GovernanceService) UpdateSessionMetadata(ctx context.Context, id string, expected int64, value SessionOperationalMetadata, actor, reason string) (GovernedSession, error) {
+	if s == nil || s.Store == nil || strings.TrimSpace(id) == "" || expected <= 0 || strings.TrimSpace(actor) == "" || len(strings.TrimSpace(reason)) < 8 {
+		return GovernedSession{}, ErrSenderMetadataInvalid
+	}
+	metadata, err := normaliseSessionOperationalMetadata(value)
+	if err != nil {
+		return GovernedSession{}, err
+	}
+	current, err := s.Store.GetSession(ctx, strings.TrimSpace(id))
+	if err != nil {
+		return GovernedSession{}, err
+	}
+	if current.Version != expected {
+		return GovernedSession{}, ErrSenderConflict
+	}
+	return s.Store.UpdateSessionMetadata(ctx, current.ID, expected, metadata, strings.TrimSpace(actor), strings.TrimSpace(reason))
 }
 
 func (s *GovernanceService) TransitionSession(ctx context.Context, id string, expected int64, status Status, actor, reason string) (GovernedSession, error) {
@@ -285,15 +366,62 @@ func (s *GovernanceService) ReinstateSession(ctx context.Context, id string, exp
 	return s.Store.TransitionSession(ctx, id, expected, StatusReady, actor, reason)
 }
 
+type HealthPolicy struct {
+	HeartbeatStaleAfter      time.Duration
+	HeartbeatCriticalAfter   time.Duration
+	SuccessStaleAfter        time.Duration
+	SuccessCriticalAfter     time.Duration
+	FailureWindow            time.Duration
+	FailureMinimumSamples    int
+	FailureRateThresholdBPS  int
+	DisconnectWindow         time.Duration
+	DisconnectThreshold      int
+	CapacityNearLimitPercent int
+}
+
+func DefaultHealthPolicy() HealthPolicy {
+	return HealthPolicy{
+		HeartbeatStaleAfter:      90 * time.Second,
+		HeartbeatCriticalAfter:   180 * time.Second,
+		SuccessStaleAfter:        6 * time.Hour,
+		SuccessCriticalAfter:     24 * time.Hour,
+		FailureWindow:            15 * time.Minute,
+		FailureMinimumSamples:    20,
+		FailureRateThresholdBPS:  1000,
+		DisconnectWindow:         30 * time.Minute,
+		DisconnectThreshold:      3,
+		CapacityNearLimitPercent: 90,
+	}
+}
+
+type HealthSignals struct {
+	RecentOutcomeCount    int64
+	RecentFailureCount    int64
+	RecentDisconnectCount int
+}
+
+type HealthSignalSource interface {
+	ReadHealthSignals(context.Context, GovernedSession, HealthPolicy, time.Time) (HealthSignals, error)
+}
+
 type HealthAssessment struct {
-	SessionID       string    `json:"sessionId"`
-	Score           int       `json:"score"`
-	State           string    `json:"state"`
-	Recommendation  string    `json:"recommendation"`
-	Reasons         []string  `json:"reasons"`
-	HeartbeatAgeSec int64     `json:"heartbeatAgeSeconds"`
-	CapacityUsedPct int       `json:"capacityUsedPercent"`
-	AssessedAt      time.Time `json:"assessedAt"`
+	SessionID             string    `json:"sessionId"`
+	Score                 int       `json:"score"`
+	State                 string    `json:"state"`
+	Recommendation        string    `json:"recommendation"`
+	Reasons               []string  `json:"reasons"`
+	HeartbeatAgeSec       int64     `json:"heartbeatAgeSeconds"`
+	CapacityUsedPct       int       `json:"capacityUsedPercent"`
+	RecentOutcomeCount    int64     `json:"recentOutcomeCount"`
+	RecentFailureCount    int64     `json:"recentFailureCount"`
+	RecentFailureRateBPS  int       `json:"recentFailureRateBps"`
+	RecentDisconnectCount int       `json:"recentDisconnectCount"`
+	PolicySource          string    `json:"policySource"`
+	PolicyConfigurationID string    `json:"policyConfigurationId,omitempty"`
+	PolicyScopeType       string    `json:"policyScopeType,omitempty"`
+	PolicyScopeID         string    `json:"policyScopeId,omitempty"`
+	PolicyVersion         int64     `json:"policyVersion,omitempty"`
+	AssessedAt            time.Time `json:"assessedAt"`
 }
 
 func (s *GovernanceService) AssessSession(ctx context.Context, id string, now time.Time) (HealthAssessment, error) {
@@ -305,18 +433,67 @@ func (s *GovernanceService) AssessSession(ctx context.Context, id string, now ti
 		return HealthAssessment{}, err
 	}
 	now = now.UTC()
-	out := HealthAssessment{SessionID: id, Score: 100, State: "HEALTHY", Recommendation: "KEEP_IN_ALLOCATION", AssessedAt: now}
+	policy := DefaultHealthPolicy()
+	evidence := HealthPolicyEvidence{Source: "SAFE_DEFAULT"}
+	if s.HealthPolicies != nil {
+		policy, evidence, err = s.HealthPolicies.ResolveHealthPolicy(ctx, v, now)
+		if err != nil {
+			return HealthAssessment{}, fmt.Errorf("resolve sender health policy: %w", err)
+		}
+	}
+	out := HealthAssessment{
+		SessionID: id, Score: 100, State: "HEALTHY", Recommendation: "KEEP_IN_ALLOCATION",
+		PolicySource: evidence.Source, PolicyConfigurationID: evidence.ConfigurationID,
+		PolicyScopeType: evidence.ScopeType, PolicyScopeID: evidence.ScopeID, PolicyVersion: evidence.Version,
+		AssessedAt: now,
+	}
+	if s.HealthSignals != nil {
+		signals, signalErr := s.HealthSignals.ReadHealthSignals(ctx, v, policy, now)
+		if signalErr != nil {
+			return HealthAssessment{}, fmt.Errorf("read sender health signals: %w", signalErr)
+		}
+		out.RecentOutcomeCount = signals.RecentOutcomeCount
+		out.RecentFailureCount = signals.RecentFailureCount
+		out.RecentDisconnectCount = signals.RecentDisconnectCount
+		if signals.RecentOutcomeCount > 0 {
+			out.RecentFailureRateBPS = int((signals.RecentFailureCount * 10000) / signals.RecentOutcomeCount)
+		}
+		if policy.FailureRateThresholdBPS > 0 && signals.RecentOutcomeCount >= int64(policy.FailureMinimumSamples) && out.RecentFailureRateBPS >= policy.FailureRateThresholdBPS {
+			out.Score -= 40
+			out.Reasons = append(out.Reasons, "FAILURE_RATE_THRESHOLD_BREACHED")
+		}
+		if policy.DisconnectThreshold > 0 && signals.RecentDisconnectCount >= policy.DisconnectThreshold {
+			out.Score -= 40
+			out.Reasons = append(out.Reasons, "DISCONNECT_THRESHOLD_BREACHED")
+		}
+	}
 	if v.LastHeartbeatAt == nil {
 		out.Score -= 60
 		out.Reasons = append(out.Reasons, "NO_HEARTBEAT_EVIDENCE")
 	} else {
-		out.HeartbeatAgeSec = int64(now.Sub(v.LastHeartbeatAt.UTC()).Seconds())
-		if out.HeartbeatAgeSec > 180 {
+		heartbeatAge := now.Sub(v.LastHeartbeatAt.UTC())
+		out.HeartbeatAgeSec = int64(heartbeatAge.Seconds())
+		if heartbeatAge > policy.HeartbeatCriticalAfter {
 			out.Score -= 70
 			out.Reasons = append(out.Reasons, "HEARTBEAT_CRITICALLY_STALE")
-		} else if out.HeartbeatAgeSec > 90 {
+		} else if heartbeatAge > policy.HeartbeatStaleAfter {
 			out.Score -= 35
 			out.Reasons = append(out.Reasons, "HEARTBEAT_STALE")
+		}
+	}
+	if v.LastSuccessAt == nil {
+		if v.SentToday > 0 {
+			out.Score -= 25
+			out.Reasons = append(out.Reasons, "NO_SUCCESS_EVIDENCE")
+		}
+	} else {
+		successAge := now.Sub(v.LastSuccessAt.UTC())
+		if successAge > policy.SuccessCriticalAfter {
+			out.Score -= 25
+			out.Reasons = append(out.Reasons, "SUCCESS_CRITICALLY_STALE")
+		} else if successAge > policy.SuccessStaleAfter {
+			out.Score -= 10
+			out.Reasons = append(out.Reasons, "SUCCESS_STALE")
 		}
 	}
 	if v.SafeDailyCapacity > 0 {
@@ -324,7 +501,7 @@ func (s *GovernanceService) AssessSession(ctx context.Context, id string, now ti
 		if out.CapacityUsedPct >= 100 {
 			out.Score -= 25
 			out.Reasons = append(out.Reasons, "DAILY_CAPACITY_EXHAUSTED")
-		} else if out.CapacityUsedPct >= 90 {
+		} else if out.CapacityUsedPct >= policy.CapacityNearLimitPercent {
 			out.Score -= 10
 			out.Reasons = append(out.Reasons, "DAILY_CAPACITY_NEAR_LIMIT")
 		}

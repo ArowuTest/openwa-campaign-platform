@@ -1871,12 +1871,18 @@ paths:
         '403': { description: Permission denied }
     post:
       operationId: registerSenderSession
-      summary: registerSenderSession
+      summary: Register a governed sender session with complete operational metadata
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SenderSessionRegistrationRequest' }
       responses:
-        '200': { description: Request completed }
+        '201': { description: Sender session registered }
         '400': { description: Invalid request }
         '401': { description: Authentication required }
         '403': { description: Permission denied }
+        '422': { description: Sender metadata, MSISDN, engine or capacity is invalid }
   /sender-sessions/{id}:
     delete:
       operationId: deleteGatewaySenderSession
@@ -1892,6 +1898,24 @@ paths:
         '200': { description: Session deleted and retired }
         '403': { description: Recent MFA step-up required }
         '409': { description: Session owns work or changed concurrently }
+  /sender-sessions/{id}/metadata:
+    put:
+      operationId: updateSenderSessionMetadata
+      summary: Update governed sender ownership, registration, display and recovery-reference metadata
+      description: Requires sender administration permission and recent MFA step-up. Recovery information is accepted only as a non-secret reference and is never returned.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SenderOperationalMetadataRequest' }
+      responses:
+        '200': { description: Sender metadata updated without exposing the recovery reference }
+        '403': { description: Recent MFA step-up required }
+        '404': { description: Sender session not found }
+        '409': { description: Optimistic version conflict }
+        '422': { description: Sender operational metadata is invalid }
   /sender-sessions/{id}/gateway/create:
     post:
       operationId: createGatewaySenderSession
@@ -2020,7 +2044,7 @@ paths:
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
       responses:
-        '200': { description: Sender health assessment }
+        '200': { description: Sender health assessment with applied governed-policy evidence, content: { application/json: { schema: { $ref: '#/components/schemas/SenderHealthAssessment' } } } }
         '401': { description: Authentication required }
         '403': { description: Permission denied }
         '404': { description: Sender session not found }
@@ -3089,6 +3113,60 @@ components:
         nextReviewAt: { type: string, format: date-time }
         expectedVersion: { type: integer, format: int64, minimum: 1 }
         reason: { type: string, minLength: 5 }
+    SenderSessionRegistrationRequest:
+      type: object
+      additionalProperties: false
+      required: [msisdn, ownerReference, registrationCountryIso2, profileDisplayName, recoveryReference, engineType, status, safeMessagesPerMinute, safeDailyCapacity, inFlightLimit, reason]
+      properties:
+        nodeId: { type: string, format: uuid }
+        poolId: { type: string, format: uuid }
+        gatewayPoolId: { type: string, format: uuid }
+        stateVolumeReference: { type: string, maxLength: 500 }
+        msisdn: { type: string, pattern: '^\\+[1-9][0-9]{7,14}$', writeOnly: true }
+        ownerReference: { type: string, minLength: 2, maxLength: 200 }
+        registrationCountryIso2: { type: string, pattern: '^[A-Z]{2}$' }
+        profileDisplayName: { type: string, minLength: 1, maxLength: 160 }
+        recoveryReference: { type: string, minLength: 3, maxLength: 500, writeOnly: true, description: Non-secret reference to controlled recovery information; never the recovery secret itself. }
+        engineType: { type: string, enum: [WHATSAPP_WEB_JS, BAILEYS] }
+        engineVersion: { type: string, maxLength: 100 }
+        status: { type: string, enum: [NEW] }
+        safeMessagesPerMinute: { type: integer, minimum: 1, maximum: 10000 }
+        safeDailyCapacity: { type: integer, format: int64, minimum: 1 }
+        inFlightLimit: { type: integer, minimum: 1, maximum: 100 }
+        reason: { type: string, minLength: 8, maxLength: 1000 }
+    SenderOperationalMetadataRequest:
+      type: object
+      additionalProperties: false
+      required: [ownerReference, registrationCountryIso2, profileDisplayName, recoveryReference, expectedVersion, reason]
+      properties:
+        ownerReference: { type: string, minLength: 2, maxLength: 200 }
+        registrationCountryIso2: { type: string, pattern: '^[A-Z]{2}$' }
+        profileDisplayName: { type: string, minLength: 1, maxLength: 160 }
+        recoveryReference: { type: string, minLength: 3, maxLength: 500, writeOnly: true, description: Non-secret reference to controlled recovery information; never returned. }
+        expectedVersion: { type: integer, format: int64, minimum: 1 }
+        reason: { type: string, minLength: 8, maxLength: 1000 }
+    SenderHealthAssessment:
+      type: object
+      additionalProperties: false
+      required: [sessionId, score, state, recommendation, reasons, heartbeatAgeSeconds, capacityUsedPercent, recentOutcomeCount, recentFailureCount, recentFailureRateBps, recentDisconnectCount, policySource, assessedAt]
+      properties:
+        sessionId: { type: string, format: uuid }
+        score: { type: integer, minimum: 0, maximum: 100 }
+        state: { type: string, enum: [HEALTHY, DEGRADED, CRITICAL] }
+        recommendation: { type: string }
+        reasons: { type: array, items: { type: string } }
+        heartbeatAgeSeconds: { type: integer, format: int64, minimum: 0 }
+        capacityUsedPercent: { type: integer, minimum: 0 }
+        recentOutcomeCount: { type: integer, format: int64, minimum: 0 }
+        recentFailureCount: { type: integer, format: int64, minimum: 0 }
+        recentFailureRateBps: { type: integer, minimum: 0, maximum: 10000 }
+        recentDisconnectCount: { type: integer, minimum: 0 }
+        policySource: { type: string, enum: [SAFE_DEFAULT, GOVERNED_CONFIGURATION] }
+        policyConfigurationId: { type: string, format: uuid }
+        policyScopeType: { type: string, enum: [PLATFORM, GATEWAY_POOL, SENDER_POOL, SENDER_SESSION] }
+        policyScopeId: { type: string }
+        policyVersion: { type: integer, format: int64, minimum: 1 }
+        assessedAt: { type: string, format: date-time }
     SenderLifecycleAction:
       type: object
       additionalProperties: false

@@ -199,20 +199,24 @@ func (s *Server) getSenderSessionHealth(w http.ResponseWriter, r *http.Request) 
 }
 
 type senderSessionRequest struct {
-	NodeID                string        `json:"nodeId"`
-	PoolID                string        `json:"poolId"`
-	GatewayPoolID         string        `json:"gatewayPoolId"`
-	StateVolumeReference  string        `json:"stateVolumeReference"`
-	MSISDN                string        `json:"msisdn"`
-	EngineType            string        `json:"engineType"`
-	EngineVersion         string        `json:"engineVersion"`
-	Status                sender.Status `json:"status"`
-	SafeMessagesPerMinute int           `json:"safeMessagesPerMinute"`
-	SafeDailyCapacity     int64         `json:"safeDailyCapacity"`
-	InFlightLimit         int           `json:"inFlightLimit"`
-	SentToday             int64         `json:"sentToday"`
-	ExpectedVersion       int64         `json:"expectedVersion"`
-	Reason                string        `json:"reason"`
+	NodeID                  string        `json:"nodeId"`
+	PoolID                  string        `json:"poolId"`
+	GatewayPoolID           string        `json:"gatewayPoolId"`
+	StateVolumeReference    string        `json:"stateVolumeReference"`
+	MSISDN                  string        `json:"msisdn"`
+	OwnerReference          string        `json:"ownerReference"`
+	RegistrationCountryISO2 string        `json:"registrationCountryIso2"`
+	ProfileDisplayName      string        `json:"profileDisplayName"`
+	RecoveryReference       string        `json:"recoveryReference"`
+	EngineType              string        `json:"engineType"`
+	EngineVersion           string        `json:"engineVersion"`
+	Status                  sender.Status `json:"status"`
+	SafeMessagesPerMinute   int           `json:"safeMessagesPerMinute"`
+	SafeDailyCapacity       int64         `json:"safeDailyCapacity"`
+	InFlightLimit           int           `json:"inFlightLimit"`
+	SentToday               int64         `json:"sentToday"`
+	ExpectedVersion         int64         `json:"expectedVersion"`
+	Reason                  string        `json:"reason"`
 }
 
 func (s *Server) registerSenderSession(w http.ResponseWriter, r *http.Request) {
@@ -235,12 +239,42 @@ func (s *Server) registerSenderSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	actor, _ := s.senderActor(r)
-	v, err := s.deps.SenderGovernance.RegisterSession(r.Context(), sender.GovernedSession{NodeID: in.NodeID, PoolID: in.PoolID, GatewayPoolID: in.GatewayPoolID, StateVolumeReference: in.StateVolumeReference, MaskedMSISDN: sharedcrypto.Mask(msisdn), EngineType: in.EngineType, EngineVersion: in.EngineVersion, Status: in.Status, SafeMessagesPerMinute: in.SafeMessagesPerMinute, SafeDailyCapacity: in.SafeDailyCapacity, InFlightLimit: in.InFlightLimit}, cipher, actor, in.Reason)
+	v, err := s.deps.SenderGovernance.RegisterSession(r.Context(), sender.GovernedSession{NodeID: in.NodeID, PoolID: in.PoolID, GatewayPoolID: in.GatewayPoolID, StateVolumeReference: in.StateVolumeReference, MaskedMSISDN: sharedcrypto.Mask(msisdn), OwnerReference: in.OwnerReference, RegistrationCountryISO2: in.RegistrationCountryISO2, ProfileDisplayName: in.ProfileDisplayName, RecoveryReference: in.RecoveryReference, EngineType: in.EngineType, EngineVersion: in.EngineVersion, Status: in.Status, SafeMessagesPerMinute: in.SafeMessagesPerMinute, SafeDailyCapacity: in.SafeDailyCapacity, InFlightLimit: in.InFlightLimit}, cipher, actor, in.Reason)
 	if err != nil {
 		s.writeSenderError(w, r, err)
 		return
 	}
 	httpx.WriteJSON(w, 201, v)
+}
+
+type senderMetadataRequest struct {
+	OwnerReference          string `json:"ownerReference"`
+	RegistrationCountryISO2 string `json:"registrationCountryIso2"`
+	ProfileDisplayName      string `json:"profileDisplayName"`
+	RecoveryReference       string `json:"recoveryReference"`
+	ExpectedVersion         int64  `json:"expectedVersion"`
+	Reason                  string `json:"reason"`
+}
+
+func (s *Server) updateSenderSessionMetadata(w http.ResponseWriter, r *http.Request) {
+	if !s.requireSenderGovernance(w, r) || !s.requireSenderStepUp(w, r) {
+		return
+	}
+	var in senderMetadataRequest
+	if err := httpx.DecodeJSON(w, r, 64<<10, &in); err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The sender metadata request is invalid.", nil)
+		return
+	}
+	actor, _ := s.senderActor(r)
+	value, err := s.deps.SenderGovernance.UpdateSessionMetadata(r.Context(), r.PathValue("id"), in.ExpectedVersion, sender.SessionOperationalMetadata{
+		OwnerReference: in.OwnerReference, RegistrationCountryISO2: in.RegistrationCountryISO2,
+		ProfileDisplayName: in.ProfileDisplayName, RecoveryReference: in.RecoveryReference,
+	}, actor, in.Reason)
+	if err != nil {
+		s.writeSenderError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, value)
 }
 
 type senderProxyRequest struct {
@@ -381,6 +415,8 @@ func (s *Server) writeSenderError(w http.ResponseWriter, r *http.Request, err er
 		httpx.WriteError(w, r, 404, "SENDER_NOT_FOUND", "The sender resource does not exist.", nil)
 	case errors.Is(err, sender.ErrSenderConflict):
 		httpx.WriteError(w, r, 409, "SENDER_VERSION_CONFLICT", "The sender resource changed; reload before retrying.", nil)
+	case errors.Is(err, sender.ErrSenderMetadataInvalid):
+		httpx.WriteError(w, r, 422, "SENDER_METADATA_INVALID", "Sender operational metadata is incomplete or invalid.", nil)
 	default:
 		httpx.WriteError(w, r, 422, "SENDER_GOVERNANCE_INVALID", err.Error(), nil)
 	}

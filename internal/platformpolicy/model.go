@@ -27,13 +27,14 @@ const (
 type ScopeType string
 
 const (
-	ScopePlatform     ScopeType = "PLATFORM"
-	ScopeEnvironment  ScopeType = "ENVIRONMENT"
-	ScopeOrganisation ScopeType = "ORGANISATION"
-	ScopeCampaign     ScopeType = "CAMPAIGN"
-	ScopeProvider     ScopeType = "PROVIDER"
-	ScopeGatewayPool  ScopeType = "GATEWAY_POOL"
-	ScopeSenderPool   ScopeType = "SENDER_POOL"
+	ScopePlatform      ScopeType = "PLATFORM"
+	ScopeEnvironment   ScopeType = "ENVIRONMENT"
+	ScopeOrganisation  ScopeType = "ORGANISATION"
+	ScopeCampaign      ScopeType = "CAMPAIGN"
+	ScopeProvider      ScopeType = "PROVIDER"
+	ScopeGatewayPool   ScopeType = "GATEWAY_POOL"
+	ScopeSenderPool    ScopeType = "SENDER_POOL"
+	ScopeSenderSession ScopeType = "SENDER_SESSION"
 )
 
 type Configuration struct {

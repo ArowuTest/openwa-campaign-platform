@@ -1,7 +1,10 @@
 package sender
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 )
@@ -9,6 +12,18 @@ import (
 func registerReadySession(t *testing.T, ctx context.Context, svc *GovernanceService, store *MemoryGovernanceStore, value GovernedSession) GovernedSession {
 	t.Helper()
 	value.Status = StatusNew
+	if value.OwnerReference == "" {
+		value.OwnerReference = "test-operations"
+	}
+	if value.RegistrationCountryISO2 == "" {
+		value.RegistrationCountryISO2 = "NG"
+	}
+	if value.ProfileDisplayName == "" {
+		value.ProfileDisplayName = "Test sender"
+	}
+	if value.RecoveryReference == "" {
+		value.RecoveryReference = "vault://test/sender-recovery"
+	}
 	session, err := svc.RegisterSession(ctx, value, []byte("cipher"), "actor", "approved sender")
 	if err != nil {
 		t.Fatal(err)
@@ -107,7 +122,7 @@ func TestHealthAssessmentRecommendsDrainAndQuarantine(t *testing.T) {
 	ctx := context.Background()
 	store := NewMemoryGovernanceStore()
 	svc := &GovernanceService{Store: store}
-	session, err := svc.RegisterSession(ctx, GovernedSession{MaskedMSISDN: "+234 ***", EngineType: "openwa", Status: StatusNew, SafeMessagesPerMinute: 10, SafeDailyCapacity: 100, InFlightLimit: 1, SentToday: 95}, []byte("cipher"), "actor", "approved sender")
+	session, err := svc.RegisterSession(ctx, GovernedSession{MaskedMSISDN: "+234 ***", OwnerReference: "test-operations", RegistrationCountryISO2: "NG", ProfileDisplayName: "Test sender", RecoveryReference: "vault://test/sender-recovery", EngineType: "openwa", Status: StatusNew, SafeMessagesPerMinute: 10, SafeDailyCapacity: 100, InFlightLimit: 1, SentToday: 95}, []byte("cipher"), "actor", "approved sender")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,5 +150,156 @@ func TestHealthAssessmentRecommendsDrainAndQuarantine(t *testing.T) {
 	}
 	if assessment.CapacityUsedPct != 95 || assessment.HeartbeatAgeSec < 200 {
 		t.Fatalf("missing health evidence: %+v", assessment)
+	}
+}
+
+func TestHealthAssessmentUsesLastSuccessRecency(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemoryGovernanceStore()
+	svc := &GovernanceService{Store: store}
+	session := registerReadySession(t, ctx, svc, store, GovernedSession{MaskedMSISDN: "+234 ***", EngineType: "openwa", SafeMessagesPerMinute: 10, SafeDailyCapacity: 100, InFlightLimit: 1})
+	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	freshHeartbeat := now.Add(-10 * time.Second)
+	staleSuccess := now.Add(-25 * time.Hour)
+	store.mu.Lock()
+	value := store.sessions[session.ID]
+	value.LastHeartbeatAt = &freshHeartbeat
+	value.LastSuccessAt = &staleSuccess
+	value.SentToday = 10
+	store.sessions[session.ID] = value
+	store.mu.Unlock()
+
+	assessment, err := svc.AssessSession(ctx, session.ID, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsReason(assessment.Reasons, "SUCCESS_CRITICALLY_STALE") || assessment.Score >= 100 {
+		t.Fatalf("stale success evidence did not affect health: %+v", assessment)
+	}
+}
+
+type fixedHealthPolicyResolver struct {
+	policy   HealthPolicy
+	evidence HealthPolicyEvidence
+}
+
+func (r fixedHealthPolicyResolver) ResolveHealthPolicy(context.Context, GovernedSession, time.Time) (HealthPolicy, HealthPolicyEvidence, error) {
+	return r.policy, r.evidence, nil
+}
+
+func TestHealthAssessmentUsesGovernedThresholdsAndReportsEvidence(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemoryGovernanceStore()
+	policy := DefaultHealthPolicy()
+	policy.SuccessStaleAfter = 30 * time.Minute
+	policy.SuccessCriticalAfter = time.Hour
+	svc := &GovernanceService{Store: store, HealthPolicies: fixedHealthPolicyResolver{
+		policy:   policy,
+		evidence: HealthPolicyEvidence{Source: "GOVERNED_CONFIGURATION", ConfigurationID: "config-1", ScopeType: "SENDER_POOL", ScopeID: "pool-1", Version: 4},
+	}}
+	session := registerReadySession(t, ctx, svc, store, GovernedSession{PoolID: "pool-1", MaskedMSISDN: "+234 ***", EngineType: "openwa", SafeMessagesPerMinute: 10, SafeDailyCapacity: 100, InFlightLimit: 1})
+	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	heartbeat := now.Add(-10 * time.Second)
+	success := now.Add(-2 * time.Hour)
+	store.mu.Lock()
+	value := store.sessions[session.ID]
+	value.LastHeartbeatAt = &heartbeat
+	value.LastSuccessAt = &success
+	value.SentToday = 1
+	store.sessions[session.ID] = value
+	store.mu.Unlock()
+
+	assessment, err := svc.AssessSession(ctx, session.ID, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsReason(assessment.Reasons, "SUCCESS_CRITICALLY_STALE") {
+		t.Fatalf("governed success threshold was not applied: %+v", assessment)
+	}
+	if assessment.PolicyConfigurationID != "config-1" || assessment.PolicyScopeType != "SENDER_POOL" || assessment.PolicyScopeID != "pool-1" || assessment.PolicyVersion != 4 {
+		t.Fatalf("health policy evidence missing: %+v", assessment)
+	}
+}
+
+func TestHealthAssessmentPenalisesMissingSuccessAfterTraffic(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemoryGovernanceStore()
+	svc := &GovernanceService{Store: store}
+	session := registerReadySession(t, ctx, svc, store, GovernedSession{MaskedMSISDN: "+234 ***", EngineType: "openwa", SafeMessagesPerMinute: 10, SafeDailyCapacity: 100, InFlightLimit: 1})
+	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	freshHeartbeat := now.Add(-10 * time.Second)
+	store.mu.Lock()
+	value := store.sessions[session.ID]
+	value.LastHeartbeatAt = &freshHeartbeat
+	value.LastSuccessAt = nil
+	value.SentToday = 1
+	store.sessions[session.ID] = value
+	store.mu.Unlock()
+
+	assessment, err := svc.AssessSession(ctx, session.ID, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsReason(assessment.Reasons, "NO_SUCCESS_EVIDENCE") || assessment.Score >= 100 {
+		t.Fatalf("missing success evidence did not affect health: %+v", assessment)
+	}
+}
+
+func containsReason(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+func TestRegisterSessionRequiresCompleteOperationalMetadata(t *testing.T) {
+	svc := &GovernanceService{Store: NewMemoryGovernanceStore()}
+	_, err := svc.RegisterSession(context.Background(), GovernedSession{
+		MaskedMSISDN: "+234 ***", EngineType: "openwa", Status: StatusNew,
+		SafeMessagesPerMinute: 10, SafeDailyCapacity: 100, InFlightLimit: 1,
+	}, []byte("cipher"), "actor", "approved sender")
+	if !errors.Is(err, ErrSenderMetadataInvalid) {
+		t.Fatalf("expected metadata validation error, got %v", err)
+	}
+}
+
+func TestUpdateSessionOperationalMetadataUsesOptimisticVersion(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemoryGovernanceStore()
+	svc := &GovernanceService{Store: store}
+	session, err := svc.RegisterSession(ctx, GovernedSession{
+		MaskedMSISDN: "+234 ***", EngineType: "openwa", Status: StatusNew,
+		OwnerReference: "team-a", RegistrationCountryISO2: "NG", ProfileDisplayName: "Primary",
+		RecoveryReference: "vault://recovery/one", SafeMessagesPerMinute: 10, SafeDailyCapacity: 100, InFlightLimit: 1,
+	}, []byte("cipher"), "actor", "approved sender")
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated, err := svc.UpdateSessionMetadata(ctx, session.ID, session.Version, SessionOperationalMetadata{
+		OwnerReference: "team-b", RegistrationCountryISO2: "GH", ProfileDisplayName: "Ghana primary", RecoveryReference: "vault://recovery/two",
+	}, "actor", "change approved sender ownership")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Version != session.Version+1 || updated.OwnerReference != "team-b" || updated.RegistrationCountryISO2 != "GH" || !updated.RecoveryReferenceConfigured {
+		t.Fatalf("unexpected metadata update: %+v", updated)
+	}
+	if _, err := svc.UpdateSessionMetadata(ctx, session.ID, session.Version, SessionOperationalMetadata{OwnerReference: "team-c", RegistrationCountryISO2: "NG", ProfileDisplayName: "Stale", RecoveryReference: "vault://recovery/stale"}, "actor", "stale ownership update"); !errors.Is(err, ErrSenderConflict) {
+		t.Fatalf("expected optimistic conflict, got %v", err)
+	}
+}
+
+func TestSenderOperationalMetadataNeverSerialisesRecoveryReference(t *testing.T) {
+	value := GovernedSession{
+		OwnerReference: "operations-team", RegistrationCountryISO2: "NG", ProfileDisplayName: "Primary sender",
+		RecoveryReference: "vault://whatsapp/recovery/session-1", RecoveryReferenceConfigured: true,
+	}
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) == 0 || bytes.Contains(raw, []byte("vault://whatsapp/recovery/session-1")) {
+		t.Fatalf("recovery reference leaked in sender JSON: %s", raw)
 	}
 }

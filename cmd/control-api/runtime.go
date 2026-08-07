@@ -153,7 +153,7 @@ func buildMemoryRuntime(cfg config.Config, protector *sharedcrypto.MSISDNProtect
 	cohortExecution := cohort.NewExecutionService(filters.Compiler, &cohort.MemoryQueryRepository{})
 	materialisationService := &materialisation.MaterialisationService{Repository: materialisation.NewMemoryMaterialisationRepository()}
 	metrics := delivery.NewMetricsService(delivery.NewMemoryMetricsRepository())
-	senderGovernance := &sender.GovernanceService{Store: senderStore}
+	senderGovernance := &sender.GovernanceService{Store: senderStore, HealthPolicies: &sender.PlatformHealthPolicyResolver{Configurations: configurations}}
 	senderLifecycle := &sender.SessionLifecycleService{Governance: senderGovernance, Gateway: &sender.HTTPSessionGateway{CommandSecret: cfg.GatewayCommandSecret}, Proxies: senderProxies, ActiveWork: sender.StaticActiveSessionWorkChecker(false), Maintenance: maintenance}
 	pacingPolicies := &sender.PacingAdministration{Store: sender.NewMemoryPacingStore()}
 	executionStore := execution.NewMemoryStore()
@@ -306,7 +306,7 @@ func buildPostgreSQLRuntime(ctx context.Context, cfg config.Config, protector *s
 	cohortExecution := cohort.NewExecutionService(filters.Compiler, &cohort.PostgreSQLQueryRepository{DB: db})
 	materialisationService := &materialisation.MaterialisationService{Repository: &materialisation.PostgreSQLRepository{DB: db}}
 	metrics := delivery.NewMetricsService(&delivery.PostgreSQLMetricsRepository{DB: db})
-	senderGovernance := &sender.GovernanceService{Store: senderStore}
+	senderGovernance := &sender.GovernanceService{Store: senderStore, HealthPolicies: &sender.PlatformHealthPolicyResolver{Configurations: configurations}, HealthSignals: &sender.PostgreSQLHealthSignalSource{DB: db}}
 	senderLifecycle := &sender.SessionLifecycleService{Governance: senderGovernance, Gateway: &sender.HTTPSessionGateway{CommandSecret: cfg.GatewayCommandSecret}, Proxies: senderProxies, ActiveWork: sender.PostgreSQLActiveSessionWorkChecker{DB: db}, Maintenance: maintenance}
 	pacingPolicies := &sender.PacingAdministration{Store: &postgresrepo.PacingPolicyRepository{DB: db}}
 	executionStore := &execution.PostgreSQLStore{DB: db}
@@ -447,6 +447,10 @@ const controlSchemaReadinessQuery = `SELECT
   AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='test_message_sends' AND column_name='provider_adapter_version')
   AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='test_message_sends' AND column_name='provider_capability_definition_id')
   AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='contacts' AND column_name='lifecycle_version')
+  AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='sender_sessions' AND column_name='owner_reference')
+  AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='sender_sessions' AND column_name='registration_country_iso2')
+  AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='sender_sessions' AND column_name='profile_display_name')
+  AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='sender_sessions' AND column_name='recovery_reference')
   AND EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='platform_configurations')
   AND EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='maintenance_windows')
   AND EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='gateway_runtime_events')

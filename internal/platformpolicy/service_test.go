@@ -117,3 +117,38 @@ func TestEmergencyMaintenanceBlocksAllActions(t *testing.T) {
 		}
 	}
 }
+
+func TestConfigurationSupportsSenderSessionScope(t *testing.T) {
+	now := time.Date(2026, 8, 7, 15, 0, 0, 0, time.UTC)
+	admin := &ConfigurationAdministration{Store: NewMemoryStore(), Clock: func() time.Time { return now }}
+	created, err := admin.Create(context.Background(), Configuration{
+		Key: "SENDER.HEALTH_THRESHOLDS", ScopeType: ScopeSenderSession, ScopeID: "session-1",
+		Value: json.RawMessage(`{"heartbeatStaleSeconds":90}`),
+	}, "maker", "session health override")
+	if err != nil {
+		t.Fatalf("create sender-session configuration: %v", err)
+	}
+	created, err = admin.Submit(context.Background(), created.ID, created.Version, "submitter", "submit session override")
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err = admin.Decide(context.Background(), created.ID, created.Version, true, "approver", "approve session override")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := admin.Resolve(context.Background(), created.Key, []OperationalScopeRef{{Type: ScopeSenderSession, ID: "session-1"}}, now)
+	if err != nil || resolved.ID != created.ID {
+		t.Fatalf("sender-session configuration not resolved: %#v err=%v", resolved, err)
+	}
+}
+
+func TestMaintenanceDoesNotAcceptSenderSessionScope(t *testing.T) {
+	admin := &MaintenanceAdministration{Store: NewMemoryStore()}
+	_, err := admin.Create(context.Background(), MaintenanceWindow{
+		Name: "session-only maintenance", Mode: MaintenanceReadOnly,
+		ScopeType: ScopeSenderSession, ScopeID: "session-1", StartsAt: time.Now().UTC().Add(time.Minute),
+	}, "maker", "configuration scope must not broaden maintenance")
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("sender-session maintenance scope should remain invalid, got %v", err)
+	}
+}

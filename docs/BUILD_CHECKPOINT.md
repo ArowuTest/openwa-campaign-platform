@@ -4,36 +4,69 @@ Current version: **0.8.28**
 
 Branch: `work/backend-production-engineering`
 
-Checkpoint type: **interim runtime-validated recovery checkpoint**
+Implementation commit: `c70956a` (`feat: consolidate OpenWA worker and harden runtime`)
 
-This checkpoint extends the earlier `620887aa063e622b678bc3eeb2d69700c9cfac74` safety commit with defects and controls discovered through a genuine whole-stack Docker build and startup test.
+Checkpoint type: **backend production-engineering / consolidated OpenWA runtime checkpoint**
 
-## Runtime evidence
+## What this checkpoint proves
 
-The Docker Compose project `openwa0828smoke` built and ran 14 containers. At the final snapshot every container was healthy, every restart count was zero, the public UI and edge health/readiness routes returned HTTP 200, and there were no fresh application or PostgreSQL errors.
+This checkpoint preserves the 0.8.28 backend production-engineering work and the OpenWA worker consolidation. It is not a production deployment certificate.
 
-The validated services were PostgreSQL, Redis, ClamAV, OpenWA upstream, OpenWA gateway, control API, admin web, nginx and all seven Go workers.
+The active development Docker project `openwa0828active` runs 13 containers: PostgreSQL, Redis, ClamAV, one consolidated OpenWA gateway, control API, admin web, nginx, and the six Go worker services (audience, campaign, export, inbound-governance, metrics and platform-governance).
+
+At the post-fix observation point all 13 were healthy. The recreated final gateway image was healthy with zero restarts, ran non-root, exposed no direct host port, included Chromium and compiled gateway code, and did not contain the upstream OpenWA dashboard/server application.
+
+The public UI, `/healthz` and `/readyz` returned HTTP 200 and a fresh application-log scan found no errors in the observation window.
+
+## Capability-preservation rule
+
+The 0.8.28 implementation was corrected without deleting required platform features merely to compile.
+
+- The pre- and post-consolidation `OpenWAProvider` expose the same ten provider operations.
+- Session create/start/stop/logout/delete, read/health, QR and pairing-code flows remain.
+- Gateway drain/resume remains.
+- Text, image, video and document sends remain.
+- Inbound messages and delivery/read events remain wired to durable platform callbacks/outboxes.
+- Both retained `WHATSAPP_WEB_JS` and `BAILEYS` engine paths remain available.
+- The liveness watchdog was restored into the embedded runtime rather than dropped.
+- SSRF protection remains enabled; only the exact `control-api` hostname is allowlisted for signed internal media retrieval.
+
+The only tracked file deleted by the consolidation implementation is the obsolete `infrastructure/compose/openwa-upstream-secret-entrypoint.sh`, which served the removed separate upstream container and has no remaining references. Its transport capability is now served inside the consolidated gateway.
 
 ## Material corrections
 
-- Gateway gauge and summary metrics now compile and render safely.
-- Native `libpq` handles typed nils and named scalar/domain values without panics or invalid parameter typing.
-- Campaign, inbound, identity, capacity and governance-policy SQL now conforms to the migrated PostgreSQL schema.
-- Control, campaign and export services receive the required governed keyrings.
-- Retention and opt-out stores preserve approval actors and JSONB contracts.
-- Control readiness validates canonical schema relations.
-- Admin web binds to all container interfaces and nginx exposes public `/healthz` and `/readyz`.
-- First-party Node images use committed lockfiles and `npm ci`.
-- Next.js and NestJS were upgraded to audit-clean compatible releases.
-- OpenWA server dependencies audit clean; the sole dashboard RSC advisory is explicitly governed by pending `SEC-EXC-001` and blocks strict release until independent approval.
-- Root Docker context excludes Git history, dependency caches and generated output.
+- PostgreSQL startup now retries bounded transient availability failures rather than failing immediately during valid dependency warm-up.
+- Docker/Desktop read-only runtime secrets are recognised through actual write-denial semantics while unsafe ordinary deployed files remain rejected.
+- OpenWA media loading accepts only the governed `control-api` internal hostname while other private hosts remain blocked.
+- Silent READY-engine failure is actively detected through bounded liveness probes and fenced recovery.
+- The separate upstream OpenWA server/dashboard is removed from the production runtime topology; retained audited transport source is built into the isolated gateway instead.
+- Node security verification now passes strict mode with no production exceptions.
+- First-party gateway production dependencies audit with zero known vulnerabilities.
 
 ## Verification
 
-The source has passed full Go tests, `go vet ./...`, changed-package race detection, gateway durability, admin typecheck and build, OpenWA dashboard typecheck and 273 tests, OpenAPI parity, production Compose validation, committed-secret scanning, node-security validation and SBOM generation.
+Fresh evidence includes:
 
-The CycloneDX SBOM contains 24 components. Live Neon migration and concurrency evidence remains documented separately.
+- clean gateway TypeScript typecheck;
+- final gateway Docker image build;
+- embedded OpenWA lifecycle/event/watchdog tests;
+- gateway durability tests;
+- Node secret-file tests;
+- 12 stack-governance/release-readiness tests;
+- strict Node security validation with no exceptions;
+- production Compose validation (8 services / 24 secret definitions);
+- OpenAPI parity for 277 implemented `/api/v1` method/path pairs;
+- committed-secret scan;
+- `go vet ./...`;
+- race tests for the changed database/envfile packages;
+- explicit deterministic Go test pass across all 55 tracked root Go package directories plus the nested supplied OpenWA Go SDK.
 
-## Not yet final release
+## Database evidence
 
-The checkpoint remains pre-production. Genuine continuation pagination, the 398-row requirements reconciliation, final Backend Release Readiness Review, independent security disposition, authenticated WhatsApp sessions, capacity/endurance evidence, Hostinger deployment, backup/DR, penetration testing, operational approval and the production frontend remain open gates.
+The Neon validation branch `openwa-0828-validation` (`br-green-pine-aykv09eo`) remains present. The earlier 0.8.28 migration/concurrency evidence through migration `0066` remains applicable because the consolidation commit does not change migrations or schema contracts.
+
+## Not yet production-certified
+
+The requirements catalogue still contains 398 granular rows (107 implemented/tested, 44 partial, 247 not started), including frontend, repository, deployment and external-validation requirements.
+
+Remaining hard gates include requirements/evidence reconciliation, live authenticated OpenWA validation, target-volume capacity/endurance, independent security assurance, target-host deployment, backup/restore and DR proof, operational readiness/approval and frontend completion.

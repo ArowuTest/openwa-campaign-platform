@@ -1,22 +1,29 @@
 # Next actions
 
-## Planned production-engineering package — 0.8.28
+## Backend closure after 0.8.28 consolidation
 
-1. Add Prometheus-compatible service metrics and W3C trace-context propagation without placing personal data in labels or traces.
-2. Add service-specific PostgreSQL roles, secret-file/external-secret support, controlled dual-key rotation and stricter Redis/service credential boundaries.
-3. Complete durable gateway command-nonce governance, bounded idempotency retention and operator-controlled unknown-submission reconciliation.
-4. Standardise cursor pagination, bounded history reads and explicit malformed-query errors across every remaining API and worker export path.
-5. Prepare high-growth recipient, provider-event, delivery-history and audit schemas for controlled partitioning and retention maintenance.
-6. Add PostgreSQL-backed concurrency, crash-boundary and failure-injection tests for release, dispatch, capacity, events, retention, incidents and exports.
-7. Expand gateway/runtime telemetry and governed alert metrics to disk, inode, process/PID and network evidence where the runtime can measure them safely.
-8. Add supported executors or explicit permanent review policies for campaign media, raw provider events, delivery history and audit archival/destruction.
+The immediate objective remains: finish the backend to the maximum extent possible, verify it, and only then move into production frontend work.
 
-## External gates retained
+The next actions must preserve existing platform functionality. Do not satisfy build or release gates by deleting required handlers, disabling tests, weakening security controls, replacing real behaviour with stubs, or silently dropping OpenWA capabilities.
 
-- production-like PostgreSQL migration, locking and concurrency validation;
-- dependency-resolved gateway build and genuine OpenWA sessions;
+1. Reconcile the complete 398-row requirements catalogue against the current `0.8.28` source and evidence. Update classifications only where implementation/test evidence genuinely supports the change.
+2. Complete the adversarial Backend Release Readiness Review against the current consolidated runtime. Any Critical/Important code findings must be corrected and reverified before backend closure.
+3. Perform authenticated OpenWA transport validation on the consolidated worker: session create/start, QR and/or pairing code, READY state, text/image/video/document sends, delivery/read events, inbound messages, stop/restart, reconnect and watchdog recovery.
+4. Run production-like PostgreSQL/worker failure-boundary validation where not already covered by the existing Neon `0.8.28` evidence. Do not rerun destructive schema work solely for transport-only changes.
+5. Produce target-volume capacity, queueing, throughput, pacing, concurrency and endurance evidence for the control plane and gateway.
+6. Complete independent security assurance/penetration testing and operational key-management review.
+7. Complete target-host network/deployment validation, backup/restore evidence and disaster-recovery proof.
+8. Complete operational runbook, monitoring, alerting, incident and owner-approval gates.
+9. When the backend closure review confirms no further code-side backend work can reasonably be completed first, begin/complete the production frontend against the existing governed API contracts.
+
+## External/release gates retained
+
+- authoritative requirements/evidence traceability;
+- production-like PostgreSQL validation where required;
+- live authenticated OpenWA transport validation;
 - target-volume performance and endurance evidence;
-- Hostinger network policy, deployment, backup, restore and disaster-recovery proof;
-- independent security assessment and operational key management;
-- formal operational-owner approval of runbooks and capacity representation;
+- independent security assessment;
+- target-host deployment/network policy;
+- backup, restore and disaster-recovery proof;
+- formal operational-owner approval;
 - production frontend completion.

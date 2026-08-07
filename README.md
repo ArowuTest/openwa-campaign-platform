@@ -27,66 +27,83 @@ External organisations do not receive portal access in the initial release. They
 
 ## Current development checkpoint
 
-Version `0.8.28` is an **interim runtime-validated backend-production-engineering checkpoint** on branch `work/backend-production-engineering`, based on the completed `0.8.27` commit `d002177c6ea52500053134398282f5410d8e6e2a`.
+Version `0.8.28` is the current backend production-engineering checkpoint on branch `work/backend-production-engineering`.
 
-The repository includes the earlier `0.8.28` PostgreSQL, service-identity, observability, replay-safety, partition-readiness and supply-chain work, plus corrections found only by building and running the complete Docker stack:
+Recent implementation lineage:
 
-- native `libpq` handling for PostgreSQL domains, typed nil parameters and SQL-state-preserving errors;
-- valid campaign lease, controlled-test-message, inbound rotation, identity bootstrap, capacity and governance-policy SQL;
-- control-plane secret and keyring wiring, export-worker readiness and explicit admin runtime binding;
+- `6b668dc` — OpenWA worker-consolidation design;
+- `c70956a` — consolidated OpenWA worker and runtime hardening.
+
+The repository includes the 0.8.28 PostgreSQL, service-identity, observability, replay-safety, partition-readiness and supply-chain work, plus runtime corrections found through real Docker startup and consolidation testing:
+
+- native `lib/pq` PostgreSQL integration and bounded startup retry/backoff;
+- valid campaign, inbound, identity, capacity and governance-policy SQL contracts;
+- control-plane keyring/secret wiring, worker readiness and admin runtime binding;
 - canonical schema-readiness checks and public edge `/healthz` and `/readyz` routes;
-- gateway gauge and summary metrics with executable durability coverage;
+- durable gateway replay/idempotency and signed runtime registration;
 - deterministic package-local lockfiles and `npm ci` for first-party Node images;
-- Next.js `16.3.0` and NestJS dependency upgrades, with zero npm findings for the admin portal and gateway;
-- zero npm findings for the OpenWA server dependency tree;
-- an explicit, expiring and strict-release-blocking exception candidate for the sole remaining OpenWA-dashboard React Router advisory, which is limited to RSC mode that the Vite/BrowserRouter dashboard does not expose;
+- audit-clean compatible first-party Node dependency trees;
+- one isolated OpenWA gateway worker instead of a separate upstream server plus adapter;
+- retained OpenWA liveness supervision, narrow media SSRF allowlisting and durable event/inbound handling;
+- Docker/Desktop-compatible read-only secret-file validation without weakening ordinary deployed file checks;
 - a root `.dockerignore` that excludes Git history, local dependency caches and generated output from build contexts.
 
-This checkpoint is intentionally recoverable and fully runnable in local Docker, but it is **not the final or deployment-certified `0.8.28` release**.
+The consolidation preserves the platform transport surface rather than obtaining a green build by removing features. The pre- and post-consolidation provider method sets are identical, and session lifecycle, QR/pairing, drain/resume and text/image/video/document send paths remain.
+
+This checkpoint is intentionally recoverable and runnable in local Docker, but it is **not production deployment-certified**.
 
 ## Current verification evidence
 
-The authoritative desktop repository was built and started through Docker Compose as project `openwa0828smoke`. The verified runtime contained 14 containers: PostgreSQL, Redis, ClamAV, OpenWA upstream, OpenWA gateway, control API, admin web, nginx and all seven Go workers.
+The active development Docker Compose project is `openwa0828active`. The verified runtime contains **13 containers**: PostgreSQL, Redis, ClamAV, one consolidated OpenWA gateway, control API, admin web, nginx, and the six Go workers (audience, campaign, export, inbound-governance, metrics and platform-governance).
 
-At the final runtime snapshot:
+At the post-fix runtime snapshot:
 
-- all 14 containers were healthy;
-- all restart counts were zero;
+- all 13 containers were healthy;
+- the recreated final gateway had zero restarts;
+- the gateway ran as non-root and exposed no direct host port;
+- the gateway image contained Chromium and compiled transport code but no upstream dashboard/server application;
 - the public admin UI returned HTTP 200;
 - public `/healthz` and `/readyz` both returned HTTP 200;
-- control API readiness reported PostgreSQL and schema checks as healthy;
-- no fresh application-level errors were present;
-- no fresh PostgreSQL errors or failed statements were present.
+- no fresh application or PostgreSQL errors were present in the observation window.
 
-The source has also passed:
+Fresh source verification includes:
 
-```bash
-go test -count=1 ./...
-go vet ./...
-go test -race <all changed Go packages>
-node scripts/test-gateway-durability.js
-python3 -m unittest tests.governance.test_release_readiness tests.governance.test_stack_startup
-python3 scripts/verify-node-security.py
-python3 scripts/verify_openapi_routes.py
-python3 scripts/verify-production-compose.py
-python3 scripts/scan-committed-secrets.py
-python3 scripts/generate-sbom.py
-python3 scripts/verify-release-readiness.py
+```text
+Gateway TypeScript typecheck: passed
+Final gateway Docker build: passed
+Embedded OpenWA lifecycle/event/watchdog tests: passed
+Gateway durability tests: passed
+Node secret-file tests: passed
+Stack/release governance tests: 12 passed
+Strict Node security validation: passed with no production exceptions
+Production Compose validation: passed (8 services / 24 secret definitions)
+OpenAPI parity: 277 implemented /api/v1 method/path pairs covered
+Committed-secret scan: passed
+go vet ./...: passed
+Race tests for changed Go packages: passed
+Tracked root Go package directories: 55/55 passed
+Nested supplied OpenWA Go SDK: passed
 ```
 
-The CycloneDX SBOM contains 24 components. OpenAPI verification covers 277 implemented `/api/v1` method/path pairs. Live PostgreSQL evidence remains recorded in `docs/operations/NEON_POSTGRES_VALIDATION_0.8.28.md`, including clean migrations `0001` through `0066`, exact service-role grants and six independent multi-session adversarial scenarios.
+The normal all-at-once recursive Go orchestration was investigated when it could stall on the mixed Go/Node Windows bind-mounted working tree. Verification was therefore rerun deterministically package-by-package with visible package names and explicit timeouts; all tracked Go package directories passed.
+
+Live PostgreSQL evidence remains recorded in `docs/operations/NEON_POSTGRES_VALIDATION_0.8.28.md`, including clean migrations `0001` through `0066`, service-role checks and adversarial concurrency/failure-boundary scenarios. The isolated Neon validation branch `openwa-0828-validation` remains present, and the latest consolidation does not change migrations or schema contracts.
 
 ## Release gates still open
 
-This interim checkpoint must not be represented as the final `0.8.28` release. Remaining code and evidence work includes:
+The granular requirements catalogue currently contains 398 rows: 107 `IMPLEMENTED_TESTED`, 44 `PARTIAL`, and 247 `NOT_STARTED`. These include frontend, repository-governance, deployment, operational and external-validation requirements and are not a backend completion percentage.
 
-- genuine continuation pagination for remaining growing operational histories;
-- reconciliation of all 398 requirement records against code, migrations, tests, frontend scope and external evidence;
-- the adversarial Backend Release Readiness Review and final handover documentation;
-- independent review of the pending, time-bounded React Router RSC advisory exception; strict security verification fails until that approval is recorded;
-- final release packaging and independent clone/extraction verification after the remaining code work.
+The remaining release work includes:
 
-External or environment-dependent gates remain separate: authenticated real WhatsApp sessions, target-volume endurance, Hostinger deployment, backup/restore and disaster recovery, penetration testing, operational approval and the production frontend.
+- full requirements/evidence reconciliation;
+- the adversarial Backend Release Readiness Review;
+- authenticated real WhatsApp session validation on the consolidated worker;
+- target-volume performance/endurance evidence;
+- independent security assurance and penetration testing;
+- Hostinger/target-host deployment and network validation;
+- backup, restore and disaster-recovery proof;
+- operational-owner approval;
+- production frontend completion after backend closure.
 
 `make release-gate` must remain closed until the applicable governed evidence has been reviewed and accepted.
 
@@ -106,4 +123,4 @@ npm run build:web
 npm run build:gateway
 ```
 
-Docker Compose assets are under `infrastructure/compose/compose.yaml`. Live Compose, PostgreSQL, Redis, OpenWA and Hostinger validation must be performed in an environment that exposes those dependencies.
+Docker Compose assets are under `infrastructure/compose/compose.yaml`. Live authenticated WhatsApp, target-host, capacity and disaster-recovery validation must be performed in authorised environments that expose those dependencies.

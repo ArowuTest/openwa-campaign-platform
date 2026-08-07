@@ -1,3 +1,4 @@
+import re
 import subprocess
 import sys
 import unittest
@@ -21,7 +22,7 @@ class StackStartupContractTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertIn("PENDING_APPROVAL", result.stdout)
+        self.assertIn("no production exceptions", result.stdout)
 
     def test_first_party_node_images_use_locked_installs(self):
         for app, dockerfile_name in (
@@ -61,6 +62,42 @@ class StackStartupContractTests(unittest.TestCase):
         self.assertIn("PRIVACY_EVIDENCE_KEYS_JSON", export)
         self.assertIn("healthcheck:", export)
         self.assertIn("/readyz", export)
+
+
+    def test_openwa_worker_is_single_governed_transport_service(self):
+        development = (ROOT / "infrastructure/compose/compose.yaml").read_text()
+        production = (ROOT / "infrastructure/compose/compose.production.yaml").read_text()
+        gateway_dockerfile = (ROOT / "infrastructure/docker/openwa-gateway.Dockerfile").read_text()
+        provider = (ROOT / "services/openwa-gateway/src/provider/openwa.provider.ts").read_text()
+        security = (ROOT / "config/node-security-exceptions.json").read_text()
+        verifier = (ROOT / "scripts/verify-node-security.py").read_text()
+
+        for compose in (development, production):
+            self.assertNotIn("  openwa-upstream:", compose)
+            self.assertNotIn("openwa-upstream-data", compose)
+            self.assertNotIn("OPENWA_UPSTREAM_URL", compose)
+            self.assertNotIn("OPENWA_UPSTREAM_API_KEY", compose)
+
+        for forbidden in ("dashboard:ci", "dashboard:build", "/app/dashboard/dist"):
+            self.assertNotIn(forbidden, gateway_dockerfile)
+        self.assertNotIn("OPENWA_UPSTREAM_URL", provider)
+        self.assertNotIn("OPENWA_UPSTREAM_API_KEY", provider)
+        self.assertNotIn("SEC-EXC-001", security)
+        self.assertNotIn("openwa-dashboard", verifier)
+        self.assertNotIn("SEC-EXC-001", verifier)
+
+    def test_openwa_media_fetch_allows_only_the_control_plane_internal_host(self):
+        for relative in (
+            "infrastructure/compose/compose.yaml",
+            "infrastructure/compose/compose.production.yaml",
+        ):
+            compose = (ROOT / relative).read_text()
+            match = re.search(
+                r"(?ms)^  openwa-gateway:\s*$\n(.*?)(?=^  [a-z0-9][a-z0-9_-]*:\s*$|^networks:|\Z)",
+                compose,
+            )
+            self.assertIsNotNone(match, relative)
+            self.assertIn("SSRF_ALLOWED_HOSTS: control-api", match.group(1), relative)
 
 
 if __name__ == "__main__":

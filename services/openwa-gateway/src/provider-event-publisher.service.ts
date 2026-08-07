@@ -49,9 +49,13 @@ export class ProviderEventPublisherService {
     };
   }
 
-  async publish(event: ProviderMessageEvent): Promise<void> {
+  async queue(event: ProviderMessageEvent): Promise<void> {
     validateEvent(event);
     await this.outbox.enqueue(event);
+  }
+
+  async publish(event: ProviderMessageEvent): Promise<void> {
+    await this.queue(event);
     await this.deliver(event);
     await this.outbox.acknowledge(event.eventId);
   }

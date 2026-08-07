@@ -23,3 +23,4 @@ __pycache__/
 artifacts/
 
 *.tsbuildinfo
+services/openwa-gateway/src/retained-openwa/

@@ -79,6 +79,7 @@ services:
       APP_ENV: ${APP_ENV:-development}
       HTTP_ADDR: :8080
       DATABASE_URL: postgres://campaign:${POSTGRES_PASSWORD:-campaign-development-only}@postgres:5432/campaign?sslmode=disable
+      DATABASE_STARTUP_TIMEOUT: ${DATABASE_STARTUP_TIMEOUT:-30s}
       REDIS_ADDR: redis:6379
       REDIS_PASSWORD: ${REDIS_PASSWORD:-campaign-development-only}
       OBJECT_STORE_ROOT: /var/lib/campaign-platform/objects
@@ -125,6 +126,7 @@ services:
       WORKER_HEALTH_ADDR: :8091
       POSTGRES_DRIVER: ${POSTGRES_DRIVER:-postgres}
       DATABASE_URL: postgres://campaign:${POSTGRES_PASSWORD:-campaign-development-only}@postgres:5432/campaign?sslmode=disable
+      DATABASE_STARTUP_TIMEOUT: ${DATABASE_STARTUP_TIMEOUT:-30s}
       WORKER_ID: ${AUDIENCE_WORKER_ID:-audience-worker-01}
       OBJECT_STORE_ROOT: /var/lib/campaign-platform/objects
       MSISDN_ENCRYPTION_KEY_BASE64: ${MSISDN_ENCRYPTION_KEY_BASE64:-}
@@ -172,6 +174,7 @@ services:
       WORKER_HEALTH_ADDR: :8092
       POSTGRES_DRIVER: ${POSTGRES_DRIVER:-postgres}
       DATABASE_URL: postgres://campaign:${POSTGRES_PASSWORD:-campaign-development-only}@postgres:5432/campaign?sslmode=disable
+      DATABASE_STARTUP_TIMEOUT: ${DATABASE_STARTUP_TIMEOUT:-30s}
       WORKER_ID: ${CAMPAIGN_WORKER_ID:-campaign-worker-01}
       MSISDN_ENCRYPTION_KEY_BASE64: ${MSISDN_ENCRYPTION_KEY_BASE64:-}
       MSISDN_LOOKUP_KEY_BASE64: ${MSISDN_LOOKUP_KEY_BASE64:-}
@@ -222,6 +225,7 @@ services:
       - /tmp:size=32m,noexec,nosuid
     environment:
       DATABASE_URL: postgres://campaign:${POSTGRES_PASSWORD:-campaign-development-only}@postgres:5432/campaign?sslmode=disable
+      DATABASE_STARTUP_TIMEOUT: ${DATABASE_STARTUP_TIMEOUT:-30s}
       EXPORT_WORKER_ID: ${EXPORT_WORKER_ID:-export-worker-01}
       EXPORT_POLL_INTERVAL: ${EXPORT_POLL_INTERVAL:-2s}
       EXPORT_EXPIRY_INTERVAL: ${EXPORT_EXPIRY_INTERVAL:-1m}
@@ -254,6 +258,7 @@ services:
       WORKER_HEALTH_ADDR: :8094
       POSTGRES_DRIVER: ${POSTGRES_DRIVER:-postgres}
       DATABASE_URL: postgres://campaign:${POSTGRES_PASSWORD:-campaign-development-only}@postgres:5432/campaign?sslmode=disable
+      DATABASE_STARTUP_TIMEOUT: ${DATABASE_STARTUP_TIMEOUT:-30s}
       WORKER_ID: ${INBOUND_GOVERNANCE_WORKER_ID:-inbound-governance-worker-01}
       INBOUND_CONTENT_KEYS_JSON: ${INBOUND_CONTENT_KEYS_JSON:-}
       INBOUND_CONTENT_ACTIVE_KEY_VERSION: ${INBOUND_CONTENT_ACTIVE_KEY_VERSION:-v1}
@@ -285,6 +290,7 @@ services:
       WORKER_HEALTH_ADDR: :8093
       POSTGRES_DRIVER: ${POSTGRES_DRIVER:-postgres}
       DATABASE_URL: postgres://campaign:${POSTGRES_PASSWORD:-campaign-development-only}@postgres:5432/campaign?sslmode=disable
+      DATABASE_STARTUP_TIMEOUT: ${DATABASE_STARTUP_TIMEOUT:-30s}
       WORKER_ID: ${METRICS_WORKER_ID:-metrics-worker-01}
       DB_MAX_OPEN: ${METRICS_DB_MAX_OPEN:-12}
       DB_MAX_IDLE: ${METRICS_DB_MAX_IDLE:-4}
@@ -319,6 +325,7 @@ services:
       WORKER_HEALTH_ADDR: :8095
       POSTGRES_DRIVER: ${POSTGRES_DRIVER:-postgres}
       DATABASE_URL: postgres://campaign:${POSTGRES_PASSWORD:-campaign-development-only}@postgres:5432/campaign?sslmode=disable
+      DATABASE_STARTUP_TIMEOUT: ${DATABASE_STARTUP_TIMEOUT:-30s}
       WORKER_ID: ${PLATFORM_GOVERNANCE_WORKER_ID:-platform-governance-worker-01}
       DB_MAX_OPEN: ${PLATFORM_GOVERNANCE_DB_MAX_OPEN:-12}
       DB_MAX_IDLE: ${PLATFORM_GOVERNANCE_DB_MAX_IDLE:-4}
@@ -377,37 +384,6 @@ services:
       retries: 5
     networks: [private]
 
-  openwa-upstream:
-    <<: *service-defaults
-    build:
-      context: ../../third_party/openwa/upstream
-      dockerfile: Dockerfile
-    read_only: true
-    shm_size: 1gb
-    tmpfs:
-      - /tmp:size=512m,nosuid
-    environment:
-      NODE_ENV: ${APP_ENV:-development}
-      PORT: 2785
-      API_MASTER_KEY: ${OPENWA_UPSTREAM_API_KEY:-development-openwa-upstream-key-change-me}
-      API_KEY_PEPPER: ${OPENWA_API_KEY_PEPPER:-development-openwa-pepper-change-me-32}
-      ENGINE_TYPE: ${OPENWA_ENGINE_TYPE:-whatsapp-web.js}
-      DATABASE_TYPE: sqlite
-      SESSION_DATA_PATH: /app/data/sessions
-      BAILEYS_AUTH_DIR: /app/data/baileys
-      PUPPETEER_HEADLESS: "true"
-      WEBHOOK_MAX_PAYLOAD_BYTES: ${OPENWA_WEBHOOK_MAX_PAYLOAD_BYTES:-1048576}
-      WEBHOOK_MEDIA_INLINE_MAX_BYTES: "0"
-    volumes:
-      - openwa-upstream-data:/app/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://127.0.0.1:2785/api/health/ready"]
-      interval: 15s
-      timeout: 10s
-      retries: 8
-      start_period: 45s
-    networks: [private, egress]
-
   openwa-gateway:
     <<: *service-defaults
     build:
@@ -428,25 +404,29 @@ services:
       GATEWAY_NODE_VERSION: ${GATEWAY_NODE_VERSION:-1}
       GATEWAY_ADAPTER_VERSION: ${GATEWAY_ADAPTER_VERSION:-0.13.0+platform.1}
       GATEWAY_CAPABILITIES: ${GATEWAY_CAPABILITIES:-SEND_TEXT,SEND_IMAGE,SEND_VIDEO,SEND_DOCUMENT,DELIVERY_EVENTS,READ_EVENTS,INBOUND_MESSAGES}
-      OPENWA_ALLOW_INSECURE_INTERNAL: ${OPENWA_ALLOW_INSECURE_INTERNAL:-true}
-      OPENWA_UPSTREAM_URL: http://openwa-upstream:2785
-      OPENWA_UPSTREAM_API_KEY: ${OPENWA_UPSTREAM_API_KEY:-development-openwa-upstream-key-change-me}
-      OPENWA_WEBHOOK_SECRET: ${OPENWA_WEBHOOK_SECRET:-development-openwa-webhook-secret-change-me-32}
-      OPENWA_WEBHOOK_TARGET_URL: http://openwa-gateway:2785/internal/openwa/events
+      OPENWA_SESSION_REGISTRY_DIR: /data/openwa-session-registry
+      OPENWA_SESSION_DATA_DIR: /app/session-data
+      OPENWA_MAX_CONCURRENT_SESSIONS: ${OPENWA_MAX_CONCURRENT_SESSIONS:-0}
+      OPENWA_RECONNECT_BASE_DELAY_MS: ${OPENWA_RECONNECT_BASE_DELAY_MS:-5000}
+      OPENWA_RECONNECT_MAX_ATTEMPTS: ${OPENWA_RECONNECT_MAX_ATTEMPTS:-}
+      PUPPETEER_HEADLESS: "true"
+      PUPPETEER_EXECUTABLE_PATH: /usr/local/bin/puppeteer-chrome
       GATEWAY_COMMAND_SECRET: ${GATEWAY_COMMAND_SECRET:-development-command-secret-change-me-32}
       MEDIA_DOWNLOAD_BASE_URL: http://control-api:8080/api/v1/internal/media
+      SSRF_ALLOWED_HOSTS: control-api
       MEDIA_DOWNLOAD_SECRET: ${MEDIA_DOWNLOAD_SECRET:-development-media-download-secret-change-me}
       CONTROL_API_CALLBACK_URL: http://control-api:8080/api/v1/internal/gateway/events
       CONTROL_API_INBOUND_URL: http://control-api:8080/api/v1/internal/gateway/inbound
       GATEWAY_SESSION_AUTHORITY_DIR: /data/gateway-session-authority
       GATEWAY_EVENT_OUTBOX_DIR: /data/gateway-event-outbox
       GATEWAY_INBOUND_OUTBOX_DIR: /data/gateway-inbound-outbox
+      GATEWAY_COMMAND_NONCE_DIR: /data/gateway-command-nonces
+      GATEWAY_IDEMPOTENCY_DIR: /data/gateway-idempotency
       GATEWAY_CALLBACK_SECRET: ${GATEWAY_CALLBACK_SECRET:-development-gateway-callback-secret-change-me}
       CALLBACK_TIMEOUT_MS: ${CALLBACK_TIMEOUT_MS:-5000}
     volumes:
       - openwa-gateway-data:/data
-    depends_on:
-      openwa-upstream: { condition: service_healthy }
+      - openwa-session-data:/app/session-data
     healthcheck:
       test:
         - CMD
@@ -490,5 +470,5 @@ volumes:
   redis-data:
   clamav-db:
   object-data:
-  openwa-upstream-data:
   openwa-gateway-data:
+  openwa-session-data:

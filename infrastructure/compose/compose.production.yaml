@@ -23,6 +23,7 @@ x-go-worker-defaults: &go-worker-defaults
   environment: &go-worker-environment
     APP_ENV: production
     POSTGRES_DRIVER: postgres
+    DATABASE_STARTUP_TIMEOUT: ${DATABASE_STARTUP_TIMEOUT:-30s}
     PROFILING_TOKEN_FILE: /run/secrets/profiling_token
   secrets:
     - profiling_token
@@ -38,6 +39,7 @@ services:
       HTTP_ADDR: :8080
       POSTGRES_DRIVER: postgres
       DATABASE_URL_FILE: /run/secrets/control_api_database_url
+      DATABASE_STARTUP_TIMEOUT: ${DATABASE_STARTUP_TIMEOUT:-30s}
       DATABASE_EXPECTED_ROLE: campaign_control_api
       REDIS_ADDR: ${REDIS_ADDR:?REDIS_ADDR is required}
       BOOTSTRAP_ADMIN_EMAIL: ${BOOTSTRAP_ADMIN_EMAIL:?BOOTSTRAP_ADMIN_EMAIL is required}
@@ -257,37 +259,6 @@ services:
       timeout: 5s
       retries: 5
 
-  openwa-upstream:
-    <<: *service-defaults
-    image: ${OPENWA_UPSTREAM_IMAGE:?OPENWA_UPSTREAM_IMAGE must be digest-pinned}
-    shm_size: 1gb
-    tmpfs:
-      - /tmp:size=512m,nosuid
-    environment:
-      NODE_ENV: production
-      PORT: 2785
-      API_MASTER_KEY_FILE: /run/secrets/openwa_upstream_api_key
-      API_KEY_PEPPER_FILE: /run/secrets/openwa_api_key_pepper
-      ENGINE_TYPE: ${OPENWA_ENGINE_TYPE:?OPENWA_ENGINE_TYPE is required}
-      DATABASE_TYPE: sqlite
-      SESSION_DATA_PATH: /app/data/sessions
-      BAILEYS_AUTH_DIR: /app/data/baileys
-      PUPPETEER_HEADLESS: "true"
-      WEBHOOK_MEDIA_INLINE_MAX_BYTES: "0"
-    secrets:
-      - openwa_upstream_api_key
-      - openwa_api_key_pepper
-    configs:
-      - source: openwa_upstream_secret_entrypoint
-        target: /run/configs/openwa-upstream-secret-entrypoint.sh
-        mode: 0555
-    command: ["/bin/sh", "/run/configs/openwa-upstream-secret-entrypoint.sh"]
-    volumes:
-      - openwa-upstream-data:/app/data
-    networks:
-      - private
-      - egress
-
   openwa-gateway:
     <<: *service-defaults
     image: ${OPENWA_GATEWAY_IMAGE:?OPENWA_GATEWAY_IMAGE must be digest-pinned}
@@ -308,10 +279,12 @@ services:
       GATEWAY_CAPABILITIES: ${GATEWAY_CAPABILITIES:?GATEWAY_CAPABILITIES is required}
       GATEWAY_INTERNAL_URL: http://openwa-gateway:2785
       CONTROL_API_INTERNAL_URL: http://control-api:8080
-      OPENWA_UPSTREAM_URL: http://openwa-upstream:2785
-      OPENWA_ALLOW_INSECURE_INTERNAL: "true"
-      OPENWA_UPSTREAM_API_KEY_FILE: /run/secrets/openwa_upstream_api_key
-      OPENWA_WEBHOOK_SECRET_FILE: /run/secrets/openwa_webhook_secret
+      OPENWA_SESSION_REGISTRY_DIR: /data/openwa-session-registry
+      OPENWA_SESSION_DATA_DIR: /app/session-data
+      OPENWA_MAX_CONCURRENT_SESSIONS: ${OPENWA_MAX_CONCURRENT_SESSIONS:?OPENWA_MAX_CONCURRENT_SESSIONS is required}
+      OPENWA_RECONNECT_BASE_DELAY_MS: ${OPENWA_RECONNECT_BASE_DELAY_MS:-5000}
+      PUPPETEER_HEADLESS: "true"
+      PUPPETEER_EXECUTABLE_PATH: /usr/local/bin/puppeteer-chrome
       GATEWAY_COMMAND_SECRET_FILE: /run/secrets/gateway_command_secret
       GATEWAY_COMMAND_SECRET_PREVIOUS_FILE: /run/secrets/gateway_command_secret_previous
       GATEWAY_CALLBACK_SECRET_FILE: /run/secrets/gateway_callback_secret
@@ -320,6 +293,7 @@ services:
       MEDIA_DOWNLOAD_SECRET_FILE: /run/secrets/media_download_secret
       PROFILING_TOKEN_FILE: /run/secrets/profiling_token
       MEDIA_DOWNLOAD_BASE_URL: http://control-api:8080/api/v1/internal/media
+      SSRF_ALLOWED_HOSTS: control-api
       CONTROL_API_CALLBACK_URL: http://control-api:8080/api/v1/internal/gateway/events
       CONTROL_API_INBOUND_URL: http://control-api:8080/api/v1/internal/gateway/inbound
       GATEWAY_SESSION_AUTHORITY_DIR: /data/gateway-session-authority
@@ -328,8 +302,6 @@ services:
       GATEWAY_COMMAND_NONCE_DIR: /data/gateway-command-nonces
       GATEWAY_IDEMPOTENCY_DIR: /data/gateway-idempotency
     secrets:
-      - openwa_upstream_api_key
-      - openwa_webhook_secret
       - gateway_command_secret
       - gateway_command_secret_previous
       - gateway_callback_secret
@@ -339,6 +311,17 @@ services:
       - profiling_token
     volumes:
       - openwa-gateway-data:/data
+      - openwa-session-data:/app/session-data
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "require('http').get('http://127.0.0.1:2785/healthz',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
     networks:
       - private
       - egress
@@ -351,8 +334,8 @@ networks:
     driver: bridge
 
 volumes:
-  openwa-upstream-data:
   openwa-gateway-data:
+  openwa-session-data:
 
 secrets:
   control_api_database_url: { file: "${CONTROL_API_DATABASE_URL_FILE:?required}" }
@@ -379,10 +362,3 @@ secrets:
   profiling_token: { file: "${PROFILING_TOKEN_FILE:?required}" }
   s3_access_key_id: { file: "${S3_ACCESS_KEY_ID_FILE:?required}" }
   s3_secret_access_key: { file: "${S3_SECRET_ACCESS_KEY_FILE:?required}" }
-  openwa_upstream_api_key: { file: "${OPENWA_UPSTREAM_API_KEY_FILE:?required}" }
-  openwa_api_key_pepper: { file: "${OPENWA_API_KEY_PEPPER_FILE:?required}" }
-  openwa_webhook_secret: { file: "${OPENWA_WEBHOOK_SECRET_FILE:?required}" }
-
-configs:
-  openwa_upstream_secret_entrypoint:
-    file: ./openwa-upstream-secret-entrypoint.sh

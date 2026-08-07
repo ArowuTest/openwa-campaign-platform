@@ -20,6 +20,7 @@ type PoolConfig struct {
 	ConnMaxLifetime time.Duration
 	ConnMaxIdleTime time.Duration
 	PingTimeout     time.Duration
+	StartupTimeout  time.Duration
 	Environment     string
 	ServiceName     string
 	ExpectedRole    string
@@ -80,17 +81,86 @@ func Open(ctx context.Context, cfg PoolConfig) (*sql.DB, error) {
 	if pingTimeout <= 0 || pingTimeout > 30*time.Second {
 		pingTimeout = 5 * time.Second
 	}
-	pingCtx, cancel := context.WithTimeout(ctx, pingTimeout)
-	defer cancel()
-	if err := db.PingContext(pingCtx); err != nil {
+	startupTimeout, err := resolveStartupTimeout(cfg.StartupTimeout)
+	if err != nil {
+		db.Close()
+		return nil, err
+	}
+	if err := pingUntilReady(ctx, db, pingTimeout, startupTimeout, 250*time.Millisecond); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("ping database: %w", err)
 	}
-	if err := verifyServiceRole(pingCtx, db, cfg); err != nil {
+	roleCtx, cancel := context.WithTimeout(ctx, pingTimeout)
+	defer cancel()
+	if err := verifyServiceRole(roleCtx, db, cfg); err != nil {
 		db.Close()
 		return nil, err
 	}
 	return db, nil
+}
+
+type contextPinger interface {
+	PingContext(context.Context) error
+}
+
+func resolveStartupTimeout(configured time.Duration) (time.Duration, error) {
+	if configured > 0 {
+		if configured > 5*time.Minute {
+			return 0, errors.New("database startup timeout must not exceed 5 minutes")
+		}
+		return configured, nil
+	}
+	raw := strings.TrimSpace(os.Getenv("DATABASE_STARTUP_TIMEOUT"))
+	if raw == "" {
+		return 30 * time.Second, nil
+	}
+	parsed, err := time.ParseDuration(raw)
+	if err != nil || parsed <= 0 || parsed > 5*time.Minute {
+		return 0, errors.New("DATABASE_STARTUP_TIMEOUT must be a positive duration no greater than 5 minutes")
+	}
+	return parsed, nil
+}
+
+func pingUntilReady(ctx context.Context, pinger contextPinger, attemptTimeout, startupTimeout, retryInterval time.Duration) error {
+	if attemptTimeout <= 0 {
+		attemptTimeout = 5 * time.Second
+	}
+	if startupTimeout <= 0 {
+		startupTimeout = 30 * time.Second
+	}
+	if retryInterval <= 0 {
+		retryInterval = 250 * time.Millisecond
+	}
+	startupCtx, cancel := context.WithTimeout(ctx, startupTimeout)
+	defer cancel()
+	attempts := 0
+	var lastErr error
+	for {
+		attempts++
+		attemptCtx, attemptCancel := context.WithTimeout(startupCtx, attemptTimeout)
+		err := pinger.PingContext(attemptCtx)
+		attemptCancel()
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if startupCtx.Err() != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return fmt.Errorf("database not ready after %d attempts within %s: %w", attempts, startupTimeout, lastErr)
+		}
+		timer := time.NewTimer(retryInterval)
+		select {
+		case <-startupCtx.Done():
+			timer.Stop()
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return fmt.Errorf("database not ready after %d attempts within %s: %w", attempts, startupTimeout, lastErr)
+		case <-timer.C:
+		}
+	}
 }
 
 func ValidateDeploymentDSN(environment, dsn string) error {

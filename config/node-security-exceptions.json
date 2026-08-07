@@ -1,24 +1,4 @@
 {
   "schemaVersion": 1,
-  "exceptions": [
-    {
-      "id": "SEC-EXC-001",
-      "advisory": "GHSA-qwww-vcr4-c8h2",
-      "package": "react-router",
-      "component": "third_party/openwa/upstream/dashboard",
-      "severity": "high",
-      "status": "PENDING_APPROVAL",
-      "requiredVersion": "7.18.2",
-      "reviewAfter": "2026-08-13",
-      "expiresOn": "2026-09-06",
-      "rationale": "The advisory applies to React Router RSC mode. The OpenWA dashboard is a Vite-built browser-only SPA using BrowserRouter and has no React Server Components, server actions, or server request handler.",
-      "compensatingControls": [
-        "Exact react-router-dom version pin and committed lockfile",
-        "Automated scan rejects RSC and server-action APIs",
-        "Dashboard is served as static client assets",
-        "Weekly package advisory review until a patched release is published"
-      ],
-      "approvalRequiredFrom": "Independent security reviewer"
-    }
-  ]
+  "exceptions": []
 }

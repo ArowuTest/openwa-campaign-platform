@@ -12,7 +12,6 @@ import { ProviderEventPublisherService } from './provider-event-publisher.servic
 import { SessionController } from './session.controller';
 import { GatewayIdentityService } from './gateway-identity.service';
 import { CapabilitiesController } from './capabilities.controller';
-import { OpenWAWebhookController } from './openwa-webhook.controller';
 import { ProviderEventOutboxService } from './provider-event-outbox.service';
 import { SessionAuthorityService } from './session-authority.service';
 import { InboundMessageOutboxService } from './inbound-message-outbox.service';
@@ -23,9 +22,10 @@ import { GatewayObservabilityService } from './observability.service';
 import { ObservabilityMiddleware } from './observability.middleware';
 import { MetricsController } from './metrics.controller';
 import { RuntimeRegistrationService } from './runtime-registration.service';
+import { EmbeddedOpenWAEngineService } from './provider/embedded-openwa-engine.service';
 
 @Module({
-  controllers: [HealthController, SendController, SessionController, CapabilitiesController, OpenWAWebhookController, IdempotencyController, MetricsController],
+  controllers: [HealthController, SendController, SessionController, CapabilitiesController, IdempotencyController, MetricsController],
   providers: [
     GatewayIdentityService,
     GatewayObservabilityService,
@@ -33,6 +33,7 @@ import { RuntimeRegistrationService } from './runtime-registration.service';
     CommandReplayService,
     MockMessagingProvider,
     OpenWAProvider,
+    EmbeddedOpenWAEngineService,
     IdempotencyService,
     SessionPipelineService,
     GatewayMessagingService,
@@ -49,8 +50,7 @@ export class AppModule implements NestModule {
     consumer.apply(ObservabilityMiddleware).forRoutes("*");
     consumer.apply(InternalAuthMiddleware).exclude(
       { path: 'healthz', method: RequestMethod.GET },
-      { path: 'metrics', method: RequestMethod.GET },
-      { path: 'internal/openwa/events', method: RequestMethod.POST }
+      { path: 'metrics', method: RequestMethod.GET }
     ).forRoutes('*');
   }
 }

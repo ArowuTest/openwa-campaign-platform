@@ -6,11 +6,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // Resolve loads NAME from NAME_FILE for the supplied names. It rejects ambiguous
-// dual configuration, non-absolute secret paths in deployed environments, files
-// with group/other permission bits, empty files, and oversized values.
+// dual configuration, non-absolute deployed paths, unsafe ordinary-file permissions,
+// writable runtime-secret mounts, empty files, and oversized values.
 func Resolve(environment string, names ...string) error {
 	deployed := environment == "staging" || environment == "production"
 	for _, name := range names {
@@ -41,7 +42,7 @@ func Resolve(environment string, names ...string) error {
 		if info.Size() > 1<<20 {
 			return fmt.Errorf("%s exceeds the 1 MiB limit", fileName)
 		}
-		if deployed && info.Mode().Perm()&0o077 != 0 {
+		if deployed && info.Mode().Perm()&0o077 != 0 && !readOnlyRuntimeSecret(path) {
 			return fmt.Errorf("%s must not be group or world accessible", fileName)
 		}
 		raw, err := os.ReadFile(path)
@@ -60,4 +61,17 @@ func Resolve(environment string, names ...string) error {
 		}
 	}
 	return nil
+}
+
+func readOnlyRuntimeSecret(path string) bool {
+	clean := filepath.Clean(path)
+	if filepath.Dir(clean) != "/run/secrets" {
+		return false
+	}
+	file, err := os.OpenFile(clean, os.O_WRONLY, 0)
+	if err == nil {
+		_ = file.Close()
+		return false
+	}
+	return errors.Is(err, os.ErrPermission) || errors.Is(err, syscall.EROFS)
 }

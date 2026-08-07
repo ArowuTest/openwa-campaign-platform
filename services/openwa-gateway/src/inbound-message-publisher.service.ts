@@ -19,9 +19,13 @@ export type InboundMessageEvent = {
 export class InboundMessagePublisherService {
   constructor(private readonly outbox: InboundMessageOutboxService, private readonly observability: GatewayObservabilityService) { this.outbox.setSender(event => this.deliver(event)); }
 
-  async publish(event: InboundMessageEvent): Promise<void> {
+  async queue(event: InboundMessageEvent): Promise<void> {
     validateInbound(event);
     await this.outbox.enqueue(event);
+  }
+
+  async publish(event: InboundMessageEvent): Promise<void> {
+    await this.queue(event);
     await this.deliver(event);
     await this.outbox.acknowledge(event.eventId);
   }

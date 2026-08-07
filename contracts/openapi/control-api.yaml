@@ -2560,6 +2560,11 @@ paths:
     post:
       operationId: createPlatformConfiguration
       summary: Create a draft governed platform configuration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PlatformConfigurationCreateRequest' }
       responses:
         '201': { description: Draft configuration created }
   /admin/configurations/{id}/submit:
@@ -3113,6 +3118,32 @@ components:
         nextReviewAt: { type: string, format: date-time }
         expectedVersion: { type: integer, format: int64, minimum: 1 }
         reason: { type: string, minLength: 5 }
+    PlatformConfigurationCreateRequest:
+      type: object
+      additionalProperties: false
+      required: [key, scopeType, value, reason]
+      properties:
+        key: { type: string, minLength: 3, maxLength: 120, description: Configuration key. SENDER.TRANSPORT_RECOVERY uses SenderTransportRecoveryConfiguration. }
+        scopeType: { type: string, enum: [PLATFORM, ENVIRONMENT, ORGANISATION, CAMPAIGN, PROVIDER, GATEWAY_POOL, SENDER_POOL, SENDER_SESSION] }
+        scopeId: { type: string, maxLength: 200, description: Required for non-PLATFORM scopes; SENDER_SESSION uses the governed sender-session ID. }
+        value: { type: object, additionalProperties: true, description: Configuration-key-specific JSON. For SENDER.TRANSPORT_RECOVERY use SenderTransportRecoveryConfiguration. }
+        effectiveFrom: { type: string, format: date-time }
+        effectiveTo: { type: string, format: date-time }
+        reason: { type: string, minLength: 1 }
+    SenderTransportRecoveryConfiguration:
+      type: object
+      additionalProperties: false
+      description: >
+        Governed value for SENDER.TRANSPORT_RECOVERY. The most-specific approved configuration is frozen at sender-session start. If no governed value exists, the worker uses validated deployment/bootstrap recovery settings.
+      required: [reconnectMode, reconnectMaxAttempts, reconnectBaseDelayMs, reconnectStabilityResetMs, watchdogProbeTimeoutMs, watchdogFailureThreshold, engineTeardownTimeoutMs]
+      properties:
+        reconnectMode: { type: string, enum: [UNBOUNDED, DISABLED, BOUNDED] }
+        reconnectMaxAttempts: { type: integer, minimum: 0, maximum: 20, description: BOUNDED requires 1-20; UNBOUNDED and DISABLED require 0. }
+        reconnectBaseDelayMs: { type: integer, format: int64, minimum: 1000, maximum: 300000 }
+        reconnectStabilityResetMs: { type: integer, format: int64, minimum: 60000, maximum: 3600000 }
+        watchdogProbeTimeoutMs: { type: integer, format: int64, minimum: 100, maximum: 60000 }
+        watchdogFailureThreshold: { type: integer, minimum: 1, maximum: 10 }
+        engineTeardownTimeoutMs: { type: integer, format: int64, minimum: 1000, maximum: 120000 }
     SenderSessionRegistrationRequest:
       type: object
       additionalProperties: false

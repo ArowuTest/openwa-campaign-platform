@@ -154,7 +154,7 @@ func buildMemoryRuntime(cfg config.Config, protector *sharedcrypto.MSISDNProtect
 	materialisationService := &materialisation.MaterialisationService{Repository: materialisation.NewMemoryMaterialisationRepository()}
 	metrics := delivery.NewMetricsService(delivery.NewMemoryMetricsRepository())
 	senderGovernance := &sender.GovernanceService{Store: senderStore, HealthPolicies: &sender.PlatformHealthPolicyResolver{Configurations: configurations}}
-	senderLifecycle := &sender.SessionLifecycleService{Governance: senderGovernance, Gateway: &sender.HTTPSessionGateway{CommandSecret: cfg.GatewayCommandSecret}, Proxies: senderProxies, ActiveWork: sender.StaticActiveSessionWorkChecker(false), Maintenance: maintenance}
+	senderLifecycle := &sender.SessionLifecycleService{Governance: senderGovernance, Gateway: &sender.HTTPSessionGateway{CommandSecret: cfg.GatewayCommandSecret}, Proxies: senderProxies, ActiveWork: sender.StaticActiveSessionWorkChecker(false), TransportRuntime: &sender.PlatformTransportRuntimeResolver{Configurations: configurations}, Maintenance: maintenance}
 	pacingPolicies := &sender.PacingAdministration{Store: sender.NewMemoryPacingStore()}
 	executionStore := execution.NewMemoryStore()
 	executionCoordinator := &execution.Coordinator{Campaigns: campaigns, Store: executionStore, SafetyMarginPercent: 15, Maintenance: maintenance}
@@ -307,7 +307,7 @@ func buildPostgreSQLRuntime(ctx context.Context, cfg config.Config, protector *s
 	materialisationService := &materialisation.MaterialisationService{Repository: &materialisation.PostgreSQLRepository{DB: db}}
 	metrics := delivery.NewMetricsService(&delivery.PostgreSQLMetricsRepository{DB: db})
 	senderGovernance := &sender.GovernanceService{Store: senderStore, HealthPolicies: &sender.PlatformHealthPolicyResolver{Configurations: configurations}, HealthSignals: &sender.PostgreSQLHealthSignalSource{DB: db}}
-	senderLifecycle := &sender.SessionLifecycleService{Governance: senderGovernance, Gateway: &sender.HTTPSessionGateway{CommandSecret: cfg.GatewayCommandSecret}, Proxies: senderProxies, ActiveWork: sender.PostgreSQLActiveSessionWorkChecker{DB: db}, Maintenance: maintenance}
+	senderLifecycle := &sender.SessionLifecycleService{Governance: senderGovernance, Gateway: &sender.HTTPSessionGateway{CommandSecret: cfg.GatewayCommandSecret}, Proxies: senderProxies, ActiveWork: sender.PostgreSQLActiveSessionWorkChecker{DB: db}, TransportRuntime: &sender.PlatformTransportRuntimeResolver{Configurations: configurations}, Maintenance: maintenance}
 	pacingPolicies := &sender.PacingAdministration{Store: &postgresrepo.PacingPolicyRepository{DB: db}}
 	executionStore := &execution.PostgreSQLStore{DB: db}
 	executionCoordinator := &execution.Coordinator{Campaigns: campaigns, Store: executionStore, SafetyMarginPercent: 15, Maintenance: maintenance}

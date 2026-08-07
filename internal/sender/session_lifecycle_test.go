@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 type fakeSessionGateway struct {
-	calls []string
-	fail  string
+	calls   []string
+	fail    string
+	runtime *SessionTransportRuntimeConfiguration
 }
 
 func (f *fakeSessionGateway) hit(name string) (SessionGatewayResult, error) {
@@ -21,7 +23,8 @@ func (f *fakeSessionGateway) hit(name string) (SessionGatewayResult, error) {
 func (f *fakeSessionGateway) Create(context.Context, Node, GovernedSession) (SessionGatewayResult, error) {
 	return f.hit("create")
 }
-func (f *fakeSessionGateway) Start(context.Context, Node, GovernedSession, *SessionProxyConfiguration) (SessionGatewayResult, error) {
+func (f *fakeSessionGateway) Start(_ context.Context, _ Node, _ GovernedSession, _ *SessionProxyConfiguration, runtime *SessionTransportRuntimeConfiguration) (SessionGatewayResult, error) {
+	f.runtime = runtime
 	return f.hit("start")
 }
 func (f *fakeSessionGateway) Stop(context.Context, Node, GovernedSession) (SessionGatewayResult, error) {
@@ -118,5 +121,39 @@ func TestLifecycleRejectsInvalidTransitionBeforeGatewaySideEffect(t *testing.T) 
 	}
 	if len(gateway.calls) != 0 {
 		t.Fatalf("gateway was called before transition validation: %v", gateway.calls)
+	}
+}
+
+type fixedTransportRuntimeResolver struct {
+	policy *SessionTransportRuntimeConfiguration
+	err    error
+}
+
+func (f fixedTransportRuntimeResolver) ResolveTransportRuntime(context.Context, GovernedSession, time.Time) (*SessionTransportRuntimeConfiguration, error) {
+	return f.policy, f.err
+}
+
+func TestLifecycleStartResolvesGovernedTransportRuntimeAtStartBoundary(t *testing.T) {
+	svc, session := lifecycleFixture(t)
+	gateway := &fakeSessionGateway{}
+	policy := &SessionTransportRuntimeConfiguration{
+		ReconnectMode: ReconnectBounded, ReconnectMaxAttempts: 5, ReconnectBaseDelayMs: 6000,
+		ReconnectStabilityResetMs: 300000, WatchdogProbeTimeoutMs: 12000, WatchdogFailureThreshold: 2,
+		EngineTeardownTimeoutMs: 30000, Source: "GOVERNED_CONFIGURATION", ConfigurationID: "config-1",
+		ScopeType: "SENDER_SESSION", ScopeID: session.ID, Version: 3,
+	}
+	svc.Gateway = gateway
+	svc.TransportRuntime = fixedTransportRuntimeResolver{policy: policy}
+	var err error
+	session, _, err = svc.Create(context.Background(), session.ID, session.Version, "actor", "create gateway session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = svc.Start(context.Background(), session.ID, session.Version, "actor", "start governed session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gateway.runtime == nil || gateway.runtime.ConfigurationID != "config-1" || gateway.runtime.ReconnectMaxAttempts != 5 {
+		t.Fatalf("governed runtime was not propagated: %+v", gateway.runtime)
 	}
 }

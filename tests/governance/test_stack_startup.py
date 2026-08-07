@@ -96,6 +96,30 @@ class StackStartupContractTests(unittest.TestCase):
         self.assertNotIn("openwa-dashboard", verifier)
         self.assertNotIn("SEC-EXC-001", verifier)
 
+    def test_openwa_recovery_bootstrap_is_configurable_in_both_compose_profiles(self):
+        required = (
+            "OPENWA_RECONNECT_BASE_DELAY_MS",
+            "OPENWA_RECONNECT_MAX_ATTEMPTS",
+            "OPENWA_RECONNECT_STABILITY_RESET_MS",
+            "OPENWA_WATCHDOG_INTERVAL_MS",
+            "OPENWA_WATCHDOG_PROBE_TIMEOUT_MS",
+            "OPENWA_WATCHDOG_FAILURE_THRESHOLD",
+            "OPENWA_ENGINE_TEARDOWN_TIMEOUT_MS",
+        )
+        for relative in (
+            "infrastructure/compose/compose.yaml",
+            "infrastructure/compose/compose.production.yaml",
+        ):
+            compose = (ROOT / relative).read_text()
+            gateway = compose.split("  openwa-gateway:", 1)[1]
+            for name in required:
+                self.assertIn(name, gateway, f"{name} missing from {relative}")
+            self.assertIn(
+                "OPENWA_RECONNECT_BASE_DELAY_MS: ${OPENWA_RECONNECT_BASE_DELAY_MS:-}",
+                gateway,
+                f"Baileys native reconnect base must remain the fallback in {relative}",
+            )
+
     def test_openwa_media_fetch_allows_only_the_control_plane_internal_host(self):
         for relative in (
             "infrastructure/compose/compose.yaml",

@@ -32,10 +32,16 @@ type HTTPSessionGateway struct {
 func (g *HTTPSessionGateway) Create(ctx context.Context, n Node, s GovernedSession) (SessionGatewayResult, error) {
 	return g.request(ctx, n, http.MethodPost, "/v1/sessions", map[string]any{"name": s.ID})
 }
-func (g *HTTPSessionGateway) Start(ctx context.Context, n Node, s GovernedSession, proxy *SessionProxyConfiguration) (SessionGatewayResult, error) {
-	var payload any
+func (g *HTTPSessionGateway) Start(ctx context.Context, n Node, s GovernedSession, proxy *SessionProxyConfiguration, runtime *SessionTransportRuntimeConfiguration) (SessionGatewayResult, error) {
+	payload := map[string]any{}
 	if proxy != nil {
-		payload = map[string]any{"proxy": map[string]any{"url": proxy.URL, "type": string(proxy.Type)}}
+		payload["proxy"] = map[string]any{"url": proxy.URL, "type": string(proxy.Type)}
+	}
+	if runtime != nil {
+		payload["runtime"] = runtime
+	}
+	if len(payload) == 0 {
+		return g.request(ctx, n, http.MethodPost, "/v1/sessions/"+url.PathEscape(s.ID)+"/start", nil)
 	}
 	return g.request(ctx, n, http.MethodPost, "/v1/sessions/"+url.PathEscape(s.ID)+"/start", payload)
 }

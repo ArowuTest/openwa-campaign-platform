@@ -18,7 +18,7 @@ type SessionGatewayResult struct {
 
 type SessionGateway interface {
 	Create(context.Context, Node, GovernedSession) (SessionGatewayResult, error)
-	Start(context.Context, Node, GovernedSession, *SessionProxyConfiguration) (SessionGatewayResult, error)
+	Start(context.Context, Node, GovernedSession, *SessionProxyConfiguration, *SessionTransportRuntimeConfiguration) (SessionGatewayResult, error)
 	Stop(context.Context, Node, GovernedSession) (SessionGatewayResult, error)
 	Logout(context.Context, Node, GovernedSession) (SessionGatewayResult, error)
 	Delete(context.Context, Node, GovernedSession) error
@@ -33,15 +33,20 @@ type ActiveSessionWorkChecker interface {
 	HasActiveSessionWork(context.Context, string) (bool, error)
 }
 
+type TransportRuntimeResolver interface {
+	ResolveTransportRuntime(context.Context, GovernedSession, time.Time) (*SessionTransportRuntimeConfiguration, error)
+}
+
 type SessionLifecycleService struct {
 	Governance *GovernanceService
 	Gateway    SessionGateway
 	Proxies    interface {
 		Resolve(context.Context, string) (*SessionProxyConfiguration, error)
 	}
-	ActiveWork  ActiveSessionWorkChecker
-	Maintenance *platformpolicy.MaintenanceAdministration
-	Clock       func() time.Time
+	ActiveWork       ActiveSessionWorkChecker
+	TransportRuntime TransportRuntimeResolver
+	Maintenance      *platformpolicy.MaintenanceAdministration
+	Clock            func() time.Time
 }
 
 func (s *SessionLifecycleService) now() time.Time {
@@ -169,7 +174,14 @@ func (s *SessionLifecycleService) Start(ctx context.Context, id string, expected
 			return GovernedSession{}, SessionGatewayResult{}, fmt.Errorf("resolve governed session proxy: %w", err)
 		}
 	}
-	result, err := s.Gateway.Start(ctx, node, session, proxy)
+	var runtime *SessionTransportRuntimeConfiguration
+	if s.TransportRuntime != nil {
+		runtime, err = s.TransportRuntime.ResolveTransportRuntime(ctx, session, s.now())
+		if err != nil {
+			return GovernedSession{}, SessionGatewayResult{}, fmt.Errorf("resolve governed session transport runtime: %w", err)
+		}
+	}
+	result, err := s.Gateway.Start(ctx, node, session, proxy, runtime)
 	if err != nil {
 		return GovernedSession{}, SessionGatewayResult{}, err
 	}

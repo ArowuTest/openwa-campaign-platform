@@ -152,3 +152,27 @@ func TestMaintenanceDoesNotAcceptSenderSessionScope(t *testing.T) {
 		t.Fatalf("sender-session maintenance scope should remain invalid, got %v", err)
 	}
 }
+
+func TestValidateResolvedChecksumAcceptsEquivalentJSONRepresentation(t *testing.T) {
+	admin := &ConfigurationAdministration{Store: NewMemoryStore()}
+	value, err := admin.Create(context.Background(), Configuration{Key: "TEST.JSON_INTEGRITY", ScopeType: ScopePlatform, Value: json.RawMessage(`{"alpha":1,"beta":2}`)}, "maker", "create integrity fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	value.Value = json.RawMessage("{ \"beta\": 2, \"alpha\": 1 }")
+	if err := admin.ValidateResolvedChecksum(value); err != nil {
+		t.Fatalf("equivalent JSON representation rejected: %v", err)
+	}
+}
+
+func TestValidateResolvedChecksumRejectsSemanticChange(t *testing.T) {
+	admin := &ConfigurationAdministration{Store: NewMemoryStore()}
+	value, err := admin.Create(context.Background(), Configuration{Key: "TEST.JSON_INTEGRITY", ScopeType: ScopePlatform, Value: json.RawMessage(`{"alpha":1,"beta":2}`)}, "maker", "create integrity fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	value.Value = json.RawMessage(`{"alpha":1,"beta":3}`)
+	if err := admin.ValidateResolvedChecksum(value); err == nil {
+		t.Fatal("semantic configuration change passed checksum validation")
+	}
+}

@@ -35,6 +35,7 @@ export type SessionHealth = {
   status: 'READY' | 'PAIRING' | 'DISCONNECTED' | 'PAUSED' | 'RESTRICTED' | 'UNKNOWN';
   checkedAt: string;
   detail?: string;
+  runtimeConfiguration?: SessionTransportRuntimeConfiguration;
 };
 
 export type SessionProxyConfiguration = {
@@ -42,8 +43,24 @@ export type SessionProxyConfiguration = {
   type: 'http' | 'https' | 'socks4' | 'socks5';
 };
 
+export type SessionTransportRuntimeConfiguration = {
+  reconnectMode: 'UNBOUNDED' | 'DISABLED' | 'BOUNDED';
+  reconnectMaxAttempts: number;
+  reconnectBaseDelayMs: number;
+  reconnectStabilityResetMs: number;
+  watchdogProbeTimeoutMs: number;
+  watchdogFailureThreshold: number;
+  engineTeardownTimeoutMs: number;
+  source: 'GOVERNED_CONFIGURATION' | 'DEPLOYMENT_BOOTSTRAP';
+  configurationId?: string;
+  scopeType?: 'PLATFORM' | 'GATEWAY_POOL' | 'SENDER_POOL' | 'SENDER_SESSION';
+  scopeId?: string;
+  version?: number;
+};
+
 export type SessionStartOptions = {
   proxy?: SessionProxyConfiguration;
+  runtime?: SessionTransportRuntimeConfiguration;
 };
 
 export type SessionRecord = {

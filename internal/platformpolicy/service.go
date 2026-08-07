@@ -508,11 +508,11 @@ func (a *MaintenanceAdministration) Events(ctx context.Context, id string, limit
 }
 
 func (a *ConfigurationAdministration) ValidateResolvedChecksum(value Configuration) error {
-	canonical, checksum, err := canonicalJSON(value.Value)
+	_, checksum, err := canonicalJSON(value.Value)
 	if err != nil {
 		return err
 	}
-	if checksum != value.ValueChecksum || string(canonical) != string(value.Value) {
+	if checksum != value.ValueChecksum {
 		return fmt.Errorf("configuration checksum mismatch: %w", ErrInvalid)
 	}
 	return nil

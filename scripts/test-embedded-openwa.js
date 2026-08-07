@@ -68,6 +68,7 @@ class FakeEngine {
   }
   triggerAck(messageId, status) { this.callbacks.onMessageAck?.(messageId, status); }
   triggerInbound(message) { this.callbacks.onMessage?.(message); }
+  triggerDisconnected(reason = 'transport lost') { this.status = 'disconnected'; this.callbacks.onDisconnected?.(reason); }
 }
 function loadModule(relativePath, overrides = {}) {
   const filename = path.join(process.cwd(), relativePath);
@@ -139,16 +140,32 @@ async function testLifecycleAndEvents() {
   const created = await service.createSession('session-1');
   assert.equal(created.status, 'disconnected');
   const proxy = { url: 'socks5://proxy-user:proxy-secret@proxy.example:1080', type: 'socks5' };
-  const started = await service.startSession('session-1', { proxy });
+  const runtime = {
+    reconnectMode: 'BOUNDED', reconnectMaxAttempts: 4, reconnectBaseDelayMs: 7000,
+    reconnectStabilityResetMs: 240000, watchdogProbeTimeoutMs: 9000, watchdogFailureThreshold: 3,
+    engineTeardownTimeoutMs: 45000, source: 'GOVERNED_CONFIGURATION', configurationId: 'config-1',
+    scopeType: 'SENDER_SESSION', scopeId: 'session-1', version: 7,
+  };
+  const started = await service.startSession('session-1', { proxy, runtime });
   assert.equal(started.status, 'initializing');
   const engine = fakeEngines.at(-1);
   assert(engine, 'start must instantiate an engine');
   assert.equal(engine.config.proxyUrl, proxy.url);
   assert.equal(engine.config.proxyType, proxy.type);
+  assert.equal(engine.config.reconnectMode, 'BOUNDED', 'governed reconnect mode must reach the retained Baileys adapter');
+  assert.equal(engine.config.reconnectMaxAttempts, 4, 'governed reconnect budget must reach the retained Baileys adapter');
+  assert.equal(engine.config.reconnectBaseDelayMs, 7000, 'governed reconnect base delay must reach the retained Baileys adapter');
+  assert.equal(engine.config.reconnectStabilityResetMs, 240000, 'governed stability reset must reach the retained Baileys adapter');
   const registryFiles = await fs.readdir(process.env.OPENWA_SESSION_REGISTRY_DIR);
   const registryText = (await Promise.all(registryFiles.map(file => fs.readFile(path.join(process.env.OPENWA_SESSION_REGISTRY_DIR, file), 'utf8')))).join('\n');
   assert.equal(registryText.includes('proxy-secret'), false, 'proxy credentials must never persist in the worker session registry');
   assert.equal(registryText.includes('proxy.example'), false, 'proxy endpoint must never persist in the worker session registry');
+  assert.equal(registryText.includes('config-1'), false, 'governed recovery authority must not persist in the worker session registry');
+  const governedHealth = await service.health('session-1');
+  assert.equal(governedHealth.runtimeConfiguration?.source, 'GOVERNED_CONFIGURATION');
+  assert.equal(governedHealth.runtimeConfiguration?.configurationId, 'config-1');
+  assert.equal(governedHealth.runtimeConfiguration?.watchdogFailureThreshold, 3);
+  await assert.rejects(() => service.startSession('session-1', { proxy, runtime: { ...runtime, reconnectBaseDelayMs: 8000 } }), ConflictException);
   assert.equal(engine.callbacks.claimStuckAuthRecovery?.(), true, 'first stuck-auth recovery claim must be accepted');
   assert.equal(engine.callbacks.claimStuckAuthRecovery?.(), false, 'stuck-auth recovery must be one-shot per start episode');
 
@@ -190,7 +207,8 @@ async function testLifecycleAndEvents() {
   assert.equal(engine.calls.includes('disconnect'), true);
 
   await service.createSession('session-3');
-  await service.startSession('session-3', { proxy });
+  const runtime3 = { ...runtime, configurationId: 'config-3', scopeId: 'session-3' };
+  await service.startSession('session-3', { proxy, runtime: runtime3 });
   const logoutProxyEngine = fakeEngines.at(-1);
   await service.logoutSession('session-3');
   assert.equal(logoutProxyEngine.calls.includes('logout'), true);
@@ -198,6 +216,7 @@ async function testLifecycleAndEvents() {
   const afterLogoutEngine = fakeEngines.at(-1);
   assert.equal(afterLogoutEngine.config.proxyUrl, undefined, 'logout must clear in-memory proxy authority before a later start');
   assert.equal(afterLogoutEngine.config.proxyType, undefined, 'logout must not retain proxy type after control-plane authority can change');
+  assert.equal((await service.health('session-3')).runtimeConfiguration?.source, 'DEPLOYMENT_BOOTSTRAP', 'logout must clear governed recovery authority before a later start');
   await service.deleteSession('session-3');
 
   const serviceAfterRestart = new EmbeddedOpenWAEngineService(identity, publisher, inbound, observability);
@@ -210,6 +229,7 @@ async function testLifecycleAndEvents() {
   const restartedEngine = fakeEngines.at(-1);
   assert.equal(restartedEngine.config.proxyUrl, undefined, 'proxy credentials must be supplied again by the control plane after worker restart');
   assert.equal(restartedEngine.config.proxyType, undefined, 'proxy type must not survive through the persistent session registry');
+  assert.equal((await serviceAfterRestart.health('session-1')).runtimeConfiguration?.source, 'DEPLOYMENT_BOOTSTRAP', 'governed recovery authority must be supplied again after worker restart');
   assert.equal(restartedEngine.callbacks.claimStuckAuthRecovery?.(), true, 'explicit restart must re-arm stuck-auth recovery');
   await serviceAfterRestart.logoutSession('session-1');
   assert.equal(restartedEngine.calls.includes('logout'), true);
@@ -220,6 +240,67 @@ async function testLifecycleAndEvents() {
   await fs.rm(root, { recursive: true, force: true });
 }
 
+async function testExplicitRestartUsesCurrentProxyConfiguration() {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'embedded-openwa-proxy-reset-'));
+  process.env.OPENWA_SESSION_REGISTRY_DIR = path.join(root, 'registry');
+  process.env.OPENWA_SESSION_DATA_DIR = path.join(root, 'auth');
+  process.env.OPENWA_RECONNECT_BASE_DELAY_MS = '5000';
+  fakeEngines.length = 0;
+  const identity = { engine: 'WHATSAPP_WEB_JS', gatewayPoolId: 'gateway-1' };
+  const publisher = { create: input => ({ schemaVersion: '1.0', ...input }), queue: async () => {} };
+  const inbound = { queue: async () => {} };
+  const observability = { increment() {}, gauge() {}, observe() {} };
+  const { EmbeddedOpenWAEngineService } = serviceModule();
+  const service = new EmbeddedOpenWAEngineService(identity, publisher, inbound, observability);
+  await service.onModuleInit();
+  await service.createSession('proxy-reset-session');
+  await service.startSession('proxy-reset-session', { proxy: { url: 'socks5://proxy.example:1080', type: 'socks5' } });
+  const first = fakeEngines.at(-1);
+  assert.equal(first.config.proxy?.url, 'socks5://proxy.example:1080', 'first engine must prove the proxy was active');
+  first.triggerDisconnected();
+  assert.equal((await service.health('proxy-reset-session')).status, 'DISCONNECTED', 'disconnect must detach the old engine before restart');
+  await service.startSession('proxy-reset-session');
+  const second = fakeEngines.at(-1);
+  assert.notEqual(second, first, 'explicit start after disconnect must create a fresh engine');
+  assert.equal(second.config.proxy, undefined, 'explicit start without proxy must not reuse the previous proxy');
+  await service.stopSession('proxy-reset-session');
+  await service.deleteSession('proxy-reset-session');
+  await service.onModuleDestroy();
+  delete process.env.OPENWA_RECONNECT_BASE_DELAY_MS;
+  await fs.rm(root, { recursive: true, force: true });
+}
+
+async function testEngineSpecificDeploymentRecoveryDefaults() {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'embedded-openwa-engine-defaults-'));
+  process.env.OPENWA_SESSION_REGISTRY_DIR = path.join(root, 'registry');
+  process.env.OPENWA_SESSION_DATA_DIR = path.join(root, 'auth');
+  delete process.env.OPENWA_RECONNECT_BASE_DELAY_MS;
+  fakeEngines.length = 0;
+  const publisher = { create: input => ({ schemaVersion: '1.0', ...input }), queue: async () => {} };
+  const inbound = { queue: async () => {} };
+  const observability = { increment() {}, gauge() {}, observe() {} };
+  const { EmbeddedOpenWAEngineService } = serviceModule();
+
+  const baileys = new EmbeddedOpenWAEngineService({ engine: 'BAILEYS', gatewayPoolId: 'gateway-1' }, publisher, inbound, observability);
+  await baileys.onModuleInit();
+  await baileys.createSession('baileys-defaults');
+  await baileys.startSession('baileys-defaults');
+  assert.equal((await baileys.health('baileys-defaults')).runtimeConfiguration?.reconnectBaseDelayMs, 1000, 'Baileys deployment evidence must match its native one-second reconnect base');
+  assert.equal(fakeEngines.at(-1).config.reconnectBaseDelayMs, undefined, 'Baileys native reconnect base must remain unset when deployment does not override it');
+  await baileys.stopSession('baileys-defaults');
+  await baileys.deleteSession('baileys-defaults');
+  await baileys.onModuleDestroy();
+
+  const wwjs = new EmbeddedOpenWAEngineService({ engine: 'WHATSAPP_WEB_JS', gatewayPoolId: 'gateway-1' }, publisher, inbound, observability);
+  await wwjs.onModuleInit();
+  await wwjs.createSession('wwjs-defaults');
+  await wwjs.startSession('wwjs-defaults');
+  assert.equal((await wwjs.health('wwjs-defaults')).runtimeConfiguration?.reconnectBaseDelayMs, 5000, 'whatsapp-web.js deployment evidence must retain the five-second worker fallback');
+  await wwjs.stopSession('wwjs-defaults');
+  await wwjs.deleteSession('wwjs-defaults');
+  await wwjs.onModuleDestroy();
+  await fs.rm(root, { recursive: true, force: true });
+}
 async function testWatchdogRecoversSilentDeadReadySession() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'embedded-openwa-watchdog-'));
   process.env.OPENWA_SESSION_REGISTRY_DIR = path.join(root, 'registry');
@@ -236,12 +317,20 @@ async function testWatchdogRecoversSilentDeadReadySession() {
   const service = new EmbeddedOpenWAEngineService(identity, publisher, inbound, observability);
   await service.onModuleInit();
   await service.createSession('watchdog-session');
-  await service.startSession('watchdog-session');
+  const runtime = {
+    reconnectMode: 'UNBOUNDED', reconnectMaxAttempts: 0, reconnectBaseDelayMs: 5000,
+    reconnectStabilityResetMs: 300000, watchdogProbeTimeoutMs: 100, watchdogFailureThreshold: 3,
+    engineTeardownTimeoutMs: 30000, source: 'GOVERNED_CONFIGURATION', configurationId: 'watchdog-config',
+    scopeType: 'SENDER_SESSION', scopeId: 'watchdog-session', version: 2,
+  };
+  await service.startSession('watchdog-session', { runtime });
   const engine = fakeEngines.at(-1);
   engine.triggerReady();
   engine.probeAlive = false;
   await new Promise(resolve => setTimeout(resolve, 2300));
-  assert.equal(engine.calls.includes('forceDestroy'), true, 'watchdog must tear down a silently dead READY engine');
+  assert.equal(engine.calls.includes('forceDestroy'), false, 'governed watchdog threshold must delay recovery until the configured failure count');
+  await new Promise(resolve => setTimeout(resolve, 1200));
+  assert.equal(engine.calls.includes('forceDestroy'), true, 'watchdog must tear down a silently dead READY engine at the governed threshold');
   assert.equal((await service.health('watchdog-session')).status, 'DISCONNECTED');
   await service.onModuleDestroy();
   delete process.env.OPENWA_WATCHDOG_INTERVAL_MS;
@@ -272,6 +361,8 @@ async function testProviderDelegatesWithoutFetch() {
 
 (async () => {
   await testLifecycleAndEvents();
+  await testExplicitRestartUsesCurrentProxyConfiguration();
+  await testEngineSpecificDeploymentRecoveryDefaults();
   await testWatchdogRecoversSilentDeadReadySession();
   await testProviderDelegatesWithoutFetch();
   console.log('Embedded OpenWA engine tests passed.');

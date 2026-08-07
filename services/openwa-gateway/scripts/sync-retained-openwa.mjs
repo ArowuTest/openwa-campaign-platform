@@ -42,7 +42,52 @@ function rewriteSource(relative, text) {
   if (relative === 'engine/adapters/baileys-session-store.ts') {
     text = text.replace("../../config/configuration", "../../compat/env");
   }
+  if (relative === 'engine/types/baileys.types.ts') {
+    text = text.replace(
+      "  proxyType?: 'http' | 'https' | 'socks4' | 'socks5';\n",
+      "  proxyType?: 'http' | 'https' | 'socks4' | 'socks5';\n" +
+      "  reconnectMode?: 'UNBOUNDED' | 'DISABLED' | 'BOUNDED';\n" +
+      "  reconnectMaxAttempts?: number;\n" +
+      "  reconnectBaseDelayMs?: number;\n" +
+      "  reconnectStabilityResetMs?: number;\n",
+    );
+  }
+  if (relative === 'engine/adapters/baileys-lifecycle.ts') {
+    text = rewriteBaileysRecoveryPolicy(text);
+  }
   return text;
+}
+
+function rewriteBaileysRecoveryPolicy(text) {
+  text = text.replace(
+    'if (now - this.lastConnectionCloseAt > BaileysLifecycle.RECONNECT_STABILITY_RESET_MS) {',
+    'if (now - this.lastConnectionCloseAt > (this.host.config.reconnectStabilityResetMs ?? BaileysLifecycle.RECONNECT_STABILITY_RESET_MS)) {',
+  );
+  const original = `  private scheduleReconnect(): void {
+    if (this.intentionalClose || this.reconnectTimer) {
+      return;
+    }
+    this.reconnectAttempts += 1;
+    const delay = Math.min(60_000, 1_000 * 2 ** (this.reconnectAttempts - 1)) + Math.floor(Math.random() * 1000);`;
+  const replacement = `  private scheduleReconnect(): void {
+    if (this.intentionalClose || this.reconnectTimer) {
+      return;
+    }
+    const mode = this.host.config.reconnectMode ?? 'UNBOUNDED';
+    const maxAttempts = this.host.config.reconnectMaxAttempts ?? 0;
+    if (mode === 'DISABLED' || (mode === 'BOUNDED' && this.reconnectAttempts >= maxAttempts)) {
+      this.setStatus(EngineStatus.FAILED);
+      this.host.getOnError()?.(mode === 'DISABLED'
+        ? 'Automatic Baileys reconnect is disabled by governed session policy'
+        : \`Baileys reconnect budget exhausted after \${this.reconnectAttempts} attempts\`);
+      return;
+    }
+    this.reconnectAttempts += 1;
+    const baseDelay = this.host.config.reconnectBaseDelayMs ?? 1_000;
+    const backoffCap = Math.max(60_000, baseDelay);
+    const delay = Math.min(backoffCap, baseDelay * 2 ** (this.reconnectAttempts - 1)) + Math.floor(Math.random() * 1000);`;
+  if (!text.includes(original)) throw new Error('Pinned Baileys reconnect implementation changed; review before applying platform recovery transform.');
+  return text.replace(original, replacement);
 }
 const seen = new Set();
 const queue = [...entries];
@@ -120,6 +165,7 @@ const provenance = {
   transformations: [
     'LidMappingStore reduced to interface-only worker shim; upstream TypeORM service excluded',
     'resolveNonNegativeIntEnv reduced to worker compatibility shim; full upstream configuration excluded',
+    'Baileys retained lifecycle accepts optional platform-frozen reconnect mode, attempt budget, base delay and stability-reset controls; absence preserves pinned upstream unbounded defaults',
   ],
   files: manifest.sort((a, b) => a.path.localeCompare(b.path)),
 };

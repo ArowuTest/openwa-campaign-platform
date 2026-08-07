@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { EmbeddedOpenWAEngineService } from './embedded-openwa-engine.service';
-import type { MessagingProvider, SendRequest, SendResult, SessionHealth, SessionRecord } from './messaging-provider';
+import type { MessagingProvider, SendRequest, SendResult, SessionHealth, SessionRecord, SessionStartOptions } from './messaging-provider';
 
 @Injectable()
 export class OpenWAProvider implements MessagingProvider {
@@ -21,8 +21,8 @@ export class OpenWAProvider implements MessagingProvider {
   createSession(name: string): Promise<SessionRecord> {
     return this.embedded.createSession(name);
   }
-  startSession(sessionId: string): Promise<SessionRecord> {
-    return this.embedded.startSession(sessionId);
+  startSession(sessionId: string, options?: SessionStartOptions): Promise<SessionRecord> {
+    return this.embedded.startSession(sessionId, options);
   }
 
   stopSession(sessionId: string): Promise<SessionRecord> {

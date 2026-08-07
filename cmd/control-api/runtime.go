@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -128,6 +129,11 @@ func buildMemoryRuntime(cfg config.Config, protector *sharedcrypto.MSISDNProtect
 		return nil, fmt.Errorf("bootstrap provider capabilities: %w", err)
 	}
 	senderStore := sender.NewMemoryGovernanceStore()
+	proxyKeys, err := buildSenderProxyKeyring(cfg, false)
+	if err != nil {
+		return nil, fmt.Errorf("initialise sender proxy protection: %w", err)
+	}
+	senderProxies := &sender.SessionProxyAdministration{Store: senderStore, Keys: proxyKeys}
 	gatewayPools := &sender.GatewayPoolService{Store: senderStore}
 	if err := bootstrapGatewayPools(context.Background(), gatewayPools); err != nil {
 		return nil, fmt.Errorf("bootstrap gateway pools: %w", err)
@@ -148,7 +154,7 @@ func buildMemoryRuntime(cfg config.Config, protector *sharedcrypto.MSISDNProtect
 	materialisationService := &materialisation.MaterialisationService{Repository: materialisation.NewMemoryMaterialisationRepository()}
 	metrics := delivery.NewMetricsService(delivery.NewMemoryMetricsRepository())
 	senderGovernance := &sender.GovernanceService{Store: senderStore}
-	senderLifecycle := &sender.SessionLifecycleService{Governance: senderGovernance, Gateway: &sender.HTTPSessionGateway{CommandSecret: cfg.GatewayCommandSecret}, ActiveWork: sender.StaticActiveSessionWorkChecker(false), Maintenance: maintenance}
+	senderLifecycle := &sender.SessionLifecycleService{Governance: senderGovernance, Gateway: &sender.HTTPSessionGateway{CommandSecret: cfg.GatewayCommandSecret}, Proxies: senderProxies, ActiveWork: sender.StaticActiveSessionWorkChecker(false), Maintenance: maintenance}
 	pacingPolicies := &sender.PacingAdministration{Store: sender.NewMemoryPacingStore()}
 	executionStore := execution.NewMemoryStore()
 	executionCoordinator := &execution.Coordinator{Campaigns: campaigns, Store: executionStore, SafetyMarginPercent: 15, Maintenance: maintenance}
@@ -199,7 +205,7 @@ func buildMemoryRuntime(cfg config.Config, protector *sharedcrypto.MSISDNProtect
 	if intake == nil {
 		logger.Warn("secure audience-import intake is disabled until CLAMAV_ADDRESS is configured")
 	}
-	deps := httpserver.Dependencies{Registry: filters.Registry, FilterDefinitions: filters.Administration, Compiler: filters.Compiler, Cohorts: cohortExecution, Organisations: orgs, OrganisationPolicies: organisationPolicies, ConsentReviews: reviews, ConsentLedger: consentLedger, OptOutProcessor: optOutProcessor, OptOutPolicies: optOutPolicies, InboundReplies: inboundReplies, InboundRetentionPolicies: retentionPolicies, InboundRotation: rotationService, Campaigns: campaigns, CampaignWorkspace: campaignWorkspace, Commercial: commercialService, Geography: geography.DefaultCatalogue(), MaxImportPreviewRows: cfg.MaxImportPreviewRows, Identity: identityService, IdentityAdministration: identityAdministration, SecureCookies: cfg.SecureCookies, NetworkPolicy: httpserver.NetworkPolicy{AllowedCIDRs: cfg.AllowedNetworkCIDRs, TrustedProxyCIDRs: cfg.TrustedProxyCIDRs}, MSISDNProtector: protector, Messages: messages, TestMessages: testMessages, Snapshots: snapshots, SegmentDefinitions: segmentDefinitions, AudienceMaterialisations: materialisationService, DeliveryMetrics: metrics, Execution: executionCoordinator, RoutingPlans: routingPlans, ShardReallocations: shardReallocations, JobOperations: jobOperations, Operations: operationsService, PrivacyCases: privacyCases, ContactLifecycle: contactLifecycle, SenderGovernance: senderGovernance, GatewayPools: gatewayPoolAdministration, GatewayRuntime: gatewayRuntime, SenderSessionLifecycle: senderLifecycle, PacingPolicies: pacingPolicies, ProviderCapabilities: providerCapabilities, Configurations: configurations, Maintenance: maintenance, Retention: platformRetention, AlertPolicies: alertPolicies, AlertEvaluator: alertEvaluator, AudienceImports: imports, AudienceImportMappings: importMappings, AudienceImportRollback: importRollback, AudienceImportIssues: importIssues, AudienceConflicts: audienceConflicts, AudienceReconciliation: audienceReconciliation, AudienceSourceTrust: audienceSourceTrust, AudienceImportIntake: intake, MaxImportFileBytes: cfg.MaxImportFileBytes, DeliveryEvents: deliveryEvents, GatewayCallbackSecret: []byte(cfg.GatewayCallbackSecret), GatewayCallbackPreviousSecrets: nonEmptySecrets(cfg.GatewayCallbackPreviousSecret), GatewayCallbackMaxSkew: cfg.GatewayCallbackMaxSkew, MediaObjects: mediaStore, TrustedAssets: trustedAssets, MediaDownloadSecret: []byte(cfg.MediaDownloadSecret), ReadinessChecks: []httpserver.ReadinessCheck{filters.Readiness}}
+	deps := httpserver.Dependencies{Registry: filters.Registry, FilterDefinitions: filters.Administration, Compiler: filters.Compiler, Cohorts: cohortExecution, Organisations: orgs, OrganisationPolicies: organisationPolicies, ConsentReviews: reviews, ConsentLedger: consentLedger, OptOutProcessor: optOutProcessor, OptOutPolicies: optOutPolicies, InboundReplies: inboundReplies, InboundRetentionPolicies: retentionPolicies, InboundRotation: rotationService, Campaigns: campaigns, CampaignWorkspace: campaignWorkspace, Commercial: commercialService, Geography: geography.DefaultCatalogue(), MaxImportPreviewRows: cfg.MaxImportPreviewRows, Identity: identityService, IdentityAdministration: identityAdministration, SecureCookies: cfg.SecureCookies, NetworkPolicy: httpserver.NetworkPolicy{AllowedCIDRs: cfg.AllowedNetworkCIDRs, TrustedProxyCIDRs: cfg.TrustedProxyCIDRs}, MSISDNProtector: protector, Messages: messages, TestMessages: testMessages, Snapshots: snapshots, SegmentDefinitions: segmentDefinitions, AudienceMaterialisations: materialisationService, DeliveryMetrics: metrics, Execution: executionCoordinator, RoutingPlans: routingPlans, ShardReallocations: shardReallocations, JobOperations: jobOperations, Operations: operationsService, PrivacyCases: privacyCases, ContactLifecycle: contactLifecycle, SenderGovernance: senderGovernance, SenderSessionProxies: senderProxies, GatewayPools: gatewayPoolAdministration, GatewayRuntime: gatewayRuntime, SenderSessionLifecycle: senderLifecycle, PacingPolicies: pacingPolicies, ProviderCapabilities: providerCapabilities, Configurations: configurations, Maintenance: maintenance, Retention: platformRetention, AlertPolicies: alertPolicies, AlertEvaluator: alertEvaluator, AudienceImports: imports, AudienceImportMappings: importMappings, AudienceImportRollback: importRollback, AudienceImportIssues: importIssues, AudienceConflicts: audienceConflicts, AudienceReconciliation: audienceReconciliation, AudienceSourceTrust: audienceSourceTrust, AudienceImportIntake: intake, MaxImportFileBytes: cfg.MaxImportFileBytes, DeliveryEvents: deliveryEvents, GatewayCallbackSecret: []byte(cfg.GatewayCallbackSecret), GatewayCallbackPreviousSecrets: nonEmptySecrets(cfg.GatewayCallbackPreviousSecret), GatewayCallbackMaxSkew: cfg.GatewayCallbackMaxSkew, MediaObjects: mediaStore, TrustedAssets: trustedAssets, MediaDownloadSecret: []byte(cfg.MediaDownloadSecret), ReadinessChecks: []httpserver.ReadinessCheck{filters.Readiness}}
 	return &controlRuntime{Dependencies: deps}, nil
 }
 
@@ -279,6 +285,11 @@ func buildPostgreSQLRuntime(ctx context.Context, cfg config.Config, protector *s
 	optOutProcessor := &consent.OptOutProcessor{Deliveries: deliveryEvents, Ledger: consentLedger, Policies: optOutPolicies, ActorID: consent.DefaultGatewayServiceActorID, Inbox: inboundReplies, Protector: protector, Senders: &postgresrepo.InboundSenderResolver{DB: db}}
 	providerCapabilities := &provider.Service{Store: &provider.PostgreSQLStore{DB: db}}
 	senderStore := &sender.PostgreSQLGovernanceStore{DB: db}
+	proxyKeys, err := buildSenderProxyKeyring(cfg, true)
+	if err != nil {
+		return fail(fmt.Errorf("initialise sender proxy protection: %w", err))
+	}
+	senderProxies := &sender.SessionProxyAdministration{Store: senderStore, Keys: proxyKeys}
 	gatewayPools := &sender.GatewayPoolService{Store: senderStore}
 	gatewayPoolAdministration := &sender.GatewayPoolAdministration{Store: senderStore}
 	gatewayRuntime := &sender.RuntimeRegistrationService{Store: senderStore, GatewayPools: senderStore, Secret: []byte(cfg.GatewayRuntimeSecret), PreviousSecrets: nonEmptySecrets(cfg.GatewayRuntimePreviousSecret), MaximumSkew: cfg.GatewayCallbackMaxSkew}
@@ -296,7 +307,7 @@ func buildPostgreSQLRuntime(ctx context.Context, cfg config.Config, protector *s
 	materialisationService := &materialisation.MaterialisationService{Repository: &materialisation.PostgreSQLRepository{DB: db}}
 	metrics := delivery.NewMetricsService(&delivery.PostgreSQLMetricsRepository{DB: db})
 	senderGovernance := &sender.GovernanceService{Store: senderStore}
-	senderLifecycle := &sender.SessionLifecycleService{Governance: senderGovernance, Gateway: &sender.HTTPSessionGateway{CommandSecret: cfg.GatewayCommandSecret}, ActiveWork: sender.PostgreSQLActiveSessionWorkChecker{DB: db}, Maintenance: maintenance}
+	senderLifecycle := &sender.SessionLifecycleService{Governance: senderGovernance, Gateway: &sender.HTTPSessionGateway{CommandSecret: cfg.GatewayCommandSecret}, Proxies: senderProxies, ActiveWork: sender.PostgreSQLActiveSessionWorkChecker{DB: db}, Maintenance: maintenance}
 	pacingPolicies := &sender.PacingAdministration{Store: &postgresrepo.PacingPolicyRepository{DB: db}}
 	executionStore := &execution.PostgreSQLStore{DB: db}
 	executionCoordinator := &execution.Coordinator{Campaigns: campaigns, Store: executionStore, SafetyMarginPercent: 15, Maintenance: maintenance}
@@ -345,7 +356,7 @@ func buildPostgreSQLRuntime(ctx context.Context, cfg config.Config, protector *s
 		return fail(errors.New("secure audience-import intake is required for persistent runtime"))
 	}
 	releases := &orchestration.ReleaseService{Campaigns: campaigns, Organisations: orgs, Snapshots: snapshots, Store: &orchestration.PostgreSQLStore{DB: db}, Eligibility: orchestration.SQLFinalEligibilityChecker{}, BatchSize: 1000, ShardCount: 256}
-	deps := httpserver.Dependencies{Registry: filters.Registry, FilterDefinitions: filters.Administration, Compiler: filters.Compiler, Cohorts: cohortExecution, Organisations: orgs, OrganisationPolicies: organisationPolicies, ConsentReviews: reviews, ConsentLedger: consentLedger, OptOutProcessor: optOutProcessor, OptOutPolicies: optOutPolicies, InboundReplies: inboundReplies, InboundRetentionPolicies: retentionPolicies, InboundRotation: rotationService, Campaigns: campaigns, CampaignWorkspace: campaignWorkspace, Commercial: commercialService, Geography: geography.DefaultCatalogue(), MaxImportPreviewRows: cfg.MaxImportPreviewRows, Identity: identityService, IdentityAdministration: identityAdministration, SecureCookies: cfg.SecureCookies, NetworkPolicy: httpserver.NetworkPolicy{AllowedCIDRs: cfg.AllowedNetworkCIDRs, TrustedProxyCIDRs: cfg.TrustedProxyCIDRs}, MSISDNProtector: protector, Messages: messages, TestMessages: testMessages, Snapshots: snapshots, SegmentDefinitions: segmentDefinitions, AudienceMaterialisations: materialisationService, Releases: releases, DeliveryMetrics: metrics, Execution: executionCoordinator, RoutingPlans: routingPlans, ShardReallocations: shardReallocations, JobOperations: jobOperations, Operations: operationsService, PrivacyCases: privacyCases, ContactLifecycle: contactLifecycle, SenderGovernance: senderGovernance, GatewayPools: gatewayPoolAdministration, GatewayRuntime: gatewayRuntime, SenderSessionLifecycle: senderLifecycle, PacingPolicies: pacingPolicies, ProviderCapabilities: providerCapabilities, Configurations: configurations, Maintenance: maintenance, Retention: platformRetention, AlertPolicies: alertPolicies, AlertEvaluator: alertEvaluator, AudienceImports: imports, AudienceImportMappings: importMappings, AudienceImportRollback: importRollback, AudienceImportIssues: importIssues, AudienceConflicts: audienceConflicts, AudienceReconciliation: audienceReconciliation, AudienceSourceTrust: audienceSourceTrust, AudienceImportIntake: intake, MaxImportFileBytes: cfg.MaxImportFileBytes, DeliveryEvents: deliveryEvents, GatewayCallbackSecret: []byte(cfg.GatewayCallbackSecret), GatewayCallbackPreviousSecrets: nonEmptySecrets(cfg.GatewayCallbackPreviousSecret), GatewayCallbackMaxSkew: cfg.GatewayCallbackMaxSkew, MediaObjects: mediaStore, TrustedAssets: trustedAssets, MediaDownloadSecret: []byte(cfg.MediaDownloadSecret), ReadinessChecks: []httpserver.ReadinessCheck{{Name: "postgres", Check: db.PingContext}, {Name: "schema", Check: func(c context.Context) error { return verifyControlSchema(c, db) }}, filters.Readiness}}
+	deps := httpserver.Dependencies{Registry: filters.Registry, FilterDefinitions: filters.Administration, Compiler: filters.Compiler, Cohorts: cohortExecution, Organisations: orgs, OrganisationPolicies: organisationPolicies, ConsentReviews: reviews, ConsentLedger: consentLedger, OptOutProcessor: optOutProcessor, OptOutPolicies: optOutPolicies, InboundReplies: inboundReplies, InboundRetentionPolicies: retentionPolicies, InboundRotation: rotationService, Campaigns: campaigns, CampaignWorkspace: campaignWorkspace, Commercial: commercialService, Geography: geography.DefaultCatalogue(), MaxImportPreviewRows: cfg.MaxImportPreviewRows, Identity: identityService, IdentityAdministration: identityAdministration, SecureCookies: cfg.SecureCookies, NetworkPolicy: httpserver.NetworkPolicy{AllowedCIDRs: cfg.AllowedNetworkCIDRs, TrustedProxyCIDRs: cfg.TrustedProxyCIDRs}, MSISDNProtector: protector, Messages: messages, TestMessages: testMessages, Snapshots: snapshots, SegmentDefinitions: segmentDefinitions, AudienceMaterialisations: materialisationService, Releases: releases, DeliveryMetrics: metrics, Execution: executionCoordinator, RoutingPlans: routingPlans, ShardReallocations: shardReallocations, JobOperations: jobOperations, Operations: operationsService, PrivacyCases: privacyCases, ContactLifecycle: contactLifecycle, SenderGovernance: senderGovernance, SenderSessionProxies: senderProxies, GatewayPools: gatewayPoolAdministration, GatewayRuntime: gatewayRuntime, SenderSessionLifecycle: senderLifecycle, PacingPolicies: pacingPolicies, ProviderCapabilities: providerCapabilities, Configurations: configurations, Maintenance: maintenance, Retention: platformRetention, AlertPolicies: alertPolicies, AlertEvaluator: alertEvaluator, AudienceImports: imports, AudienceImportMappings: importMappings, AudienceImportRollback: importRollback, AudienceImportIssues: importIssues, AudienceConflicts: audienceConflicts, AudienceReconciliation: audienceReconciliation, AudienceSourceTrust: audienceSourceTrust, AudienceImportIntake: intake, MaxImportFileBytes: cfg.MaxImportFileBytes, DeliveryEvents: deliveryEvents, GatewayCallbackSecret: []byte(cfg.GatewayCallbackSecret), GatewayCallbackPreviousSecrets: nonEmptySecrets(cfg.GatewayCallbackPreviousSecret), GatewayCallbackMaxSkew: cfg.GatewayCallbackMaxSkew, MediaObjects: mediaStore, TrustedAssets: trustedAssets, MediaDownloadSecret: []byte(cfg.MediaDownloadSecret), ReadinessChecks: []httpserver.ReadinessCheck{{Name: "postgres", Check: db.PingContext}, {Name: "schema", Check: func(c context.Context) error { return verifyControlSchema(c, db) }}, filters.Readiness}}
 	return &controlRuntime{Dependencies: deps, DB: db, close: db.Close}, nil
 }
 
@@ -360,6 +371,20 @@ func buildPrivacyEvidenceKeyring(cfg config.Config, persistent bool) (*sharedcry
 		return nil, errors.New("persistent runtime requires PRIVACY_EVIDENCE_KEY_BASE64 or PRIVACY_EVIDENCE_KEYS_JSON")
 	}
 	return sharedcrypto.NewSecretKeyring("development-v1", map[string][]byte{"development-v1": []byte("development-privacy-key-32-byte!")})
+}
+
+func buildSenderProxyKeyring(cfg config.Config, persistent bool) (*sharedcrypto.SecretKeyring, error) {
+	if strings.TrimSpace(cfg.SenderProxyKeysJSON) != "" {
+		return sharedcrypto.NewSecretKeyringFromJSON(cfg.SenderProxyActiveKey, cfg.SenderProxyKeysJSON)
+	}
+	if persistent {
+		return nil, errors.New("persistent runtime requires SENDER_PROXY_KEYS_JSON")
+	}
+	key := make([]byte, 32)
+	if _, err := rand.Read(key); err != nil {
+		return nil, fmt.Errorf("generate ephemeral sender proxy key: %w", err)
+	}
+	return sharedcrypto.NewSecretKeyring("ephemeral-v1", map[string][]byte{"ephemeral-v1": key})
 }
 
 func buildImportIntake(cfg config.Config, service *importer.ImportService, store storage.ObjectStore) (*importer.IntakeService, error) {

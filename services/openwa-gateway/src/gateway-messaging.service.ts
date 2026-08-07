@@ -2,7 +2,7 @@ import { Inject, Injectable, NotImplementedException, ServiceUnavailableExceptio
 import { IdempotencyService } from './idempotency.service';
 import { SessionPipelineService } from './session-pipeline.service';
 import { MESSAGING_PROVIDER } from './provider/provider.token';
-import type { MessagingProvider, SendRequest, SendResult, SessionHealth, SessionRecord } from './provider/messaging-provider';
+import type { MessagingProvider, SendRequest, SendResult, SessionHealth, SessionRecord, SessionStartOptions } from './provider/messaging-provider';
 import { SessionAuthorityService } from './session-authority.service';
 
 @Injectable()
@@ -27,7 +27,7 @@ export class GatewayMessagingService {
   }
   getSession(sessionId: string): Promise<SessionRecord> { return required(this.provider.getSession, 'session read').call(this.provider, sessionId); }
   createSession(name: string): Promise<SessionRecord> { return required(this.provider.createSession, 'session creation').call(this.provider, name); }
-  startSession(sessionId: string): Promise<SessionRecord> { return required(this.provider.startSession, 'session start').call(this.provider, sessionId); }
+  startSession(sessionId: string, options?: SessionStartOptions): Promise<SessionRecord> { return required(this.provider.startSession, 'session start').call(this.provider, sessionId, options); }
   async stopSession(sessionId: string): Promise<SessionRecord> {
     this.pipelines.drain(sessionId);
     return required(this.provider.stopSession, 'session stop').call(this.provider, sessionId);

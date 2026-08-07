@@ -37,6 +37,15 @@ export type SessionHealth = {
   detail?: string;
 };
 
+export type SessionProxyConfiguration = {
+  url: string;
+  type: 'http' | 'https' | 'socks4' | 'socks5';
+};
+
+export type SessionStartOptions = {
+  proxy?: SessionProxyConfiguration;
+};
+
 export type SessionRecord = {
   id?: string;
   name?: string;
@@ -56,7 +65,7 @@ export interface MessagingProvider {
   health(sessionId: string): Promise<SessionHealth>;
   getSession?(sessionId: string): Promise<SessionRecord>;
   createSession?(name: string): Promise<SessionRecord>;
-  startSession?(sessionId: string): Promise<SessionRecord>;
+  startSession?(sessionId: string, options?: SessionStartOptions): Promise<SessionRecord>;
   stopSession?(sessionId: string): Promise<SessionRecord>;
   logoutSession?(sessionId: string): Promise<SessionRecord>;
   deleteSession?(sessionId: string): Promise<void>;

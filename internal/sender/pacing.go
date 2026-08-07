@@ -32,6 +32,10 @@ const (
 
 	JitterNone    JitterMode = "NONE"
 	JitterUniform JitterMode = "UNIFORM"
+
+	// DefaultMaxActiveCampaigns is the fail-safe business default. Administrators
+	// may configure a higher value through the governed maker-checker policy flow.
+	DefaultMaxActiveCampaigns = 1
 )
 
 var (
@@ -166,6 +170,12 @@ func validatePacing(p *PacingPolicy) error {
 func (s *PacingAdministration) CreateDraft(ctx context.Context, p PacingPolicy, actor, reason string) (PacingPolicy, error) {
 	if s == nil || s.Store == nil || strings.TrimSpace(actor) == "" || len(strings.TrimSpace(reason)) < 5 {
 		return PacingPolicy{}, ErrPacingInvalid
+	}
+	// One active campaign per sender is the fail-safe default. Interleaving is
+	// allowed only when an administrator deliberately configures and approves a
+	// higher value through the existing maker-checker policy lifecycle.
+	if p.MaxActiveCampaigns == 0 {
+		p.MaxActiveCampaigns = DefaultMaxActiveCampaigns
 	}
 	if err := validatePacing(&p); err != nil {
 		return PacingPolicy{}, err

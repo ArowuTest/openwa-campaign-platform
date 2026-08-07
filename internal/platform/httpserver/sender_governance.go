@@ -242,6 +242,69 @@ func (s *Server) registerSenderSession(w http.ResponseWriter, r *http.Request) {
 	}
 	httpx.WriteJSON(w, 201, v)
 }
+
+type senderProxyRequest struct {
+	URL             string `json:"url"`
+	Type            string `json:"type"`
+	ExpectedVersion int64  `json:"expectedVersion"`
+	Reason          string `json:"reason"`
+}
+
+func (s *Server) getSenderSessionProxyStatus(w http.ResponseWriter, r *http.Request) {
+	if s.deps.SenderSessionProxies == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "SENDER_PROXY_UNAVAILABLE", "Sender proxy administration is unavailable.", nil)
+		return
+	}
+	status, err := s.deps.SenderSessionProxies.Status(r.Context(), r.PathValue("id"))
+	if err != nil {
+		s.writeSenderError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, status)
+}
+
+func (s *Server) configureSenderSessionProxy(w http.ResponseWriter, r *http.Request) {
+	if s.deps.SenderSessionProxies == nil || !s.requireSenderStepUp(w, r) {
+		if s.deps.SenderSessionProxies == nil {
+			httpx.WriteError(w, r, http.StatusServiceUnavailable, "SENDER_PROXY_UNAVAILABLE", "Sender proxy administration is unavailable.", nil)
+		}
+		return
+	}
+	var input senderProxyRequest
+	if err := httpx.DecodeJSON(w, r, 64<<10, &input); err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The sender proxy request is invalid.", nil)
+		return
+	}
+	actor, _ := s.senderActor(r)
+	status, err := s.deps.SenderSessionProxies.Configure(r.Context(), r.PathValue("id"), input.ExpectedVersion, sender.SessionProxyConfiguration{URL: input.URL, Type: sender.ProxyType(input.Type)}, actor, input.Reason)
+	if err != nil {
+		s.writeSenderError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, status)
+}
+
+func (s *Server) clearSenderSessionProxy(w http.ResponseWriter, r *http.Request) {
+	if s.deps.SenderSessionProxies == nil || !s.requireSenderStepUp(w, r) {
+		if s.deps.SenderSessionProxies == nil {
+			httpx.WriteError(w, r, http.StatusServiceUnavailable, "SENDER_PROXY_UNAVAILABLE", "Sender proxy administration is unavailable.", nil)
+		}
+		return
+	}
+	var input senderProxyRequest
+	if err := httpx.DecodeJSON(w, r, 64<<10, &input); err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The sender proxy removal request is invalid.", nil)
+		return
+	}
+	actor, _ := s.senderActor(r)
+	status, err := s.deps.SenderSessionProxies.Clear(r.Context(), r.PathValue("id"), input.ExpectedVersion, actor, input.Reason)
+	if err != nil {
+		s.writeSenderError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, status)
+}
+
 func (s *Server) transitionSenderSession(w http.ResponseWriter, r *http.Request) {
 	if !s.requireSenderGovernance(w, r) {
 		return

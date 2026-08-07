@@ -18,7 +18,7 @@ type SessionGatewayResult struct {
 
 type SessionGateway interface {
 	Create(context.Context, Node, GovernedSession) (SessionGatewayResult, error)
-	Start(context.Context, Node, GovernedSession) (SessionGatewayResult, error)
+	Start(context.Context, Node, GovernedSession, *SessionProxyConfiguration) (SessionGatewayResult, error)
 	Stop(context.Context, Node, GovernedSession) (SessionGatewayResult, error)
 	Logout(context.Context, Node, GovernedSession) (SessionGatewayResult, error)
 	Delete(context.Context, Node, GovernedSession) error
@@ -34,8 +34,11 @@ type ActiveSessionWorkChecker interface {
 }
 
 type SessionLifecycleService struct {
-	Governance  *GovernanceService
-	Gateway     SessionGateway
+	Governance *GovernanceService
+	Gateway    SessionGateway
+	Proxies    interface {
+		Resolve(context.Context, string) (*SessionProxyConfiguration, error)
+	}
 	ActiveWork  ActiveSessionWorkChecker
 	Maintenance *platformpolicy.MaintenanceAdministration
 	Clock       func() time.Time
@@ -159,7 +162,14 @@ func (s *SessionLifecycleService) Start(ctx context.Context, id string, expected
 	if session.Status != StatusPairing && session.Status != StatusDisconnected && session.Status != StatusPaused && session.Status != StatusRecovering {
 		return GovernedSession{}, SessionGatewayResult{}, fmt.Errorf("session cannot start from %s", session.Status)
 	}
-	result, err := s.Gateway.Start(ctx, node, session)
+	var proxy *SessionProxyConfiguration
+	if s.Proxies != nil {
+		proxy, err = s.Proxies.Resolve(ctx, session.ID)
+		if err != nil {
+			return GovernedSession{}, SessionGatewayResult{}, fmt.Errorf("resolve governed session proxy: %w", err)
+		}
+	}
+	result, err := s.Gateway.Start(ctx, node, session, proxy)
 	if err != nil {
 		return GovernedSession{}, SessionGatewayResult{}, err
 	}

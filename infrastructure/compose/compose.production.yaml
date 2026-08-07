@@ -52,6 +52,8 @@ services:
       INBOUND_CONTENT_ACTIVE_KEY_VERSION: ${INBOUND_CONTENT_ACTIVE_KEY_VERSION:?active inbound key version is required}
       PRIVACY_EVIDENCE_KEYS_JSON_FILE: /run/secrets/privacy_evidence_keys
       PRIVACY_EVIDENCE_ACTIVE_KEY_VERSION: ${PRIVACY_EVIDENCE_ACTIVE_KEY_VERSION:?active privacy key version is required}
+      SENDER_PROXY_KEYS_JSON_FILE: /run/secrets/sender_proxy_keys
+      SENDER_PROXY_ACTIVE_KEY_VERSION: ${SENDER_PROXY_ACTIVE_KEY_VERSION:?active sender proxy key version is required}
       GATEWAY_CALLBACK_SECRET_FILE: /run/secrets/gateway_callback_secret
       GATEWAY_CALLBACK_SECRET_PREVIOUS_FILE: /run/secrets/gateway_callback_secret_previous
       GATEWAY_COMMAND_SECRET_FILE: /run/secrets/gateway_command_secret
@@ -82,6 +84,7 @@ services:
       - identity_secret_key
       - inbound_content_keys
       - privacy_evidence_keys
+      - sender_proxy_keys
       - gateway_callback_secret
       - gateway_callback_secret_previous
       - gateway_command_secret
@@ -352,6 +355,7 @@ secrets:
   identity_secret_key: { file: "${IDENTITY_SECRET_KEY_FILE:?required}" }
   inbound_content_keys: { file: "${INBOUND_CONTENT_KEYS_FILE:?required}" }
   privacy_evidence_keys: { file: "${PRIVACY_EVIDENCE_KEYS_FILE:?required}" }
+  sender_proxy_keys: { file: "${SENDER_PROXY_KEYS_FILE:?required}" }
   gateway_callback_secret: { file: "${GATEWAY_CALLBACK_SECRET_FILE:?required}" }
   gateway_callback_secret_previous: { file: "${GATEWAY_CALLBACK_SECRET_PREVIOUS_FILE:?required}" }
   gateway_command_secret: { file: "${GATEWAY_COMMAND_SECRET_FILE:?required}" }

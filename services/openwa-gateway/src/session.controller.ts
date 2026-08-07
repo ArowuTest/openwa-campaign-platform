@@ -1,5 +1,6 @@
 import { BadRequestException, Body, Controller, Delete, Get, Param, Post } from '@nestjs/common';
 import { GatewayMessagingService } from './gateway-messaging.service';
+import type { SessionStartOptions } from './provider/messaging-provider';
 
 @Controller('/v1/sessions')
 export class SessionController {
@@ -7,7 +8,7 @@ export class SessionController {
   @Get('/:id') get(@Param('id') id: string) { return this.gateway.getSession(validateSessionId(id)); }
   @Get('/:id/health') health(@Param('id') id: string) { return this.gateway.health(validateSessionId(id)); }
   @Post() create(@Body() body: { name?: string }) { return this.gateway.createSession(validateSessionId(body?.name ?? '')); }
-  @Post('/:id/start') start(@Param('id') id: string) { return this.gateway.startSession(validateSessionId(id)); }
+  @Post('/:id/start') start(@Param('id') id: string, @Body() body?: SessionStartOptions) { return this.gateway.startSession(validateSessionId(id), body); }
   @Post('/:id/stop') stop(@Param('id') id: string) { return this.gateway.stopSession(validateSessionId(id)); }
   @Post('/:id/logout') logout(@Param('id') id: string) { return this.gateway.logoutSession(validateSessionId(id)); }
   @Delete('/:id') remove(@Param('id') id: string) { return this.gateway.deleteSession(validateSessionId(id)); }

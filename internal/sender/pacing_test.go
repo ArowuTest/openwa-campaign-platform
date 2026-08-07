@@ -51,6 +51,20 @@ func TestPacingPolicyMakerCheckerAndResolution(t *testing.T) {
 		t.Fatalf("expected session override, got %#v", resolved)
 	}
 }
+func TestPacingPolicyDefaultsToOneActiveCampaignWhenOmitted(t *testing.T) {
+	ctx := context.Background()
+	svc := &PacingAdministration{Store: NewMemoryPacingStore()}
+	p := basePacing(PacingSession, "session-1")
+	p.MaxActiveCampaigns = 0
+	created, err := svc.CreateDraft(ctx, p, "maker", "use safe sender defaults")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.MaxActiveCampaigns != 1 {
+		t.Fatalf("maxActiveCampaigns=%d want=1", created.MaxActiveCampaigns)
+	}
+}
+
 func TestPacingPolicyRejectsInvalidAllowances(t *testing.T) {
 	p := basePacing(PacingSession, "s")
 	p.HourlyAllowance = 5000

@@ -46,6 +46,8 @@ type Config struct {
 	PrivacyEvidenceKeyBase64          string
 	PrivacyEvidenceKeysJSON           string
 	PrivacyEvidenceActiveKey          string
+	SenderProxyKeysJSON               string
+	SenderProxyActiveKey              string
 	InboundRetentionDays              int
 	AudienceImportSourceRetentionDays int
 	GatewayCallbackSecret             string
@@ -73,7 +75,7 @@ type Config struct {
 // value is always rejected so deployed services fail closed.
 func Load() (Config, error) {
 	environment := strings.ToLower(strings.TrimSpace(envOrDefault("APP_ENV", "development")))
-	if err := envfile.Resolve(environment, "DATABASE_URL", "BOOTSTRAP_ADMIN_PASSWORD", "BOOTSTRAP_ADMIN_TOTP_SECRET", "MSISDN_ENCRYPTION_KEY_BASE64", "MSISDN_LOOKUP_KEY_BASE64", "IDENTITY_SECRET_KEY_BASE64", "INBOUND_CONTENT_KEY_BASE64", "INBOUND_CONTENT_KEYS_JSON", "PRIVACY_EVIDENCE_KEY_BASE64", "PRIVACY_EVIDENCE_KEYS_JSON", "GATEWAY_CALLBACK_SECRET", "GATEWAY_CALLBACK_SECRET_PREVIOUS", "GATEWAY_COMMAND_SECRET", "GATEWAY_COMMAND_SECRET_PREVIOUS", "GATEWAY_RUNTIME_SECRET", "GATEWAY_RUNTIME_SECRET_PREVIOUS", "MEDIA_DOWNLOAD_SECRET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY", "S3_SESSION_TOKEN", "PROFILING_TOKEN"); err != nil {
+	if err := envfile.Resolve(environment, "DATABASE_URL", "BOOTSTRAP_ADMIN_PASSWORD", "BOOTSTRAP_ADMIN_TOTP_SECRET", "MSISDN_ENCRYPTION_KEY_BASE64", "MSISDN_LOOKUP_KEY_BASE64", "IDENTITY_SECRET_KEY_BASE64", "INBOUND_CONTENT_KEY_BASE64", "INBOUND_CONTENT_KEYS_JSON", "PRIVACY_EVIDENCE_KEY_BASE64", "PRIVACY_EVIDENCE_KEYS_JSON", "SENDER_PROXY_KEYS_JSON", "GATEWAY_CALLBACK_SECRET", "GATEWAY_CALLBACK_SECRET_PREVIOUS", "GATEWAY_COMMAND_SECRET", "GATEWAY_COMMAND_SECRET_PREVIOUS", "GATEWAY_RUNTIME_SECRET", "GATEWAY_RUNTIME_SECRET_PREVIOUS", "MEDIA_DOWNLOAD_SECRET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY", "S3_SESSION_TOKEN", "PROFILING_TOKEN"); err != nil {
 		return Config{}, err
 	}
 	callbackSecret := strings.TrimSpace(os.Getenv("GATEWAY_CALLBACK_SECRET"))
@@ -207,6 +209,8 @@ func Load() (Config, error) {
 		PrivacyEvidenceKeyBase64:          strings.TrimSpace(os.Getenv("PRIVACY_EVIDENCE_KEY_BASE64")),
 		PrivacyEvidenceKeysJSON:           strings.TrimSpace(os.Getenv("PRIVACY_EVIDENCE_KEYS_JSON")),
 		PrivacyEvidenceActiveKey:          strings.TrimSpace(envOrDefault("PRIVACY_EVIDENCE_ACTIVE_KEY_VERSION", "v1")),
+		SenderProxyKeysJSON:               strings.TrimSpace(os.Getenv("SENDER_PROXY_KEYS_JSON")),
+		SenderProxyActiveKey:              strings.TrimSpace(envOrDefault("SENDER_PROXY_ACTIVE_KEY_VERSION", "v1")),
 		InboundRetentionDays:              inboundRetentionDays,
 		AudienceImportSourceRetentionDays: importSourceRetentionDays,
 		GatewayCallbackSecret:             callbackSecret,
@@ -371,6 +375,9 @@ func (c Config) Validate() error {
 	if err := validateVersionedKeyring("privacy evidence", "PRIVACY_EVIDENCE_KEYS_JSON", c.PrivacyEvidenceKeysJSON, c.PrivacyEvidenceActiveKey); err != nil {
 		return err
 	}
+	if err := validateVersionedKeyring("sender proxy", "SENDER_PROXY_KEYS_JSON", c.SenderProxyKeysJSON, c.SenderProxyActiveKey); err != nil {
+		return err
+	}
 
 	if production {
 		if strings.Contains(c.BootstrapAdminPassword, "development-only") || len(c.BootstrapAdminPassword) < 20 {
@@ -399,6 +406,9 @@ func (c Config) Validate() error {
 		}
 		if c.PrivacyEvidenceKeyBase64 == "" && c.PrivacyEvidenceKeysJSON == "" {
 			return errors.New("production requires a privacy evidence encryption key or keyring")
+		}
+		if c.SenderProxyKeysJSON == "" {
+			return errors.New("production requires a sender proxy encryption keyring")
 		}
 		if len(c.GatewayCallbackSecret) < 32 || strings.Contains(c.GatewayCallbackSecret, "development-") || strings.Contains(strings.ToLower(c.GatewayCallbackSecret), "change-me") {
 			return errors.New("production requires a strong GATEWAY_CALLBACK_SECRET")

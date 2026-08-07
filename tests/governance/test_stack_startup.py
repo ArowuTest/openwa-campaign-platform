@@ -46,8 +46,18 @@ class StackStartupContractTests(unittest.TestCase):
             "IDENTITY_SECRET_KEY_BASE64",
             "INBOUND_CONTENT_KEYS_JSON",
             "PRIVACY_EVIDENCE_KEYS_JSON",
+            "SENDER_PROXY_KEYS_JSON",
         ):
             self.assertIn(name, control)
+        self.assertIn("SENDER_PROXY_KEYS_JSON: ${SENDER_PROXY_KEYS_JSON:-}", control)
+        self.assertNotIn("ZGV2ZWxvcG1lbnQtcHJveHkta2V5", control)
+
+    def test_production_control_api_mounts_sender_proxy_keyring_as_secret(self):
+        compose = (ROOT / "infrastructure/compose/compose.production.yaml").read_text()
+        control = compose.split("  control-api:", 1)[1].split("  audience-worker:", 1)[0]
+        self.assertIn("SENDER_PROXY_KEYS_JSON_FILE: /run/secrets/sender_proxy_keys", control)
+        self.assertIn("- sender_proxy_keys", control)
+        self.assertIn('sender_proxy_keys: { file: "${SENDER_PROXY_KEYS_FILE:?required}" }', compose)
 
     def test_edge_exposes_control_health_and_readiness(self):
         nginx = (ROOT / "infrastructure/nginx/default.conf").read_text()

@@ -21,7 +21,7 @@ func (f *fakeSessionGateway) hit(name string) (SessionGatewayResult, error) {
 func (f *fakeSessionGateway) Create(context.Context, Node, GovernedSession) (SessionGatewayResult, error) {
 	return f.hit("create")
 }
-func (f *fakeSessionGateway) Start(context.Context, Node, GovernedSession) (SessionGatewayResult, error) {
+func (f *fakeSessionGateway) Start(context.Context, Node, GovernedSession, *SessionProxyConfiguration) (SessionGatewayResult, error) {
 	return f.hit("start")
 }
 func (f *fakeSessionGateway) Stop(context.Context, Node, GovernedSession) (SessionGatewayResult, error) {

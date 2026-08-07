@@ -138,10 +138,17 @@ async function testLifecycleAndEvents() {
 
   const created = await service.createSession('session-1');
   assert.equal(created.status, 'disconnected');
-  const started = await service.startSession('session-1');
+  const proxy = { url: 'socks5://proxy-user:proxy-secret@proxy.example:1080', type: 'socks5' };
+  const started = await service.startSession('session-1', { proxy });
   assert.equal(started.status, 'initializing');
   const engine = fakeEngines.at(-1);
   assert(engine, 'start must instantiate an engine');
+  assert.equal(engine.config.proxyUrl, proxy.url);
+  assert.equal(engine.config.proxyType, proxy.type);
+  const registryFiles = await fs.readdir(process.env.OPENWA_SESSION_REGISTRY_DIR);
+  const registryText = (await Promise.all(registryFiles.map(file => fs.readFile(path.join(process.env.OPENWA_SESSION_REGISTRY_DIR, file), 'utf8')))).join('\n');
+  assert.equal(registryText.includes('proxy-secret'), false, 'proxy credentials must never persist in the worker session registry');
+  assert.equal(registryText.includes('proxy.example'), false, 'proxy endpoint must never persist in the worker session registry');
   assert.equal(engine.callbacks.claimStuckAuthRecovery?.(), true, 'first stuck-auth recovery claim must be accepted');
   assert.equal(engine.callbacks.claimStuckAuthRecovery?.(), false, 'stuck-auth recovery must be one-shot per start episode');
 
@@ -182,6 +189,17 @@ async function testLifecycleAndEvents() {
   assert.equal(stopped.status, 'disconnected');
   assert.equal(engine.calls.includes('disconnect'), true);
 
+  await service.createSession('session-3');
+  await service.startSession('session-3', { proxy });
+  const logoutProxyEngine = fakeEngines.at(-1);
+  await service.logoutSession('session-3');
+  assert.equal(logoutProxyEngine.calls.includes('logout'), true);
+  await service.startSession('session-3');
+  const afterLogoutEngine = fakeEngines.at(-1);
+  assert.equal(afterLogoutEngine.config.proxyUrl, undefined, 'logout must clear in-memory proxy authority before a later start');
+  assert.equal(afterLogoutEngine.config.proxyType, undefined, 'logout must not retain proxy type after control-plane authority can change');
+  await service.deleteSession('session-3');
+
   const serviceAfterRestart = new EmbeddedOpenWAEngineService(identity, publisher, inbound, observability);
   await serviceAfterRestart.onModuleInit();
   const reloaded = await serviceAfterRestart.getSession('session-1');
@@ -190,6 +208,8 @@ async function testLifecycleAndEvents() {
 
   await serviceAfterRestart.startSession('session-1');
   const restartedEngine = fakeEngines.at(-1);
+  assert.equal(restartedEngine.config.proxyUrl, undefined, 'proxy credentials must be supplied again by the control plane after worker restart');
+  assert.equal(restartedEngine.config.proxyType, undefined, 'proxy type must not survive through the persistent session registry');
   assert.equal(restartedEngine.callbacks.claimStuckAuthRecovery?.(), true, 'explicit restart must re-arm stuck-auth recovery');
   await serviceAfterRestart.logoutSession('session-1');
   assert.equal(restartedEngine.calls.includes('logout'), true);
@@ -241,7 +261,9 @@ async function testProviderDelegatesWithoutFetch() {
   const provider = new OpenWAProvider(embedded);
   await provider.health('session-1');
   await provider.createSession('session-1');
-  await provider.startSession('session-1');
+  const startOptions = { proxy: { url: 'http://proxy.example:8080', type: 'http' } };
+  await provider.startSession('session-1', startOptions);
+  assert.deepEqual(calls.find(call => call[0] === 'startSession'), ['startSession', 'session-1', startOptions]);
   await provider.stopSession('session-1');
   await provider.logoutSession('session-1');
   await provider.deleteSession('session-1');

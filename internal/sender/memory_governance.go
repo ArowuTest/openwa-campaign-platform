@@ -13,6 +13,7 @@ type MemoryGovernanceStore struct {
 	pools             map[string]Pool
 	nodes             map[string]Node
 	sessions          map[string]GovernedSession
+	sessionProxies    map[string][]byte
 	gatewayPools      map[string]GatewayPool
 	runtimeNonces     map[string]time.Time
 	runtimeEvents     map[string][]RuntimeEvent
@@ -21,7 +22,7 @@ type MemoryGovernanceStore struct {
 }
 
 func NewMemoryGovernanceStore() *MemoryGovernanceStore {
-	return &MemoryGovernanceStore{pools: map[string]Pool{}, nodes: map[string]Node{}, sessions: map[string]GovernedSession{}, gatewayPools: map[string]GatewayPool{}, runtimeNonces: map[string]time.Time{}, runtimeEvents: map[string][]RuntimeEvent{}, gatewayPoolEvents: map[string][]GatewayPoolEvent{}}
+	return &MemoryGovernanceStore{pools: map[string]Pool{}, nodes: map[string]Node{}, sessions: map[string]GovernedSession{}, sessionProxies: map[string][]byte{}, gatewayPools: map[string]GatewayPool{}, runtimeNonces: map[string]time.Time{}, runtimeEvents: map[string][]RuntimeEvent{}, gatewayPoolEvents: map[string][]GatewayPoolEvent{}}
 }
 func (m *MemoryGovernanceStore) next(prefix string) string {
 	m.seq++

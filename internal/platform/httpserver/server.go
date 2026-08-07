@@ -84,6 +84,7 @@ type Dependencies struct {
 	AudienceMaterialisations       *materialisation.MaterialisationService
 	Releases                       *orchestration.ReleaseService
 	SenderGovernance               *sender.GovernanceService
+	SenderSessionProxies           *sender.SessionProxyAdministration
 	GatewayPools                   *sender.GatewayPoolAdministration
 	GatewayRuntime                 *sender.RuntimeRegistrationService
 	SenderSessionLifecycle         *sender.SessionLifecycleService
@@ -413,6 +414,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/sender-sessions", s.require("sender.read", s.listSenderSessions))
 	mux.Handle("GET /api/v1/sender-sessions/{id}/health", s.require("sender.read", s.getSenderSessionHealth))
 	mux.Handle("POST /api/v1/sender-sessions", s.require("sender.admin", s.registerSenderSession))
+	mux.Handle("GET /api/v1/sender-sessions/{id}/proxy", s.require("sender.read", s.getSenderSessionProxyStatus))
+	mux.Handle("PUT /api/v1/sender-sessions/{id}/proxy", s.require("sender.admin", s.configureSenderSessionProxy))
+	mux.Handle("DELETE /api/v1/sender-sessions/{id}/proxy", s.require("sender.admin", s.clearSenderSessionProxy))
 	mux.Handle("POST /api/v1/sender-sessions/{id}/transition", s.require("sender.operate", s.transitionSenderSession))
 	mux.Handle("POST /api/v1/sender-sessions/{id}/quarantine", s.require("sender.operate", s.quarantineSenderSession))
 	mux.Handle("POST /api/v1/sender-sessions/{id}/reinstate", s.require("sender.admin", s.reinstateSenderSession))

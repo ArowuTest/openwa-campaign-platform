@@ -20,7 +20,7 @@ import { WhatsAppWebJsAdapter } from '../retained-openwa/engine/adapters/whatsap
 import { EngineStatus } from '../retained-openwa/engine/interfaces/whatsapp-engine.interface';
 import type { DeliveryStatus, EngineEventCallbacks, IncomingMessage, IWhatsAppEngine, MediaInput } from '../retained-openwa/engine/interfaces/whatsapp-engine.interface';
 import type { LidMappingStore } from '../retained-openwa/engine/identity/lid-mapping-store';
-import type { SendRequest, SendResult, SessionHealth, SessionRecord } from './messaging-provider';
+import type { SendRequest, SendResult, SessionHealth, SessionProxyConfiguration, SessionRecord, SessionStartOptions } from './messaging-provider';
 
 type EngineName = 'WHATSAPP_WEB_JS' | 'BAILEYS';
 type PersistentSession = {
@@ -33,6 +33,7 @@ type PersistentSession = {
 type RuntimeSession = {
   persistent: PersistentSession;
   engine?: IWhatsAppEngine;
+  proxy?: SessionProxyConfiguration;
   generation: number;
   status: EngineStatus;
   qr?: string | null;
@@ -180,14 +181,21 @@ export class EmbeddedOpenWAEngineService implements OnModuleInit, OnModuleDestro
     const status = state.engine?.getStatus() ?? state.status;
     return mapHealth(status, state.lastError);
   }
-  async startSession(sessionId: string): Promise<SessionRecord> {
+  async startSession(sessionId: string, options?: SessionStartOptions): Promise<SessionRecord> {
     return this.withTransition(sessionId, async () => {
       await this.assertNoPendingTeardown(sessionId);
       const state = this.requireSession(sessionId);
+      const requestedProxy = options?.proxy === undefined ? state.proxy : normaliseProxyConfiguration(options.proxy);
       if (state.persistent.engine !== this.identity.engine) {
         throw new ConflictException('session engine does not match this gateway node');
       }
-      if (state.engine) return this.record(state);
+      if (state.engine) {
+        if (!sameProxyConfiguration(state.proxy, requestedProxy)) {
+          throw new ConflictException('session proxy cannot change while the engine is active');
+        }
+        return this.record(state);
+      }
+      state.proxy = requestedProxy;
       if (state.reconnectTimer) {
         clearTimeout(state.reconnectTimer);
         state.reconnectTimer = undefined;
@@ -209,6 +217,7 @@ export class EmbeddedOpenWAEngineService implements OnModuleInit, OnModuleDestro
       const state = this.requireSession(sessionId);
       this.cancelReconnect(state);
       const engine = this.detachEngine(state);
+      state.proxy = undefined;
       if (engine) {
         try {
           await withTimeout(engine.disconnect(), teardownTimeoutMs());
@@ -229,6 +238,7 @@ export class EmbeddedOpenWAEngineService implements OnModuleInit, OnModuleDestro
       const state = this.requireSession(sessionId);
       this.cancelReconnect(state);
       const engine = this.detachEngine(state);
+      state.proxy = undefined;
       if (!engine) throw new BadRequestException('session is not started');
       const operation = engine.logout();
       this.trackTeardown(sessionId, operation);
@@ -256,6 +266,7 @@ export class EmbeddedOpenWAEngineService implements OnModuleInit, OnModuleDestro
       const state = this.requireSession(sessionId);
       this.cancelReconnect(state);
       const engine = this.detachEngine(state);
+      state.proxy = undefined;
       if (engine) {
         try {
           await withTimeout(engine.destroy(), teardownTimeoutMs());
@@ -359,11 +370,14 @@ export class EmbeddedOpenWAEngineService implements OnModuleInit, OnModuleDestro
     }
   }
   private createEngine(session: PersistentSession): IWhatsAppEngine {
+    const proxy = this.sessions.get(session.id)?.proxy;
     if (session.engine === 'BAILEYS') {
       return new BaileysAdapter({
         sessionId: session.name,
         dbSessionId: session.id,
         authDir: join(this.authDirectory, 'baileys'),
+        proxyUrl: proxy?.url,
+        proxyType: proxy?.type,
         lidMappingStore: this.lidMappings,
       });
     }
@@ -376,6 +390,7 @@ export class EmbeddedOpenWAEngineService implements OnModuleInit, OnModuleDestro
         args,
         executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
       },
+      proxy: proxy ? { url: proxy.url, type: proxy.type } : undefined,
       lidMappingStore: this.lidMappings,
     });
   }
@@ -799,6 +814,24 @@ function validateSessionId(value: string): string {
   if (!/^[A-Za-z0-9_-]{3,50}$/.test(id)) throw new BadRequestException('session identifier format is invalid');
   return id;
 }
+function normaliseProxyConfiguration(value: SessionProxyConfiguration | undefined): SessionProxyConfiguration | undefined {
+  if (value === undefined) return undefined;
+  const type = String(value.type ?? '').trim().toLowerCase() as SessionProxyConfiguration['type'];
+  if (!['http', 'https', 'socks4', 'socks5'].includes(type)) throw new BadRequestException('session proxy type is invalid');
+  let parsed: URL;
+  try {
+    parsed = new URL(String(value.url ?? '').trim());
+  } catch {
+    throw new BadRequestException('session proxy URL is invalid');
+  }
+  if (!parsed.hostname || parsed.protocol !== `${type}:` || parsed.hash) throw new BadRequestException('session proxy URL does not match its type');
+  return { url: String(value.url ?? '').trim(), type };
+}
+
+function sameProxyConfiguration(left: SessionProxyConfiguration | undefined, right: SessionProxyConfiguration | undefined): boolean {
+  return left?.url === right?.url && left?.type === right?.type;
+}
+
 function mapHealth(status: EngineStatus, detail?: string | null): SessionHealth {
   let mapped: SessionHealth['status'] = 'UNKNOWN';
   if (status === EngineStatus.READY) mapped = 'READY';

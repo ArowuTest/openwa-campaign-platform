@@ -1909,6 +1909,40 @@ paths:
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       responses: { '200': { description: Gateway session health } }
+  /sender-sessions/{id}/proxy:
+    get:
+      operationId: getSenderSessionProxyStatus
+      summary: Read whether a stable governed proxy is configured; credentials are never returned
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Proxy configuration status, content: { application/json: { schema: { $ref: '#/components/schemas/SenderProxyStatus' } } } }
+        '404': { description: Sender session not found }
+    put:
+      operationId: configureSenderSessionProxy
+      summary: Configure an encrypted stable per-session proxy for approved routing; recent MFA step-up required
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/SenderProxyConfigurationRequest' } } }
+      responses:
+        '200': { description: Proxy configured without returning credentials, content: { application/json: { schema: { $ref: '#/components/schemas/SenderProxyStatus' } } } }
+        '403': { description: Recent MFA step-up required }
+        '409': { description: Session is active or changed concurrently }
+        '422': { description: Proxy configuration is invalid }
+    delete:
+      operationId: clearSenderSessionProxy
+      summary: Remove the governed per-session proxy from an inactive session; recent MFA step-up required
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content: { application/json: { schema: { $ref: '#/components/schemas/SenderLifecycleAction' } } }
+      responses:
+        '200': { description: Proxy removed, content: { application/json: { schema: { $ref: '#/components/schemas/SenderProxyStatus' } } } }
+        '403': { description: Recent MFA step-up required }
+        '409': { description: Session is active or changed concurrently }
   /sender-sessions/{id}/pairing/qr:
     get:
       operationId: getGatewaySenderSessionQR
@@ -3060,6 +3094,23 @@ components:
       additionalProperties: false
       required: [expectedVersion, reason]
       properties:
+        expectedVersion: { type: integer, format: int64, minimum: 1 }
+        reason: { type: string, minLength: 8 }
+    SenderProxyStatus:
+      type: object
+      additionalProperties: false
+      required: [sessionId, configured, version]
+      properties:
+        sessionId: { type: string, format: uuid }
+        configured: { type: boolean }
+        version: { type: integer, format: int64, minimum: 1 }
+    SenderProxyConfigurationRequest:
+      type: object
+      additionalProperties: false
+      required: [url, type, expectedVersion, reason]
+      properties:
+        url: { type: string, format: uri, writeOnly: true }
+        type: { type: string, enum: [http, https, socks4, socks5] }
         expectedVersion: { type: integer, format: int64, minimum: 1 }
         reason: { type: string, minLength: 8 }
     TransportSelectionRequest:

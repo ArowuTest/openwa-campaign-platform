@@ -192,7 +192,14 @@ type Repository interface {
 type Recorder struct {
 	repository Repository
 	clock      func() time.Time
+	mu         sync.Mutex
 }
+
+const (
+	auditChainConflictMaxAttempts = 32
+	auditChainConflictBaseDelay   = time.Millisecond
+	auditChainConflictMaxDelay    = 50 * time.Millisecond
+)
 
 func NewRecorder(repository Repository) *Recorder {
 	return &Recorder{repository: repository, clock: time.Now}
@@ -206,18 +213,48 @@ func (r *Recorder) Record(ctx context.Context, input Input) (Event, error) {
 	if err != nil {
 		return Event{}, err
 	}
-	for attempt := 0; attempt < 4; attempt++ {
+
+	// A hash chain is inherently sequential. Serialising through one recorder
+	// avoids same-process writers repeatedly invalidating each other's observed
+	// head while PostgreSQL still provides the cross-process CAS boundary.
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for attempt := 0; attempt < auditChainConflictMaxAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return Event{}, err
+		}
 		sequence, hash, err := r.repository.Head(ctx)
 		if err != nil {
 			return Event{}, err
 		}
 		stored, err := r.repository.Append(ctx, event, sequence, hash)
-		if errors.Is(err, ErrChainConflict) {
-			continue
+		if !errors.Is(err, ErrChainConflict) {
+			return stored, err
 		}
-		return stored, err
+		if attempt == auditChainConflictMaxAttempts-1 {
+			return Event{}, ErrChainConflict
+		}
+		if err := waitForAuditChainRetry(ctx, attempt); err != nil {
+			return Event{}, err
+		}
 	}
 	return Event{}, ErrChainConflict
+}
+
+func waitForAuditChainRetry(ctx context.Context, attempt int) error {
+	delay := auditChainConflictBaseDelay << attempt
+	if delay <= 0 || delay > auditChainConflictMaxDelay {
+		delay = auditChainConflictMaxDelay
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // MemoryRepository is primarily for tests and local development. The PostgreSQL

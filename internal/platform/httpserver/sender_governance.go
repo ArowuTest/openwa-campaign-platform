@@ -47,12 +47,21 @@ func (s *Server) listSenderPools(w http.ResponseWriter, r *http.Request) {
 	if !s.requireSenderGovernance(w, r) {
 		return
 	}
-	v, err := s.deps.SenderGovernance.Store.ListPools(r.Context())
+	request, err := httpx.ParsePage(r, 100, 500)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE", "The sender-pool page request is invalid.", nil)
+		return
+	}
+	page, err := s.deps.SenderGovernance.ListPoolsPage(r.Context(), request.Limit, request.Cursor)
+	if errors.Is(err, sender.ErrInvalidInventoryCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The sender-pool page cursor is invalid.", nil)
+		return
+	}
 	if err != nil {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, http.StatusOK, v)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 
 type senderPoolRequest struct {
@@ -115,12 +124,21 @@ func (s *Server) listSenderNodes(w http.ResponseWriter, r *http.Request) {
 	if !s.requireSenderGovernance(w, r) {
 		return
 	}
-	v, err := s.deps.SenderGovernance.Store.ListNodes(r.Context())
+	request, err := httpx.ParsePage(r, 100, 500)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE", "The sender-node page request is invalid.", nil)
+		return
+	}
+	page, err := s.deps.SenderGovernance.ListNodesPage(r.Context(), request.Limit, request.Cursor)
+	if errors.Is(err, sender.ErrInvalidInventoryCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The sender-node page cursor is invalid.", nil)
+		return
+	}
 	if err != nil {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, 200, v)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 
 type senderNodeRequest struct {
@@ -178,12 +196,21 @@ func (s *Server) listSenderSessions(w http.ResponseWriter, r *http.Request) {
 	if !s.requireSenderGovernance(w, r) {
 		return
 	}
-	v, err := s.deps.SenderGovernance.Store.ListSessions(r.Context())
+	request, err := httpx.ParsePage(r, 100, 500)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE", "The sender-session page request is invalid.", nil)
+		return
+	}
+	page, err := s.deps.SenderGovernance.ListSessionsPage(r.Context(), request.Limit, request.Cursor)
+	if errors.Is(err, sender.ErrInvalidPaginationCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The sender-session page cursor is invalid.", nil)
+		return
+	}
 	if err != nil {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, 200, v)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 
 func (s *Server) getSenderSessionHealth(w http.ResponseWriter, r *http.Request) {

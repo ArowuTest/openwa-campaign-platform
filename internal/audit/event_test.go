@@ -87,3 +87,40 @@ func TestAuditAppendRejectsSameIDWithDifferentIntent(t *testing.T) {
 		t.Fatalf("expected idempotency conflict, got %v", err)
 	}
 }
+
+type transientConflictRepository struct {
+	Repository
+	mu        sync.Mutex
+	remaining int
+}
+
+func (r *transientConflictRepository) Append(ctx context.Context, event Event, expectedSequence uint64, expectedHash string) (Event, error) {
+	r.mu.Lock()
+	if r.remaining > 0 {
+		r.remaining--
+		r.mu.Unlock()
+		return Event{}, ErrChainConflict
+	}
+	r.mu.Unlock()
+	return r.Repository.Append(ctx, event, expectedSequence, expectedHash)
+}
+
+func TestRecorderRetriesTransientChainContentionBeyondFourConflicts(t *testing.T) {
+	base := NewMemoryRepository()
+	repository := &transientConflictRepository{Repository: base, remaining: 6}
+	recorder := NewRecorder(repository)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, err := recorder.Record(ctx, Input{
+		ActorType: "USER", ActorID: "user-1", Action: "TEST",
+		ObjectType: "OBJECT", ObjectID: "object-1", CorrelationID: "request-contention",
+	})
+	if err != nil {
+		t.Fatalf("transient chain contention dropped audit event: %v", err)
+	}
+	items, err := base.List(context.Background(), 0, 10)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("expected one persisted audit event after contention, items=%d err=%v", len(items), err)
+	}
+}

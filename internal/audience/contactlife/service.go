@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -182,6 +183,32 @@ func (r *MemoryRepository) Events(_ context.Context, id string, limit int) ([]Ev
 	return append([]Event(nil), items...), nil
 }
 
+func (r *MemoryRepository) ListEventPage(_ context.Context, id string, limit int, before *time.Time, beforeID string) ([]Event, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if _, ok := r.records[id]; !ok {
+		return nil, ErrNotFound
+	}
+	items := append([]Event(nil), r.events[id]...)
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].OccurredAt.Equal(items[j].OccurredAt) {
+			return items[i].ID > items[j].ID
+		}
+		return items[i].OccurredAt.After(items[j].OccurredAt)
+	})
+	out := make([]Event, 0, limit)
+	for _, item := range items {
+		if before != nil && (item.OccurredAt.After(*before) || (item.OccurredAt.Equal(*before) && item.ID >= beforeID)) {
+			continue
+		}
+		out = append(out, item)
+		if len(out) == limit {
+			break
+		}
+	}
+	return out, nil
+}
+
 type PostgreSQLRepository struct{ DB *sql.DB }
 
 func (r *PostgreSQLRepository) Get(ctx context.Context, id string) (Record, error) {
@@ -249,6 +276,22 @@ func (r *PostgreSQLRepository) Events(ctx context.Context, id string, limit int)
 			return nil, err
 		}
 		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+func (r *PostgreSQLRepository) ListEventPage(ctx context.Context, id string, limit int, before *time.Time, beforeID string) ([]Event, error) {
+	rows, err := r.DB.QueryContext(ctx, `SELECT id::text,contact_id::text,previous_status,new_status,previous_processing_restricted,new_processing_restricted,actor_id::text,reason,contact_version,occurred_at FROM contact_lifecycle_events WHERE contact_id=$1::uuid AND ($3::timestamptz IS NULL OR occurred_at<$3 OR (occurred_at=$3 AND id<NULLIF($4,'')::uuid)) ORDER BY occurred_at DESC,id DESC LIMIT $2`, id, limit, before, beforeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Event{}
+	for rows.Next() {
+		var event Event
+		if err := rows.Scan(&event.ID, &event.ContactID, &event.PreviousStatus, &event.NewStatus, &event.PreviousRestriction, &event.NewRestriction, &event.ActorID, &event.Reason, &event.ContactVersion, &event.OccurredAt); err != nil {
+			return nil, err
+		}
+		out = append(out, event)
 	}
 	return out, rows.Err()
 }

@@ -56,6 +56,7 @@ type Config struct {
 	GatewayCommandPreviousSecret      string
 	GatewayRuntimeSecret              string
 	GatewayRuntimePreviousSecret      string
+	GatewayStaleAfter                 time.Duration
 	GatewayCallbackMaxSkew            time.Duration
 	MediaDownloadSecret               string
 	ObjectStoreDriver                 string
@@ -103,6 +104,10 @@ func Load() (Config, error) {
 	}
 
 	maxPreview, err := intEnv("MAX_IMPORT_PREVIEW_ROWS", 100_000)
+	if err != nil {
+		return Config{}, err
+	}
+	gatewayStaleSeconds, err := intEnv("GATEWAY_STALE_AFTER_SECONDS", 120)
 	if err != nil {
 		return Config{}, err
 	}
@@ -219,6 +224,7 @@ func Load() (Config, error) {
 		GatewayCommandPreviousSecret:      commandPreviousSecret,
 		GatewayRuntimeSecret:              runtimeSecret,
 		GatewayRuntimePreviousSecret:      runtimePreviousSecret,
+		GatewayStaleAfter:                 time.Duration(gatewayStaleSeconds) * time.Second,
 		GatewayCallbackMaxSkew:            callbackSkew,
 		MediaDownloadSecret:               mediaDownloadSecret,
 		ObjectStoreDriver:                 strings.ToLower(strings.TrimSpace(envOrDefault("OBJECT_STORE_DRIVER", "filesystem"))),
@@ -319,6 +325,9 @@ func (c Config) Validate() error {
 	}
 	if len(c.MediaDownloadSecret) > 0 && len(c.MediaDownloadSecret) < 32 {
 		return errors.New("MEDIA_DOWNLOAD_SECRET must contain at least 32 characters")
+	}
+	if c.GatewayStaleAfter < 30*time.Second || c.GatewayStaleAfter > time.Hour {
+		return errors.New("GATEWAY_STALE_AFTER_SECONDS must be between 30 and 3600")
 	}
 	if c.GatewayCallbackMaxSkew <= 0 || c.GatewayCallbackMaxSkew > 15*time.Minute {
 		return errors.New("GATEWAY_CALLBACK_MAX_SKEW must be positive and no more than 15 minutes")

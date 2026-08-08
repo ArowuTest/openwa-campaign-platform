@@ -14,6 +14,8 @@ import (
 
 type PostgreSQLGovernanceStore struct{ DB *sql.DB }
 
+const poolColumns = `id::text,name,coalesce(organisation_id::text,''),status,max_messages_per_minute,daily_capacity,reserved_capacity,version,created_at,updated_at`
+
 func (p *PostgreSQLGovernanceStore) ListPools(ctx context.Context) ([]Pool, error) {
 	rows, err := p.DB.QueryContext(ctx, `SELECT id::text,name,coalesce(organisation_id::text,''),status,max_messages_per_minute,daily_capacity,reserved_capacity,version,created_at,updated_at FROM sender_pools ORDER BY name LIMIT 5000`)
 	if err != nil {
@@ -30,32 +32,74 @@ func (p *PostgreSQLGovernanceStore) ListPools(ctx context.Context) ([]Pool, erro
 	}
 	return out, rows.Err()
 }
+func (p *PostgreSQLGovernanceStore) ListPoolPage(ctx context.Context, limit int, afterName, afterID string) ([]Pool, error) {
+	if p == nil || p.DB == nil {
+		return nil, errors.New("database is required")
+	}
+	if limit <= 0 || limit > 501 {
+		limit = 100
+	}
+	rows, err := p.DB.QueryContext(ctx, `SELECT `+poolColumns+` FROM sender_pools WHERE ($2::text='' OR name>$2 OR (name=$2 AND id>NULLIF($3::text,'')::uuid)) ORDER BY name ASC,id ASC LIMIT $1`, limit, afterName, afterID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]Pool, 0, limit)
+	for rows.Next() {
+		var v Pool
+		if err := rows.Scan(&v.ID, &v.Name, &v.OrganisationID, &v.Status, &v.MaxMessagesPerMinute, &v.DailyCapacity, &v.ReservedCapacity, &v.Version, &v.CreatedAt, &v.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
 func (p *PostgreSQLGovernanceStore) CreatePool(ctx context.Context, v Pool, actor, reason string) (Pool, error) {
-	err := p.DB.QueryRowContext(ctx, `WITH inserted AS (INSERT INTO sender_pools(name,organisation_id,status,max_messages_per_minute,daily_capacity,reserved_capacity,version) VALUES($1,nullif($2,'')::uuid,$3,$4,$5,$6,1) RETURNING id,name,coalesce(organisation_id::text,''),status,max_messages_per_minute,daily_capacity,reserved_capacity,version,created_at,updated_at), audit AS (INSERT INTO sender_governance_events(object_type,object_id,action,actor_id,reason,object_version) SELECT 'POOL',id,'CREATED',$7::uuid,$8,version FROM inserted) SELECT id::text,name,coalesce(organisation_id::text,''),status,max_messages_per_minute,daily_capacity,reserved_capacity,version,created_at,updated_at FROM inserted`, v.Name, v.OrganisationID, v.Status, v.MaxMessagesPerMinute, v.DailyCapacity, v.ReservedCapacity, actor, reason).Scan(&v.ID, &v.Name, &v.OrganisationID, &v.Status, &v.MaxMessagesPerMinute, &v.DailyCapacity, &v.ReservedCapacity, &v.Version, &v.CreatedAt, &v.UpdatedAt)
+	row := p.DB.QueryRowContext(ctx, `WITH inserted AS (
+INSERT INTO sender_pools(name,organisation_id,status,max_messages_per_minute,daily_capacity,reserved_capacity,version)
+VALUES($1,NULLIF($2,'')::uuid,$3,$4,$5,$6,1)
+RETURNING *), audit AS (
+INSERT INTO sender_governance_events(object_type,object_id,action,actor_id,reason,object_version)
+SELECT 'POOL',id,'CREATED',$7::uuid,$8,version FROM inserted)
+SELECT `+poolColumns+` FROM inserted`, v.Name, v.OrganisationID, v.Status, v.MaxMessagesPerMinute, v.DailyCapacity, v.ReservedCapacity, actor, reason)
+	err := row.Scan(&v.ID, &v.Name, &v.OrganisationID, &v.Status, &v.MaxMessagesPerMinute, &v.DailyCapacity, &v.ReservedCapacity, &v.Version, &v.CreatedAt, &v.UpdatedAt)
 	return v, err
 }
 func (p *PostgreSQLGovernanceStore) UpdatePool(ctx context.Context, id string, e int64, v Pool, actor, reason string) (Pool, error) {
-	err := p.DB.QueryRowContext(ctx, `WITH updated AS (UPDATE sender_pools SET name=$3,status=$4,max_messages_per_minute=$5,daily_capacity=$6,reserved_capacity=$7,version=version+1,updated_at=now() WHERE id=$1::uuid AND version=$2 RETURNING id,name,coalesce(organisation_id::text,''),status,max_messages_per_minute,daily_capacity,reserved_capacity,version,created_at,updated_at), audit AS (INSERT INTO sender_governance_events(object_type,object_id,action,actor_id,reason,object_version) SELECT 'POOL',id,'UPDATED',$8::uuid,$9,version FROM updated) SELECT id::text,name,coalesce(organisation_id::text,''),status,max_messages_per_minute,daily_capacity,reserved_capacity,version,created_at,updated_at FROM updated`, id, e, v.Name, v.Status, v.MaxMessagesPerMinute, v.DailyCapacity, v.ReservedCapacity, actor, reason).Scan(&v.ID, &v.Name, &v.OrganisationID, &v.Status, &v.MaxMessagesPerMinute, &v.DailyCapacity, &v.ReservedCapacity, &v.Version, &v.CreatedAt, &v.UpdatedAt)
+	row := p.DB.QueryRowContext(ctx, `WITH updated AS (
+UPDATE sender_pools SET name=$3,status=$4,max_messages_per_minute=$5,daily_capacity=$6,reserved_capacity=$7,version=version+1,updated_at=now()
+WHERE id=$1::uuid AND version=$2
+RETURNING *), audit AS (
+INSERT INTO sender_governance_events(object_type,object_id,action,actor_id,reason,object_version)
+SELECT 'POOL',id,'UPDATED',$8::uuid,$9,version FROM updated)
+SELECT `+poolColumns+` FROM updated`, id, e, v.Name, v.Status, v.MaxMessagesPerMinute, v.DailyCapacity, v.ReservedCapacity, actor, reason)
+	err := row.Scan(&v.ID, &v.Name, &v.OrganisationID, &v.Status, &v.MaxMessagesPerMinute, &v.DailyCapacity, &v.ReservedCapacity, &v.Version, &v.CreatedAt, &v.UpdatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Pool{}, ErrSenderConflict
 	}
 	return v, err
 }
 
-const nodeColumns = `id::text,name,coalesce(public_ip::text,''),coalesce(internal_url,''),coalesce(gateway_pool_id::text,''),coalesce(provider,''),coalesce(engine,''),coalesce(adapter_version,''),coalesce(boot_id,''),status,coalesce(build_version,''),coalesce(gateway_version,''),coalesce(worker_version,''),coalesce(configuration_version,''),runtime_capabilities,coalesce(runtime_state,''),capacity,session_count,queue_depth,cpu_percent::float8,memory_bytes,draining,registered_at,last_heartbeat_at,governance_version`
+const nodeColumns = `id::text,name,coalesce(public_ip::text,''),coalesce(internal_url,''),coalesce(gateway_pool_id::text,''),coalesce(provider,''),coalesce(engine,''),coalesce(adapter_version,''),coalesce(boot_id,''),status,coalesce(build_version,''),coalesce(gateway_version,''),coalesce(worker_version,''),coalesce(configuration_version,''),runtime_capabilities,coalesce(runtime_state,''),capacity,session_count,queue_depth,cpu_percent::float8,memory_bytes,resource_health,draining,registered_at,last_heartbeat_at,governance_version`
 
 func scanNode(row interface{ Scan(...any) error }) (Node, error) {
 	var value Node
-	var raw []byte
+	var raw, rawResourceHealth []byte
 	var registered, heartbeat sql.NullTime
 	var runtimeState string
-	err := row.Scan(&value.ID, &value.Name, &value.PublicIP, &value.InternalURL, &value.GatewayPoolID, &value.Provider, &value.Engine, &value.AdapterVersion, &value.BootID, &value.Status, &value.BuildVersion, &value.GatewayVersion, &value.WorkerVersion, &value.ConfigurationVersion, &raw, &runtimeState, &value.Capacity, &value.SessionCount, &value.QueueDepth, &value.CPUPercent, &value.MemoryBytes, &value.Draining, &registered, &heartbeat, &value.Version)
+	err := row.Scan(&value.ID, &value.Name, &value.PublicIP, &value.InternalURL, &value.GatewayPoolID, &value.Provider, &value.Engine, &value.AdapterVersion, &value.BootID, &value.Status, &value.BuildVersion, &value.GatewayVersion, &value.WorkerVersion, &value.ConfigurationVersion, &raw, &runtimeState, &value.Capacity, &value.SessionCount, &value.QueueDepth, &value.CPUPercent, &value.MemoryBytes, &rawResourceHealth, &value.Draining, &registered, &heartbeat, &value.Version)
 	if err != nil {
 		return Node{}, err
 	}
 	value.RuntimeState = RuntimeState(runtimeState)
 	if len(raw) > 0 {
 		if value.RuntimeCapabilities, err = decodeCapabilities(raw); err != nil {
+			return Node{}, err
+		}
+	}
+	if len(rawResourceHealth) > 0 {
+		if err := json.Unmarshal(rawResourceHealth, &value.ResourceHealth); err != nil {
 			return Node{}, err
 		}
 	}
@@ -86,6 +130,29 @@ func (p *PostgreSQLGovernanceStore) ListNodes(ctx context.Context) ([]Node, erro
 	}
 	return out, rows.Err()
 }
+func (p *PostgreSQLGovernanceStore) ListNodePage(ctx context.Context, limit int, afterName, afterID string) ([]Node, error) {
+	if p == nil || p.DB == nil {
+		return nil, errors.New("database is required")
+	}
+	if limit <= 0 || limit > 501 {
+		limit = 100
+	}
+	rows, err := p.DB.QueryContext(ctx, `SELECT `+nodeColumns+` FROM sender_nodes WHERE ($2::text='' OR name>$2 OR (name=$2 AND id>NULLIF($3::text,'')::uuid)) ORDER BY name ASC,id ASC LIMIT $1`, limit, afterName, afterID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]Node, 0, limit)
+	for rows.Next() {
+		value, scanErr := scanNode(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out = append(out, value)
+	}
+	return out, rows.Err()
+}
+
 func (p *PostgreSQLGovernanceStore) GetNode(ctx context.Context, nodeID string) (Node, error) {
 	value, err := scanNode(p.DB.QueryRowContext(ctx, `SELECT `+nodeColumns+` FROM sender_nodes WHERE id=$1::uuid`, nodeID))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -209,6 +276,24 @@ func (p *PostgreSQLGovernanceStore) ListSessions(ctx context.Context) ([]Governe
 	return out, rows.Err()
 }
 
+func (p *PostgreSQLGovernanceStore) ListSessionPage(ctx context.Context, limit int, afterMaskedMSISDN, afterID string) ([]GovernedSession, error) {
+	rows, err := p.DB.QueryContext(ctx, `SELECT `+governedSessionColumns+` FROM sender_sessions
+WHERE ($2='' OR masked_msisdn>$2 OR (masked_msisdn=$2 AND id>nullif($3,'')::uuid))
+ORDER BY masked_msisdn ASC,id ASC LIMIT $1`, limit, afterMaskedMSISDN, afterID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []GovernedSession
+	for rows.Next() {
+		value, scanErr := scanGovernedSession(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out = append(out, value)
+	}
+	return out, rows.Err()
+}
 func (p *PostgreSQLGovernanceStore) GetSession(ctx context.Context, id string) (GovernedSession, error) {
 	value, err := scanGovernedSession(p.DB.QueryRowContext(ctx, `SELECT `+governedSessionColumns+` FROM sender_sessions WHERE id=$1::uuid`, id))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -355,6 +440,29 @@ func (p *PostgreSQLGovernanceStore) ListGatewayPools(ctx context.Context) ([]Gat
 	}
 	return out, rows.Err()
 }
+func (p *PostgreSQLGovernanceStore) ListGatewayPoolPage(ctx context.Context, limit int, afterName, afterID string) ([]GatewayPool, error) {
+	if p == nil || p.DB == nil {
+		return nil, errors.New("database is required")
+	}
+	if limit <= 0 || limit > 501 {
+		limit = 100
+	}
+	rows, err := p.DB.QueryContext(ctx, `SELECT `+gatewayPoolColumns+` FROM gateway_pools WHERE ($2::text='' OR name>$2 OR (name=$2 AND id>NULLIF($3::text,'')::uuid)) ORDER BY name ASC,id ASC LIMIT $1`, limit, afterName, afterID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]GatewayPool, 0, limit)
+	for rows.Next() {
+		value, scanErr := scanGatewayPool(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out = append(out, value)
+	}
+	return out, rows.Err()
+}
+
 func (p *PostgreSQLGovernanceStore) GetGatewayPool(ctx context.Context, poolID string) (GatewayPool, error) {
 	value, err := scanGatewayPool(p.DB.QueryRowContext(ctx, `SELECT `+gatewayPoolColumns+` FROM gateway_pools WHERE id=$1::uuid`, poolID))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -394,7 +502,11 @@ SELECT `+gatewayPoolColumns+` FROM updated`, poolID, expected, value.Name, value
 }
 
 func (p *PostgreSQLGovernanceStore) ListGatewayPoolEvents(ctx context.Context, poolID string, limit int) ([]GatewayPoolEvent, error) {
-	rows, err := p.DB.QueryContext(ctx, `SELECT id::text,gateway_pool_id::text,event_type,version,coalesce(actor_id::text,''),reason,evidence,occurred_at FROM gateway_pool_events WHERE gateway_pool_id=$1::uuid ORDER BY occurred_at DESC,id DESC LIMIT $2`, poolID, limit)
+	return p.ListGatewayPoolEventPage(ctx, poolID, limit, nil, "")
+}
+
+func (p *PostgreSQLGovernanceStore) ListGatewayPoolEventPage(ctx context.Context, poolID string, limit int, before *time.Time, beforeID string) ([]GatewayPoolEvent, error) {
+	rows, err := p.DB.QueryContext(ctx, `SELECT id::text,gateway_pool_id::text,event_type,version,coalesce(actor_id::text,''),reason,evidence,occurred_at FROM gateway_pool_events WHERE gateway_pool_id=$1::uuid AND ($3::timestamptz IS NULL OR occurred_at<$3 OR (occurred_at=$3 AND id<NULLIF($4,'')::uuid)) ORDER BY occurred_at DESC,id DESC LIMIT $2`, poolID, limit, before, beforeID)
 	if err != nil {
 		return nil, err
 	}
@@ -448,6 +560,7 @@ func runtimeIdentity(report RuntimeReport) map[string]any {
 		"runtimeState": report.RuntimeState, "internalUrl": report.InternalURL,
 		"capacity": report.Capacity, "sessionCount": report.SessionCount,
 		"queueDepth": report.QueueDepth, "cpuPercent": report.CPUPercent, "memoryBytes": report.MemoryBytes,
+		"resourceHealth": report.ResourceHealth,
 	}
 }
 
@@ -489,6 +602,10 @@ func (p *PostgreSQLGovernanceStore) ApplyRuntimeReport(ctx context.Context, node
 	if err != nil {
 		return Node{}, err
 	}
+	resourceHealth, err := json.Marshal(report.ResourceHealth)
+	if err != nil {
+		return Node{}, err
+	}
 	status := "READY"
 	draining := false
 	switch report.RuntimeState {
@@ -501,7 +618,7 @@ func (p *PostgreSQLGovernanceStore) ApplyRuntimeReport(ctx context.Context, node
 	if oldBoot == report.BootID && oldRegistered.Valid {
 		registeredAt = oldRegistered.Time.UTC()
 	}
-	row := tx.QueryRowContext(ctx, `UPDATE sender_nodes SET internal_url=$3,gateway_pool_id=$4::uuid,provider=$5,engine=$6,adapter_version=$7,boot_id=$8,status=$9,build_version=$10,gateway_version=$11,worker_version=$12,configuration_version=$13,runtime_capabilities=$14::jsonb,runtime_state=$15,capacity=$16,session_count=$17,queue_depth=$18,cpu_percent=$19,memory_bytes=$20,draining=$21,registered_at=$22,last_heartbeat_at=$23,governance_version=governance_version+1,updated_at=$23 WHERE id=$1::uuid AND governance_version=$2 RETURNING `+nodeColumns, nodeID, expected, report.InternalURL, report.GatewayPoolID, report.Provider, report.Engine, report.AdapterVersion, report.BootID, status, report.WorkerVersion, report.GatewayVersion, report.WorkerVersion, report.ConfigurationVersion, string(capabilities), string(report.RuntimeState), report.Capacity, report.SessionCount, report.QueueDepth, report.CPUPercent, report.MemoryBytes, draining, registeredAt, now)
+	row := tx.QueryRowContext(ctx, `UPDATE sender_nodes SET internal_url=$3,gateway_pool_id=$4::uuid,provider=$5,engine=$6,adapter_version=$7,boot_id=$8,status=$9,build_version=$10,gateway_version=$11,worker_version=$12,configuration_version=$13,runtime_capabilities=$14::jsonb,runtime_state=$15,capacity=$16,session_count=$17,queue_depth=$18,cpu_percent=$19,memory_bytes=$20,resource_health=$21::jsonb,draining=$22,registered_at=$23,last_heartbeat_at=$24,updated_at=$24 WHERE id=$1::uuid AND governance_version=$2 RETURNING `+nodeColumns, nodeID, expected, report.InternalURL, report.GatewayPoolID, report.Provider, report.Engine, report.AdapterVersion, report.BootID, status, report.WorkerVersion, report.GatewayVersion, report.WorkerVersion, report.ConfigurationVersion, string(capabilities), string(report.RuntimeState), report.Capacity, report.SessionCount, report.QueueDepth, report.CPUPercent, report.MemoryBytes, string(resourceHealth), draining, registeredAt, now)
 	out, err := scanNode(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Node{}, ErrSenderConflict
@@ -561,6 +678,29 @@ func (p *PostgreSQLGovernanceStore) ListRuntimeEvents(ctx context.Context, nodeI
 	return out, rows.Err()
 }
 
+func (p *PostgreSQLGovernanceStore) ListRuntimeEventPage(ctx context.Context, nodeID string, limit int, before *time.Time, beforeID string) ([]RuntimeEvent, error) {
+	rows, err := p.DB.QueryContext(ctx, `SELECT id::text,node_id::text,gateway_pool_id::text,event_type,node_version,boot_id,runtime_identity,coalesce(request_hash,''),reason,occurred_at
+FROM gateway_runtime_events
+WHERE node_id=$1::uuid AND ($3::timestamptz IS NULL OR occurred_at<$3 OR (occurred_at=$3 AND id<nullif($4,'')::uuid))
+ORDER BY occurred_at DESC,id DESC LIMIT $2`, nodeID, limit, before, beforeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []RuntimeEvent{}
+	for rows.Next() {
+		var value RuntimeEvent
+		var raw []byte
+		if err := rows.Scan(&value.ID, &value.NodeID, &value.GatewayPoolID, &value.EventType, &value.NodeVersion, &value.BootID, &raw, &value.RequestHash, &value.Reason, &value.OccurredAt); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(raw, &value.RuntimeIdentity); err != nil {
+			return nil, err
+		}
+		out = append(out, value)
+	}
+	return out, rows.Err()
+}
 func (p *PostgreSQLGovernanceStore) GatewayPoolUsage(ctx context.Context, poolID string, now time.Time) (GatewayPoolUsage, error) {
 	var usage GatewayPoolUsage
 	err := p.DB.QueryRowContext(ctx, `SELECT

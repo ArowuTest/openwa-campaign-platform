@@ -14,12 +14,21 @@ func (s *Server) listInternalUsers(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, http.StatusServiceUnavailable, "IDENTITY_ADMINISTRATION_UNAVAILABLE", "Identity administration is unavailable.", nil)
 		return
 	}
-	items, err := s.deps.IdentityAdministration.List(r.Context())
+	request, err := httpx.ParsePage(r, 100, 500)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE", "The internal-user page request is invalid.", nil)
+		return
+	}
+	page, err := s.deps.IdentityAdministration.ListPage(r.Context(), request.Limit, request.Cursor)
+	if errors.Is(err, identity.ErrInvalidAccountListCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The internal-user page cursor is invalid.", nil)
+		return
+	}
 	if err != nil {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, http.StatusOK, items)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 
 func (s *Server) createInternalUser(w http.ResponseWriter, r *http.Request) {

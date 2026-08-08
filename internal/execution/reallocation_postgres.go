@@ -90,6 +90,23 @@ VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6::uuid,$7::uuid,$8,$9,$10,
 	return e, nil
 }
 
+func (r *PostgreSQLShardRepository) ListShardReallocationPage(ctx context.Context, shardID string, limit int, after *time.Time, afterID string) ([]ShardReallocation, error) {
+	rows, err := r.DB.QueryContext(ctx, `SELECT id::text,campaign_id::text,routing_plan_id::text,dispatch_shard_id::text,from_sender_pool_id::text,to_sender_pool_id::text,actor_id::text,reason,evidence_reference,previous_lease_version,new_lease_version,created_at FROM campaign_shard_reallocations WHERE dispatch_shard_id=$1::uuid AND ($3::timestamptz IS NULL OR created_at>$3 OR (created_at=$3 AND id>NULLIF($4,'')::uuid)) ORDER BY created_at ASC,id ASC LIMIT $2`, shardID, limit, after, afterID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []ShardReallocation{}
+	for rows.Next() {
+		var event ShardReallocation
+		if err := rows.Scan(&event.ID, &event.CampaignID, &event.RoutingPlanID, &event.DispatchShardID, &event.FromSenderPoolID, &event.ToSenderPoolID, &event.ActorID, &event.Reason, &event.EvidenceReference, &event.PreviousLeaseVersion, &event.NewLeaseVersion, &event.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, event)
+	}
+	return out, rows.Err()
+}
+
 func (r *PostgreSQLShardRepository) ListShardReallocations(ctx context.Context, shardID string) ([]ShardReallocation, error) {
 	rows, err := r.DB.QueryContext(ctx, `SELECT id::text,campaign_id::text,routing_plan_id::text,dispatch_shard_id::text,from_sender_pool_id::text,to_sender_pool_id::text,actor_id::text,reason,evidence_reference,previous_lease_version,new_lease_version,created_at FROM campaign_shard_reallocations WHERE dispatch_shard_id=$1::uuid ORDER BY created_at,id`, shardID)
 	if err != nil {

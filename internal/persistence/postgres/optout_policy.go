@@ -38,6 +38,29 @@ func (s *OptOutPolicyStore) List(ctx context.Context) ([]consent.GovernedOptOutP
 	}
 	return out, rows.Err()
 }
+func (s *OptOutPolicyStore) ListOptOutPolicyPage(ctx context.Context, limit int, before *time.Time, beforeID string) ([]consent.GovernedOptOutPolicy, error) {
+	if s == nil || s.DB == nil {
+		return nil, errors.New("database is required")
+	}
+	if limit <= 0 || limit > 501 {
+		limit = 100
+	}
+	rows, err := s.DB.QueryContext(ctx, `SELECT id,keywords,status,effective_from,effective_to,version,created_by,coalesce(submitted_by::text,''),coalesce(approved_by::text,''),reason,created_at,updated_at FROM opt_out_policies WHERE ($2::timestamptz IS NULL OR created_at<$2 OR (created_at=$2 AND id<$3::text)) ORDER BY created_at DESC,id DESC LIMIT $1`, limit, before, beforeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]consent.GovernedOptOutPolicy, 0, limit)
+	for rows.Next() {
+		p, scanErr := scanOptOut(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 func (s *OptOutPolicyStore) Get(ctx context.Context, id string) (consent.GovernedOptOutPolicy, error) {
 	p, err := scanOptOut(s.DB.QueryRowContext(ctx, `SELECT id,keywords,status,effective_from,effective_to,version,created_by,coalesce(submitted_by::text,''),coalesce(approved_by::text,''),reason,created_at,updated_at FROM opt_out_policies WHERE id=$1`, id))
 	if errors.Is(err, sql.ErrNoRows) {

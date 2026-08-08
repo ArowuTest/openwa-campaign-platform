@@ -407,3 +407,31 @@ func (r *MemoryLedgerRepository) appendEvent(contact, grant, suppression, eventT
 	eventID, _ := id.New()
 	r.events = append(r.events, ConsentEvent{ID: eventID, ContactID: contact, GrantID: grant, SuppressionID: suppression, EventType: eventType, ActorID: actor, Reason: strings.TrimSpace(reason), SourceReference: strings.TrimSpace(source), OccurredAt: at})
 }
+
+func (r *MemoryLedgerRepository) EventPage(_ context.Context, contactID string, limit int, before *time.Time, beforeID string) ([]ConsentEvent, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	items := make([]ConsentEvent, 0)
+	for _, event := range r.events {
+		if contactID != "" && event.ContactID != contactID {
+			continue
+		}
+		if before != nil && !(event.OccurredAt.Before(*before) || (event.OccurredAt.Equal(*before) && event.ID < beforeID)) {
+			continue
+		}
+		items = append(items, event)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].OccurredAt.Equal(items[j].OccurredAt) {
+			return items[i].ID > items[j].ID
+		}
+		return items[i].OccurredAt.After(items[j].OccurredAt)
+	})
+	if limit <= 0 || limit > 1001 {
+		limit = 100
+	}
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	return items, nil
+}

@@ -362,6 +362,36 @@ func (r *MemoryRepository) ListLegalHolds(_ context.Context, lookup []byte, acti
 	return out, nil
 }
 
+func (r *MemoryRepository) ListLegalHoldPage(_ context.Context, lookup []byte, activeOnly bool, limit int, before *time.Time, beforeID string) ([]LegalHold, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	key := hex.EncodeToString(lookup)
+	out := make([]LegalHold, 0, len(r.holds))
+	now := time.Now().UTC()
+	for _, h := range r.holds {
+		if hex.EncodeToString(h.SubjectLookupHMAC) != key {
+			continue
+		}
+		if activeOnly && (h.Status != HoldActive || h.ReleasedAt != nil || (h.ExpiresAt != nil && !h.ExpiresAt.After(now))) {
+			continue
+		}
+		if before != nil && !(h.CreatedAt.Before(*before) || (h.CreatedAt.Equal(*before) && h.ID < beforeID)) {
+			continue
+		}
+		out = append(out, h)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	if limit <= 0 || limit > len(out) {
+		limit = len(out)
+	}
+	return out[:limit], nil
+}
+
 func (r *MemoryRepository) ReleaseLegalHold(_ context.Context, id, reason, actor string, expected int64, now time.Time, event LegalHoldEvent) (LegalHold, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -437,3 +467,54 @@ func cloneRecordSlice(items []map[string]any) []map[string]any {
 	return out
 }
 func jsonUnmarshal(raw []byte, dst any) error { return json.Unmarshal(raw, dst) }
+
+func (r *MemoryRepository) ListEventPage(_ context.Context, id string, limit int, before *time.Time, beforeID string) ([]Event, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if _, ok := r.cases[id]; !ok {
+		return nil, ErrNotFound
+	}
+	items := append([]Event(nil), r.events[id]...)
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].OccurredAt.Equal(items[j].OccurredAt) {
+			return items[i].ID > items[j].ID
+		}
+		return items[i].OccurredAt.After(items[j].OccurredAt)
+	})
+	out := make([]Event, 0, limit)
+	for _, item := range items {
+		if before != nil && (item.OccurredAt.After(*before) || item.OccurredAt.Equal(*before) && item.ID >= beforeID) {
+			continue
+		}
+		out = append(out, item)
+		if len(out) == limit {
+			break
+		}
+	}
+	return out, nil
+}
+func (r *MemoryRepository) ListLegalHoldEventPage(_ context.Context, id string, limit int, before *time.Time, beforeID string) ([]LegalHoldEvent, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if _, ok := r.holds[id]; !ok {
+		return nil, ErrNotFound
+	}
+	items := append([]LegalHoldEvent(nil), r.holdEvents[id]...)
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].OccurredAt.Equal(items[j].OccurredAt) {
+			return items[i].ID > items[j].ID
+		}
+		return items[i].OccurredAt.After(items[j].OccurredAt)
+	})
+	out := make([]LegalHoldEvent, 0, limit)
+	for _, item := range items {
+		if before != nil && (item.OccurredAt.After(*before) || item.OccurredAt.Equal(*before) && item.ID >= beforeID) {
+			continue
+		}
+		out = append(out, item)
+		if len(out) == limit {
+			break
+		}
+	}
+	return out, nil
+}

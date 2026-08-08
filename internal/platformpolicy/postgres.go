@@ -67,6 +67,37 @@ ORDER BY updated_at DESC,id DESC LIMIT $5`, strings.ToUpper(strings.TrimSpace(qu
 	return out, rows.Err()
 }
 
+func (p *PostgreSQLStore) ListConfigurationPage(ctx context.Context, query ConfigurationQuery, before *time.Time, beforeID string) ([]Configuration, error) {
+	if p == nil || p.DB == nil {
+		return nil, errors.New("database is required")
+	}
+	limit := query.Limit
+	if limit <= 0 || limit > 501 {
+		limit = 100
+	}
+	rows, err := p.DB.QueryContext(ctx, `SELECT `+configurationColumns+`
+FROM platform_configurations
+WHERE ($1='' OR configuration_key=$1)
+  AND ($2='' OR scope_type=$2)
+  AND ($3='' OR scope_id=$3)
+  AND ($4='' OR status=$4)
+  AND ($6::timestamptz IS NULL OR updated_at<$6 OR (updated_at=$6 AND id<NULLIF($7,'')::uuid))
+ORDER BY updated_at DESC,id DESC LIMIT $5`, strings.ToUpper(strings.TrimSpace(query.Key)), string(query.ScopeType), strings.TrimSpace(query.ScopeID), string(query.Status), limit, before, beforeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]Configuration, 0, limit)
+	for rows.Next() {
+		v, scanErr := scanConfiguration(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
 func (p *PostgreSQLStore) GetConfiguration(ctx context.Context, objectID string) (Configuration, error) {
 	v, err := scanConfiguration(p.DB.QueryRowContext(ctx, `SELECT `+configurationColumns+` FROM platform_configurations WHERE id=$1::uuid`, objectID))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -228,7 +259,11 @@ func (p *PostgreSQLStore) ResolveConfiguration(ctx context.Context, key string, 
 }
 
 func (p *PostgreSQLStore) ListConfigurationEvents(ctx context.Context, objectID string, limit int) ([]Event, error) {
-	rows, err := p.DB.QueryContext(ctx, `SELECT id::text,configuration_id::text,event_type,version,actor_id::text,reason,evidence,occurred_at FROM platform_configuration_events WHERE configuration_id=$1::uuid ORDER BY occurred_at DESC,id DESC LIMIT $2`, objectID, limit)
+	return p.ListConfigurationEventPage(ctx, objectID, limit, nil, "")
+}
+
+func (p *PostgreSQLStore) ListConfigurationEventPage(ctx context.Context, objectID string, limit int, before *time.Time, beforeID string) ([]Event, error) {
+	rows, err := p.DB.QueryContext(ctx, `SELECT id::text,configuration_id::text,event_type,version,actor_id::text,reason,evidence,occurred_at FROM platform_configuration_events WHERE configuration_id=$1::uuid AND ($3::timestamptz IS NULL OR occurred_at<$3 OR (occurred_at=$3 AND id<NULLIF($4,'')::uuid)) ORDER BY occurred_at DESC,id DESC LIMIT $2`, objectID, limit, before, beforeID)
 	if err != nil {
 		return nil, err
 	}
@@ -289,6 +324,32 @@ func (p *PostgreSQLStore) ListMaintenance(ctx context.Context, status Maintenanc
 	}
 	defer rows.Close()
 	out := []MaintenanceWindow{}
+	for rows.Next() {
+		v, scanErr := scanMaintenance(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
+func (p *PostgreSQLStore) ListMaintenancePage(ctx context.Context, status MaintenanceStatus, limit int, before *time.Time, beforeID string) ([]MaintenanceWindow, error) {
+	if p == nil || p.DB == nil {
+		return nil, errors.New("database is required")
+	}
+	if limit <= 0 || limit > 501 {
+		limit = 100
+	}
+	rows, err := p.DB.QueryContext(ctx, `SELECT `+maintenanceColumns+` FROM maintenance_windows
+WHERE ($1='' OR status=$1)
+  AND ($3::timestamptz IS NULL OR updated_at<$3 OR (updated_at=$3 AND id<NULLIF($4,'')::uuid))
+ORDER BY updated_at DESC,id DESC LIMIT $2`, string(status), limit, before, beforeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]MaintenanceWindow, 0, limit)
 	for rows.Next() {
 		v, scanErr := scanMaintenance(rows)
 		if scanErr != nil {
@@ -380,7 +441,11 @@ func (p *PostgreSQLStore) ListActiveMaintenance(ctx context.Context, at time.Tim
 }
 
 func (p *PostgreSQLStore) ListMaintenanceEvents(ctx context.Context, objectID string, limit int) ([]Event, error) {
-	rows, err := p.DB.QueryContext(ctx, `SELECT id::text,maintenance_window_id::text,event_type,version,actor_id::text,reason,evidence,occurred_at FROM maintenance_window_events WHERE maintenance_window_id=$1::uuid ORDER BY occurred_at DESC,id DESC LIMIT $2`, objectID, limit)
+	return p.ListMaintenanceEventPage(ctx, objectID, limit, nil, "")
+}
+
+func (p *PostgreSQLStore) ListMaintenanceEventPage(ctx context.Context, objectID string, limit int, before *time.Time, beforeID string) ([]Event, error) {
+	rows, err := p.DB.QueryContext(ctx, `SELECT id::text,maintenance_window_id::text,event_type,version,actor_id::text,reason,evidence,occurred_at FROM maintenance_window_events WHERE maintenance_window_id=$1::uuid AND ($3::timestamptz IS NULL OR occurred_at<$3 OR (occurred_at=$3 AND id<NULLIF($4,'')::uuid)) ORDER BY occurred_at DESC,id DESC LIMIT $2`, objectID, limit, before, beforeID)
 	if err != nil {
 		return nil, err
 	}

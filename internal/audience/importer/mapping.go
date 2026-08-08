@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -251,6 +252,34 @@ func (m *MemoryMappingStore) List(_ context.Context, org, source string, limit i
 	}
 	return out, nil
 }
+func (m *MemoryMappingStore) ListMappingPage(_ context.Context, org, source string, limit int, before *time.Time, beforeID string) ([]MappingDefinition, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]MappingDefinition, 0, len(m.items))
+	for _, v := range m.items {
+		if org != "" && v.OrganisationID != org {
+			continue
+		}
+		if source != "" && !strings.EqualFold(v.SourceSystem, source) {
+			continue
+		}
+		if before != nil && !(v.CreatedAt.Before(*before) || (v.CreatedAt.Equal(*before) && v.ID < beforeID)) {
+			continue
+		}
+		out = append(out, v)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	if limit <= 0 || limit > len(out) {
+		limit = len(out)
+	}
+	return out[:limit], nil
+}
+
 func (m *MemoryMappingStore) CompareAndSwap(_ context.Context, v MappingDefinition, expected int64, e MappingEvent) (MappingDefinition, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -325,9 +354,36 @@ func (m *MemoryMappingStore) Events(_ context.Context, idv string, limit int) ([
 	return append([]MappingEvent(nil), items...), nil
 }
 
+func (m *MemoryMappingStore) ListMappingEventPage(_ context.Context, idv string, limit int, before *time.Time, beforeID string) ([]MappingEvent, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if _, ok := m.items[idv]; !ok {
+		return nil, ErrImportNotFound
+	}
+	items := append([]MappingEvent(nil), m.events[idv]...)
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].OccurredAt.Equal(items[j].OccurredAt) {
+			return items[i].ID > items[j].ID
+		}
+		return items[i].OccurredAt.After(items[j].OccurredAt)
+	})
+	out := make([]MappingEvent, 0, limit)
+	for _, item := range items {
+		if before != nil && (item.OccurredAt.After(*before) || item.OccurredAt.Equal(*before) && item.ID >= beforeID) {
+			continue
+		}
+		out = append(out, item)
+		if len(out) == limit {
+			break
+		}
+	}
+	return out, nil
+}
+
 type PostgreSQLMappingStore struct{ DB *sql.DB }
 
-const mappingSelect = `SELECT id::text,coalesce(organisation_id::text,''),name,coalesce(source_system,''),template_version,coalesce(worksheet,''),mapping,status,effective_from,effective_to,created_by::text,coalesce(submitted_by::text,''),coalesce(approved_by::text,''),reason,version,created_at,updated_at FROM audience_import_mapping_definitions`
+const mappingColumns = `id::text,coalesce(organisation_id::text,''),name,coalesce(source_system,''),template_version,coalesce(worksheet,''),mapping,status,effective_from,effective_to,created_by::text,coalesce(submitted_by::text,''),coalesce(approved_by::text,''),reason,version,created_at,updated_at`
+const mappingSelect = `SELECT ` + mappingColumns + ` FROM audience_import_mapping_definitions`
 
 type mappingScanner interface{ Scan(...any) error }
 
@@ -350,7 +406,7 @@ func (p *PostgreSQLMappingStore) Create(ctx context.Context, v MappingDefinition
 		return v, err
 	}
 	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, `INSERT INTO audience_import_mapping_definitions(id,organisation_id,name,source_system,template_version,worksheet,mapping,status,effective_from,effective_to,created_by,reason,version,created_at,updated_at) VALUES($1::uuid,NULLIF($2,'')::uuid,$3,NULLIF($4,''),$5,NULLIF($6,''),$7::jsonb,$8,$9,$10,$11::uuid,$12,$13,$14,$15)`, v.ID, v.OrganisationID, v.Name, v.SourceSystem, v.TemplateVersion, v.Worksheet, raw, v.Status, v.EffectiveFrom, v.EffectiveTo, v.CreatedBy, v.Reason, v.Version, v.CreatedAt, v.UpdatedAt)
+	_, err = tx.ExecContext(ctx, `INSERT INTO audience_import_mapping_definitions(id,organisation_id,name,source_system,template_version,worksheet,mapping,status,effective_from,effective_to,created_by,reason,version,created_at,updated_at) VALUES($1::uuid,NULLIF($2,'')::uuid,$3,NULLIF($4,''),$5,NULLIF($6,''),$7::jsonb,$8,$9,$10,$11::uuid,$12,$13,$14,$15)`, v.ID, v.OrganisationID, v.Name, v.SourceSystem, v.TemplateVersion, v.Worksheet, string(raw), v.Status, v.EffectiveFrom, v.EffectiveTo, v.CreatedBy, v.Reason, v.Version, v.CreatedAt, v.UpdatedAt)
 	if err == nil {
 		err = insertMappingEvent(ctx, tx, e)
 	}
@@ -385,6 +441,29 @@ func (p *PostgreSQLMappingStore) List(ctx context.Context, org, source string, l
 	}
 	return out, rows.Err()
 }
+func (p *PostgreSQLMappingStore) ListMappingPage(ctx context.Context, org, source string, limit int, before *time.Time, beforeID string) ([]MappingDefinition, error) {
+	if p == nil || p.DB == nil {
+		return nil, errors.New("database is required")
+	}
+	if limit <= 0 || limit > 501 {
+		limit = 100
+	}
+	rows, err := p.DB.QueryContext(ctx, mappingSelect+` WHERE ($1='' OR organisation_id=NULLIF($1,'')::uuid) AND ($2='' OR upper(coalesce(source_system,''))=upper($2)) AND ($4::timestamptz IS NULL OR created_at<$4 OR (created_at=$4 AND id<NULLIF($5,'')::uuid)) ORDER BY created_at DESC,id DESC LIMIT $3`, org, source, limit, before, beforeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]MappingDefinition, 0, limit)
+	for rows.Next() {
+		v, scanErr := scanMapping(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
 func (p *PostgreSQLMappingStore) CompareAndSwap(ctx context.Context, v MappingDefinition, expected int64, e MappingEvent) (MappingDefinition, error) {
 	raw, err := json.Marshal(v.Mapping)
 	if err != nil {
@@ -445,7 +524,7 @@ func (p *PostgreSQLMappingStore) CompareAndSwap(ctx context.Context, v MappingDe
 			}
 		}
 	}
-	v, err = scanMapping(tx.QueryRowContext(ctx, `UPDATE audience_import_mapping_definitions SET organisation_id=NULLIF($3,'')::uuid,name=$4,source_system=NULLIF($5,''),template_version=$6,worksheet=NULLIF($7,''),mapping=$8::jsonb,status=$9,effective_from=$10,effective_to=$11,submitted_by=NULLIF($12,'')::uuid,approved_by=NULLIF($13,'')::uuid,reason=$14,version=$15,updated_at=$16 WHERE id=$1::uuid AND version=$2 RETURNING `+strings.TrimPrefix(mappingSelect, "SELECT "), v.ID, expected, v.OrganisationID, v.Name, v.SourceSystem, v.TemplateVersion, v.Worksheet, raw, v.Status, v.EffectiveFrom, v.EffectiveTo, v.SubmittedBy, v.ApprovedBy, v.Reason, v.Version, v.UpdatedAt))
+	v, err = scanMapping(tx.QueryRowContext(ctx, `UPDATE audience_import_mapping_definitions SET organisation_id=NULLIF($3,'')::uuid,name=$4,source_system=NULLIF($5,''),template_version=$6,worksheet=NULLIF($7,''),mapping=$8::jsonb,status=$9,effective_from=$10,effective_to=$11,submitted_by=NULLIF($12,'')::uuid,approved_by=NULLIF($13,'')::uuid,reason=$14,version=$15,updated_at=$16 WHERE id=$1::uuid AND version=$2 RETURNING `+mappingColumns, v.ID, expected, v.OrganisationID, v.Name, v.SourceSystem, v.TemplateVersion, v.Worksheet, string(raw), v.Status, v.EffectiveFrom, v.EffectiveTo, v.SubmittedBy, v.ApprovedBy, v.Reason, v.Version, v.UpdatedAt))
 	if errors.Is(err, sql.ErrNoRows) {
 		return v, ErrImportConflict
 	}
@@ -469,7 +548,11 @@ func (p *PostgreSQLMappingStore) Events(ctx context.Context, idv string, limit i
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	rows, err := p.DB.QueryContext(ctx, `SELECT id::text,mapping_id::text,event_type,actor_id::text,coalesce(reason,''),mapping_version,occurred_at FROM audience_import_mapping_events WHERE mapping_id=$1::uuid ORDER BY occurred_at DESC,id DESC LIMIT $2`, idv, limit)
+	return p.ListMappingEventPage(ctx, idv, limit, nil, "")
+}
+
+func (p *PostgreSQLMappingStore) ListMappingEventPage(ctx context.Context, idv string, limit int, before *time.Time, beforeID string) ([]MappingEvent, error) {
+	rows, err := p.DB.QueryContext(ctx, `SELECT id::text,mapping_id::text,event_type,actor_id::text,coalesce(reason,''),mapping_version,occurred_at FROM audience_import_mapping_events WHERE mapping_id=$1::uuid AND ($3::timestamptz IS NULL OR occurred_at<$3 OR (occurred_at=$3 AND id<NULLIF($4,'')::uuid)) ORDER BY occurred_at DESC,id DESC LIMIT $2`, idv, limit, before, beforeID)
 	if err != nil {
 		return nil, err
 	}

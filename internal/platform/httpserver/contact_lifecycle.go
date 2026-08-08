@@ -3,6 +3,7 @@ package httpserver
 import (
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"campaign-platform/internal/audience/contactlife"
@@ -33,12 +34,16 @@ func (s *Server) listContactLifecycleEvents(w http.ResponseWriter, r *http.Reque
 		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_LIMIT", "The page limit must be between 1 and 500.", nil)
 		return
 	}
-	out, err := s.deps.ContactLifecycle.Events(r.Context(), r.PathValue("id"), limit)
+	page, err := s.deps.ContactLifecycle.EventsPage(r.Context(), r.PathValue("id"), limit, strings.TrimSpace(r.URL.Query().Get("cursor")))
 	if err != nil {
+		if errors.Is(err, contactlife.ErrInvalidLifecycleEventCursor) {
+			httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The contact-lifecycle event cursor is invalid.", nil)
+			return
+		}
 		writeContactLifecycleError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, http.StatusOK, out)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 
 func (s *Server) transitionContactLifecycle(w http.ResponseWriter, r *http.Request) {

@@ -25,6 +25,7 @@ type QueueSummary struct {
 }
 
 type AdministrationEvent struct {
+	ID         string    `json:"id"`
 	JobID      string    `json:"jobId"`
 	Action     string    `json:"action"`
 	ActorID    string    `json:"actorId"`
@@ -36,6 +37,7 @@ type AdministrationEvent struct {
 
 type AdministrationRepository interface {
 	List(context.Context, Query) ([]Job, error)
+	Get(context.Context, string) (Job, error)
 	Summary(context.Context, time.Time) (QueueSummary, error)
 	RetryDeadLetter(context.Context, string, string, string, time.Time) (Job, error)
 	CancelPending(context.Context, string, string, string, time.Time) (Job, error)
@@ -61,6 +63,16 @@ func (s *AdministrationService) List(ctx context.Context, q Query) ([]Job, error
 		q.Limit = 100
 	}
 	return s.Repository.List(ctx, q)
+}
+func (s *AdministrationService) Get(ctx context.Context, id string) (Job, error) {
+	if s == nil || s.Repository == nil {
+		return Job{}, errors.New("job administration repository is required")
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return Job{}, errors.New("job id is required")
+	}
+	return s.Repository.Get(ctx, id)
 }
 func (s *AdministrationService) Summary(ctx context.Context) (QueueSummary, error) {
 	if s == nil || s.Repository == nil {

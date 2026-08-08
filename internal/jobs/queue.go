@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"campaign-platform/internal/shared/id"
+	sharedid "campaign-platform/internal/shared/id"
 )
 
 type Status string
@@ -72,7 +72,7 @@ func NewJob(input EnqueueInput, now time.Time) (Job, error) {
 	if len(payload) > 1<<20 {
 		return Job{}, errors.New("job payload exceeds 1 MiB")
 	}
-	identifier, err := id.New()
+	identifier, err := sharedid.New()
 	if err != nil {
 		return Job{}, err
 	}
@@ -398,6 +398,10 @@ func (r *MemoryRepository) RetryDeadLetter(_ context.Context, id, actor, reason 
 	if job.Status != StatusDeadLetter {
 		return Job{}, ErrAdministrativeConflict
 	}
+	eventID, err := sharedid.New()
+	if err != nil {
+		return Job{}, err
+	}
 	prev := job.Status
 	job.Status = StatusPending
 	job.AttemptCount = 0
@@ -407,7 +411,7 @@ func (r *MemoryRepository) RetryDeadLetter(_ context.Context, id, actor, reason 
 	job.CompletedAt = nil
 	job.UpdatedAt = now.UTC()
 	r.items[id] = job
-	r.appendAdminEvent(AdministrationEvent{JobID: id, Action: "RETRY_DEAD_LETTER", ActorID: actor, Reason: reason, Previous: prev, Current: job.Status, OccurredAt: now.UTC()})
+	r.appendAdminEvent(AdministrationEvent{ID: eventID, JobID: id, Action: "RETRY_DEAD_LETTER", ActorID: actor, Reason: reason, Previous: prev, Current: job.Status, OccurredAt: now.UTC()})
 	return cloneJob(job), nil
 }
 func (r *MemoryRepository) CancelPending(_ context.Context, id, actor, reason string, now time.Time) (Job, error) {
@@ -420,11 +424,15 @@ func (r *MemoryRepository) CancelPending(_ context.Context, id, actor, reason st
 	if job.Status != StatusPending {
 		return Job{}, ErrAdministrativeConflict
 	}
+	eventID, err := sharedid.New()
+	if err != nil {
+		return Job{}, err
+	}
 	prev := job.Status
 	job.Status = StatusCancelled
 	job.UpdatedAt = now.UTC()
 	r.items[id] = job
-	r.appendAdminEvent(AdministrationEvent{JobID: id, Action: "CANCEL_PENDING", ActorID: actor, Reason: reason, Previous: prev, Current: job.Status, OccurredAt: now.UTC()})
+	r.appendAdminEvent(AdministrationEvent{ID: eventID, JobID: id, Action: "CANCEL_PENDING", ActorID: actor, Reason: reason, Previous: prev, Current: job.Status, OccurredAt: now.UTC()})
 	return cloneJob(job), nil
 }
 func (r *MemoryRepository) Events(_ context.Context, id string, limit int) ([]AdministrationEvent, error) {
@@ -438,6 +446,77 @@ func (r *MemoryRepository) Events(_ context.Context, id string, limit int) ([]Ad
 	}
 	return out, nil
 }
+func (r *MemoryRepository) ListAdministrationEventPage(_ context.Context, jobID string, limit int, before *time.Time, beforeID string) ([]AdministrationEvent, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	items := make([]AdministrationEvent, 0)
+	for _, event := range r.adminEvents {
+		if event.JobID == jobID {
+			items = append(items, event)
+		}
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].OccurredAt.Equal(items[j].OccurredAt) {
+			return items[i].ID > items[j].ID
+		}
+		return items[i].OccurredAt.After(items[j].OccurredAt)
+	})
+	out := make([]AdministrationEvent, 0, limit)
+	for _, event := range items {
+		if before != nil && (event.OccurredAt.After(*before) || (event.OccurredAt.Equal(*before) && event.ID >= beforeID)) {
+			continue
+		}
+		out = append(out, event)
+		if len(out) == limit {
+			break
+		}
+	}
+	return out, nil
+}
+
 func (r *MemoryRepository) appendAdminEvent(v AdministrationEvent) {
 	r.adminEvents = append(r.adminEvents, v)
+}
+
+func (r *MemoryRepository) ListPage(_ context.Context, q Query, before *time.Time, beforeID string) ([]Job, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	statuses := map[Status]struct{}{}
+	for _, value := range q.Statuses {
+		statuses[value] = struct{}{}
+	}
+	types := map[string]struct{}{}
+	for _, value := range q.Types {
+		types[strings.TrimSpace(value)] = struct{}{}
+	}
+	items := make([]Job, 0)
+	for _, job := range r.items {
+		if len(statuses) > 0 {
+			if _, ok := statuses[job.Status]; !ok {
+				continue
+			}
+		}
+		if len(types) > 0 {
+			if _, ok := types[job.Type]; !ok {
+				continue
+			}
+		}
+		if before != nil && !(job.CreatedAt.Before(*before) || (job.CreatedAt.Equal(*before) && job.ID < beforeID)) {
+			continue
+		}
+		items = append(items, cloneJob(job))
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].CreatedAt.Equal(items[j].CreatedAt) {
+			return items[i].ID > items[j].ID
+		}
+		return items[i].CreatedAt.After(items[j].CreatedAt)
+	})
+	if q.Limit <= 0 || q.Limit > 501 {
+		q.Limit = 100
+	}
+	if len(items) > q.Limit {
+		items = items[:q.Limit]
+	}
+	return items, nil
 }

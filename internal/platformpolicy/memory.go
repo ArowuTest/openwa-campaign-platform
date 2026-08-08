@@ -85,6 +85,41 @@ func (m *MemoryStore) ListConfigurations(_ context.Context, query ConfigurationQ
 	return out[:limit], nil
 }
 
+func (m *MemoryStore) ListConfigurationPage(_ context.Context, query ConfigurationQuery, before *time.Time, beforeID string) ([]Configuration, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]Configuration, 0, len(m.configurations))
+	for _, v := range m.configurations {
+		if query.Key != "" && !strings.EqualFold(v.Key, query.Key) {
+			continue
+		}
+		if query.ScopeType != "" && v.ScopeType != query.ScopeType {
+			continue
+		}
+		if query.ScopeID != "" && v.ScopeID != query.ScopeID {
+			continue
+		}
+		if query.Status != "" && v.Status != query.Status {
+			continue
+		}
+		if before != nil && !(v.UpdatedAt.Before(*before) || (v.UpdatedAt.Equal(*before) && v.ID < beforeID)) {
+			continue
+		}
+		out = append(out, cloneConfiguration(v))
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].UpdatedAt.Equal(out[j].UpdatedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].UpdatedAt.After(out[j].UpdatedAt)
+	})
+	limit := query.Limit
+	if limit <= 0 || limit > len(out) {
+		limit = len(out)
+	}
+	return out[:limit], nil
+}
+
 func (m *MemoryStore) GetConfiguration(_ context.Context, id string) (Configuration, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -248,6 +283,31 @@ func (m *MemoryStore) ListMaintenance(_ context.Context, status MaintenanceStatu
 	return out[:limit], nil
 }
 
+func (m *MemoryStore) ListMaintenancePage(_ context.Context, status MaintenanceStatus, limit int, before *time.Time, beforeID string) ([]MaintenanceWindow, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]MaintenanceWindow, 0, len(m.maintenance))
+	for _, v := range m.maintenance {
+		if status != "" && v.Status != status {
+			continue
+		}
+		if before != nil && !(v.UpdatedAt.Before(*before) || (v.UpdatedAt.Equal(*before) && v.ID < beforeID)) {
+			continue
+		}
+		out = append(out, v)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].UpdatedAt.Equal(out[j].UpdatedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].UpdatedAt.After(out[j].UpdatedAt)
+	})
+	if limit <= 0 || limit > len(out) {
+		limit = len(out)
+	}
+	return out[:limit], nil
+}
+
 func (m *MemoryStore) GetMaintenance(_ context.Context, id string) (MaintenanceWindow, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -328,4 +388,43 @@ func (m *MemoryStore) ListMaintenanceEvents(_ context.Context, objectID string, 
 		out = append(out, cloneEvent(values[i]))
 	}
 	return out, nil
+}
+
+func paginateMemoryEvents(values []Event, limit int, before *time.Time, beforeID string) []Event {
+	items := append([]Event(nil), values...)
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].OccurredAt.Equal(items[j].OccurredAt) {
+			return items[i].ID > items[j].ID
+		}
+		return items[i].OccurredAt.After(items[j].OccurredAt)
+	})
+	out := make([]Event, 0, limit)
+	for _, item := range items {
+		if before != nil && (item.OccurredAt.After(*before) || item.OccurredAt.Equal(*before) && item.ID >= beforeID) {
+			continue
+		}
+		out = append(out, cloneEvent(item))
+		if len(out) == limit {
+			break
+		}
+	}
+	return out
+}
+
+func (m *MemoryStore) ListConfigurationEventPage(_ context.Context, objectID string, limit int, before *time.Time, beforeID string) ([]Event, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.configurations[objectID]; !ok {
+		return nil, ErrNotFound
+	}
+	return paginateMemoryEvents(m.configurationEvents[objectID], limit, before, beforeID), nil
+}
+
+func (m *MemoryStore) ListMaintenanceEventPage(_ context.Context, objectID string, limit int, before *time.Time, beforeID string) ([]Event, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.maintenance[objectID]; !ok {
+		return nil, ErrNotFound
+	}
+	return paginateMemoryEvents(m.maintenanceEvents[objectID], limit, before, beforeID), nil
 }

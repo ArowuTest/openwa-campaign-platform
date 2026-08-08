@@ -38,22 +38,26 @@ func (s *Server) listRetentionPolicies(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	limit, err := parseOptionalPositiveInt(r.URL.Query().Get("limit"), 100, 500)
-	if err != nil {
-		httpx.WriteError(w, r, 400, "INVALID_LIMIT", "The page limit is invalid.", nil)
-		return
-	}
 	status := retention.Status(strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("status"))))
 	if !validRetentionPolicyStatus(status) {
 		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_STATUS", "The retention policy status is invalid.", nil)
 		return
 	}
-	v, err := a.List(r.Context(), status, limit)
+	request, err := httpx.ParsePage(r, 100, 500)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE", "The retention-policy page request is invalid.", nil)
+		return
+	}
+	page, err := a.ListPage(r.Context(), status, request.Limit, request.Cursor)
+	if errors.Is(err, retention.ErrInvalidPolicyCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The retention-policy page cursor is invalid.", nil)
+		return
+	}
 	if err != nil {
 		s.writeRetentionError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, 200, v)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 func (s *Server) getRetentionPolicy(w http.ResponseWriter, r *http.Request) {
 	a, ok := s.requireRetention(w, r)
@@ -144,12 +148,21 @@ func (s *Server) listRetentionPolicyEvents(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		return
 	}
-	v, err := a.Events(r.Context(), r.PathValue("id"), 500)
+	request, err := httpx.ParsePage(r, 200, 1000)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE", "The retention-policy event page request is invalid.", nil)
+		return
+	}
+	page, err := a.EventsPage(r.Context(), r.PathValue("id"), request.Limit, request.Cursor)
+	if errors.Is(err, retention.ErrInvalidEventCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The retention-policy event page cursor is invalid.", nil)
+		return
+	}
 	if err != nil {
 		s.writeRetentionError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, 200, v)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 func (s *Server) listRetentionJobs(w http.ResponseWriter, r *http.Request) {
 	a, ok := s.requireRetention(w, r)
@@ -166,12 +179,16 @@ func (s *Server) listRetentionJobs(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_STATUS", "The retention-job status is invalid.", nil)
 		return
 	}
-	v, err := a.Jobs(r.Context(), status, limit)
+	page, err := a.JobsPage(r.Context(), status, limit, strings.TrimSpace(r.URL.Query().Get("cursor")))
 	if err != nil {
+		if errors.Is(err, retention.ErrInvalidRetentionJobCursor) {
+			httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The retention-job page cursor is invalid.", nil)
+			return
+		}
 		s.writeRetentionError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, 200, v)
+	httpx.WriteList(w, 200, page.Items, len(page.Items), page.NextCursor)
 }
 
 func validRetentionPolicyStatus(v retention.Status) bool {
@@ -238,17 +255,21 @@ func (s *Server) listAlertPolicies(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_STATUS", "The alert-policy status is invalid.", nil)
 		return
 	}
-	limit, err := parseOptionalPositiveInt(r.URL.Query().Get("limit"), 100, 500)
+	request, err := httpx.ParsePage(r, 100, 500)
 	if err != nil {
-		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_LIMIT", "The alert-policy page limit is invalid.", nil)
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE", "The alert-policy page request is invalid.", nil)
 		return
 	}
-	v, err := a.ListPolicies(r.Context(), status, limit)
+	page, err := a.ListPoliciesPage(r.Context(), status, request.Limit, request.Cursor)
+	if errors.Is(err, operations.ErrInvalidAlertPolicyCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The alert-policy page cursor is invalid.", nil)
+		return
+	}
 	if err != nil {
 		s.writeOperationsAlertError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, 200, v)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 func (s *Server) createAlertPolicy(w http.ResponseWriter, r *http.Request) {
 	a, ok := s.requireAlertPolicies(w, r)
@@ -327,12 +348,21 @@ func (s *Server) listAlertPolicyEvents(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	v, err := a.PolicyEvents(r.Context(), r.PathValue("id"), 500)
+	request, err := httpx.ParsePage(r, 100, 500)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE", "The alert-policy event page request is invalid.", nil)
+		return
+	}
+	page, err := a.PolicyEventsPage(r.Context(), r.PathValue("id"), request.Limit, request.Cursor)
+	if errors.Is(err, operations.ErrInvalidAlertPolicyEventCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The alert-policy event page cursor is invalid.", nil)
+		return
+	}
 	if err != nil {
 		s.writeOperationsAlertError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, 200, v)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 func (s *Server) listOperationalAlerts(w http.ResponseWriter, r *http.Request) {
 	a, ok := s.requireAlertPolicies(w, r)
@@ -350,12 +380,16 @@ func (s *Server) listOperationalAlerts(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_LIMIT", "The alert page limit is invalid.", nil)
 		return
 	}
-	v, err := a.ListAlerts(r.Context(), status, severity, limit)
+	page, err := a.ListAlertsPage(r.Context(), status, severity, limit, strings.TrimSpace(r.URL.Query().Get("cursor")))
 	if err != nil {
+		if errors.Is(err, operations.ErrInvalidOperationalAlertCursor) {
+			httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The operational-alert page cursor is invalid.", nil)
+			return
+		}
 		s.writeOperationsAlertError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, 200, v)
+	httpx.WriteList(w, 200, page.Items, len(page.Items), page.NextCursor)
 }
 func (s *Server) acknowledgeOperationalAlert(w http.ResponseWriter, r *http.Request) {
 	a, ok := s.requireAlertPolicies(w, r)
@@ -379,12 +413,21 @@ func (s *Server) listOperationalAlertEvents(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	v, err := a.Store.ListAlertEvents(r.Context(), r.PathValue("id"), 500)
+	limit, err := optionalPositiveIntQuery(r, "limit", 500)
 	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_LIMIT", "The page limit must be between 1 and 500.", nil)
+		return
+	}
+	page, err := a.AlertEventsPage(r.Context(), r.PathValue("id"), limit, strings.TrimSpace(r.URL.Query().Get("cursor")))
+	if err != nil {
+		if errors.Is(err, operations.ErrInvalidOperationalAlertEventCursor) {
+			httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The operational alert-event page cursor is invalid.", nil)
+			return
+		}
 		s.writeOperationsAlertError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, 200, v)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 func (s *Server) evaluateOperationalAlerts(w http.ResponseWriter, r *http.Request) {
 	if !s.requirePlatformPolicyStepUp(w, r, "alert.evaluate") {
@@ -421,12 +464,16 @@ func (s *Server) listOperationalNotifications(w http.ResponseWriter, r *http.Req
 		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_LIMIT", "The notification page limit is invalid.", nil)
 		return
 	}
-	v, err := a.Store.ListNotifications(r.Context(), status, limit)
+	page, err := a.NotificationsPage(r.Context(), status, limit, strings.TrimSpace(r.URL.Query().Get("cursor")))
 	if err != nil {
+		if errors.Is(err, operations.ErrInvalidOperationalNotificationCursor) {
+			httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The operational-notification page cursor is invalid.", nil)
+			return
+		}
 		s.writeOperationsAlertError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, 200, v)
+	httpx.WriteList(w, 200, page.Items, len(page.Items), page.NextCursor)
 }
 
 func validAlertPolicyStatus(v operations.AlertPolicyStatus) bool {

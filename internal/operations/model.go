@@ -43,21 +43,25 @@ type Incident struct {
 	Version         int64          `json:"version"`
 }
 type Dashboard struct {
-	GeneratedAt             time.Time        `json:"generatedAt"`
-	Campaigns               map[string]int64 `json:"campaigns"`
-	Recipients              map[string]int64 `json:"recipients"`
-	Senders                 map[string]int64 `json:"senders"`
-	OpenIncidents           int64            `json:"openIncidents"`
-	CriticalIncidents       int64            `json:"criticalIncidents"`
-	UnknownOutcomes         int64            `json:"unknownOutcomes"`
-	QueueDepth              int64            `json:"queueDepth"`
-	OldestQueuedAt          *time.Time       `json:"oldestQueuedAt,omitempty"`
-	StaleWorkerNodes        int64            `json:"staleWorkerNodes"`
-	UnavailableGatewayNodes int64            `json:"unavailableGatewayNodes"`
-	UnhealthySenderSessions int64            `json:"unhealthySenderSessions"`
-	CampaignsAtRisk         int64            `json:"campaignsAtRisk"`
-	CapacityShortfallPools  int64            `json:"capacityShortfallPools"`
-	ReconciliationBacklog   int64            `json:"reconciliationBacklog"`
+	GeneratedAt                              time.Time        `json:"generatedAt"`
+	Campaigns                                map[string]int64 `json:"campaigns"`
+	Recipients                               map[string]int64 `json:"recipients"`
+	Senders                                  map[string]int64 `json:"senders"`
+	OpenIncidents                            int64            `json:"openIncidents"`
+	CriticalIncidents                        int64            `json:"criticalIncidents"`
+	UnknownOutcomes                          int64            `json:"unknownOutcomes"`
+	QueueDepth                               int64            `json:"queueDepth"`
+	OldestQueuedAt                           *time.Time       `json:"oldestQueuedAt,omitempty"`
+	StaleWorkerNodes                         int64            `json:"staleWorkerNodes"`
+	UnavailableGatewayNodes                  int64            `json:"unavailableGatewayNodes"`
+	GatewayStaleAfterSeconds                 int64            `json:"gatewayStaleAfterSeconds"`
+	GatewayRuntimeHealthSource               string           `json:"gatewayRuntimeHealthSource"`
+	GatewayRuntimeHealthConfigurationID      string           `json:"gatewayRuntimeHealthConfigurationId,omitempty"`
+	GatewayRuntimeHealthConfigurationVersion int64            `json:"gatewayRuntimeHealthConfigurationVersion,omitempty"`
+	UnhealthySenderSessions                  int64            `json:"unhealthySenderSessions"`
+	CampaignsAtRisk                          int64            `json:"campaignsAtRisk"`
+	CapacityShortfallPools                   int64            `json:"capacityShortfallPools"`
+	ReconciliationBacklog                    int64            `json:"reconciliationBacklog"`
 }
 
 type DeliveryException struct {

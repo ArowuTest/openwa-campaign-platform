@@ -230,6 +230,31 @@ func (r *MemoryDefinitionRepository) List(_ context.Context, org string, limit i
 	}
 	return out, nil
 }
+func (r *MemoryDefinitionRepository) ListPage(_ context.Context, org string, limit int, before *time.Time, beforeID string) ([]Definition, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	items := []Definition{}
+	for _, value := range r.items {
+		if org != "" && value.OrganisationID != org {
+			continue
+		}
+		if before != nil && (value.UpdatedAt.After(*before) || (value.UpdatedAt.Equal(*before) && value.ID <= beforeID)) {
+			continue
+		}
+		items = append(items, cloneDefinition(value))
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].UpdatedAt.Equal(items[j].UpdatedAt) {
+			return items[i].ID < items[j].ID
+		}
+		return items[i].UpdatedAt.After(items[j].UpdatedAt)
+	})
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	return items, nil
+}
+
 func (r *MemoryDefinitionRepository) Update(_ context.Context, v Definition, expected int64, reason string) (Definition, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -257,6 +282,27 @@ func (r *MemoryDefinitionRepository) Versions(_ context.Context, id string, limi
 	out := append([]DefinitionVersion(nil), items...)
 	return out, nil
 }
+func (r *MemoryDefinitionRepository) VersionsPage(_ context.Context, id string, limit int, beforeVersion int64) ([]DefinitionVersion, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if _, ok := r.items[id]; !ok {
+		return nil, ErrDefinitionNotFound
+	}
+	items := append([]DefinitionVersion(nil), r.versions[id]...)
+	sort.Slice(items, func(i, j int) bool { return items[i].Version > items[j].Version })
+	out := make([]DefinitionVersion, 0, limit)
+	for _, item := range items {
+		if beforeVersion > 0 && item.Version >= beforeVersion {
+			continue
+		}
+		out = append(out, item)
+		if len(out) == limit {
+			break
+		}
+	}
+	return out, nil
+}
+
 func (r *MemoryDefinitionRepository) append(v Definition, reason string) {
 	r.versions[v.ID] = append(r.versions[v.ID], DefinitionVersion{SegmentID: v.ID, Version: v.Version, Name: v.Name, Description: v.Description, Definition: v.Definition, Status: v.Status, ChangedBy: v.UpdatedBy, Reason: reason, CreatedAt: v.UpdatedAt})
 }

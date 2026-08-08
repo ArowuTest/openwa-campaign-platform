@@ -167,3 +167,25 @@ func (r *PostgreSQLRotationRepository) FailRun(ctx context.Context, run Rotation
 	}
 	return nil
 }
+
+func (r *PostgreSQLRotationRepository) ListRunPage(ctx context.Context, limit int, before *time.Time, beforeID string) ([]RotationRun, error) {
+	if limit <= 0 || limit > 201 {
+		limit = 50
+	}
+	rows, err := r.DB.QueryContext(ctx, `SELECT `+rotationCols+` FROM inbound_content_reencryption_runs
+WHERE ($2::timestamptz IS NULL OR requested_at<$2 OR (requested_at=$2 AND id<NULLIF($3,'')::uuid))
+ORDER BY requested_at DESC,id DESC LIMIT $1`, limit, before, beforeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]RotationRun, 0, limit)
+	for rows.Next() {
+		value, scanErr := scanRotation(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		items = append(items, value)
+	}
+	return items, rows.Err()
+}

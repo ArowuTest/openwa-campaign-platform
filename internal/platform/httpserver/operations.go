@@ -38,12 +38,16 @@ func (s *Server) listOperationsIncidents(w http.ResponseWriter, r *http.Request)
 		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_LIMIT", "The page limit must be between 1 and 500.", nil)
 		return
 	}
-	v, err := s.deps.Operations.ListIncidents(r.Context(), operations.IncidentStatus(strings.ToUpper(r.URL.Query().Get("status"))), limit)
+	page, err := s.deps.Operations.ListIncidentsPage(r.Context(), operations.IncidentStatus(strings.ToUpper(r.URL.Query().Get("status"))), limit, strings.TrimSpace(r.URL.Query().Get("cursor")))
 	if err != nil {
+		if errors.Is(err, operations.ErrInvalidIncidentCursor) {
+			httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The incident page cursor is invalid.", nil)
+			return
+		}
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, 200, v)
+	httpx.WriteList(w, 200, page.Items, len(page.Items), page.NextCursor)
 }
 
 type createIncidentRequest struct {
@@ -405,12 +409,16 @@ func (s *Server) listDeliveryExceptions(w http.ResponseWriter, r *http.Request) 
 		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_LIMIT", "The page limit must be between 1 and 500.", nil)
 		return
 	}
-	items, err := s.deps.Operations.ListExceptions(r.Context(), r.URL.Query().Get("campaignId"), limit)
+	page, err := s.deps.Operations.ListExceptionsPage(r.Context(), r.URL.Query().Get("campaignId"), limit, strings.TrimSpace(r.URL.Query().Get("cursor")))
 	if err != nil {
+		if errors.Is(err, operations.ErrInvalidDeliveryExceptionCursor) {
+			httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The delivery-exception page cursor is invalid.", nil)
+			return
+		}
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, http.StatusOK, items)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 
 type deliveryResolutionRequest struct {
@@ -472,12 +480,16 @@ func (s *Server) listOperationalJobs(w http.ResponseWriter, r *http.Request) {
 			types = append(types, value)
 		}
 	}
-	items, err := s.deps.JobOperations.List(r.Context(), jobs.Query{Statuses: statuses, Types: types, Limit: limit})
+	page, err := s.deps.JobOperations.ListPage(r.Context(), jobs.Query{Statuses: statuses, Types: types, Limit: limit}, strings.TrimSpace(r.URL.Query().Get("cursor")))
 	if err != nil {
+		if errors.Is(err, jobs.ErrInvalidJobCursor) {
+			httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The job page cursor is invalid.", nil)
+			return
+		}
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, http.StatusOK, items)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 func (s *Server) getOperationalJobSummary(w http.ResponseWriter, r *http.Request) {
 	if s.deps.JobOperations == nil {
@@ -496,18 +508,12 @@ func (s *Server) getOperationalJob(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, 503, "JOB_OPERATIONS_UNAVAILABLE", "Job operations are unavailable.", nil)
 		return
 	}
-	items, err := s.deps.JobOperations.List(r.Context(), jobs.Query{Limit: 500})
+	value, err := s.deps.JobOperations.Get(r.Context(), r.PathValue("id"))
 	if err != nil {
-		s.internalError(w, r, err)
+		writeJobOperationsError(w, r, err)
 		return
 	}
-	for _, v := range items {
-		if v.ID == r.PathValue("id") {
-			httpx.WriteJSON(w, 200, v)
-			return
-		}
-	}
-	httpx.WriteError(w, r, 404, "JOB_NOT_FOUND", "The job was not found.", nil)
+	httpx.WriteJSON(w, 200, value)
 }
 func (s *Server) listOperationalJobEvents(w http.ResponseWriter, r *http.Request) {
 	if s.deps.JobOperations == nil {
@@ -519,12 +525,16 @@ func (s *Server) listOperationalJobEvents(w http.ResponseWriter, r *http.Request
 		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_LIMIT", "The page limit must be between 1 and 500.", nil)
 		return
 	}
-	items, err := s.deps.JobOperations.Events(r.Context(), r.PathValue("id"), limit)
+	page, err := s.deps.JobOperations.EventsPage(r.Context(), r.PathValue("id"), limit, strings.TrimSpace(r.URL.Query().Get("cursor")))
 	if err != nil {
+		if errors.Is(err, jobs.ErrInvalidAdministrationEventCursor) {
+			httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The job administration-event page cursor is invalid.", nil)
+			return
+		}
 		writeJobOperationsError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, 200, items)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 func (s *Server) retryOperationalJob(w http.ResponseWriter, r *http.Request) {
 	s.performOperationalJobAction(w, r, true)
@@ -596,17 +606,21 @@ func (s *Server) listReportingPrivacyPolicies(w http.ResponseWriter, r *http.Req
 	if admin == nil {
 		return
 	}
-	limit, err := optionalPositiveIntQuery(r, "limit", 500)
+	request, err := httpx.ParsePage(r, 100, 500)
 	if err != nil {
-		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_LIMIT", "The page limit must be between 1 and 500.", nil)
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE", "The reporting-privacy page request is invalid.", nil)
 		return
 	}
-	items, err := admin.List(r.Context(), strings.TrimSpace(r.URL.Query().Get("organisationId")), limit)
+	page, err := admin.ListPage(r.Context(), strings.TrimSpace(r.URL.Query().Get("organisationId")), request.Limit, request.Cursor)
+	if errors.Is(err, operations.ErrInvalidReportingPrivacyListCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The reporting-privacy page cursor is invalid.", nil)
+		return
+	}
 	if err != nil {
 		writeOperationsError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, http.StatusOK, items)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 
 func (s *Server) createReportingPrivacyPolicy(w http.ResponseWriter, r *http.Request) {
@@ -645,17 +659,21 @@ func (s *Server) listReportingPrivacyPolicyEvents(w http.ResponseWriter, r *http
 	if admin == nil {
 		return
 	}
-	limit, err := optionalPositiveIntQuery(r, "limit", 500)
+	request, err := httpx.ParsePage(r, 100, 500)
 	if err != nil {
-		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_LIMIT", "The page limit must be between 1 and 500.", nil)
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE", "The reporting-privacy event page request is invalid.", nil)
 		return
 	}
-	out, err := admin.Events(r.Context(), r.PathValue("id"), limit)
+	page, err := admin.EventsPage(r.Context(), r.PathValue("id"), request.Limit, request.Cursor)
+	if errors.Is(err, operations.ErrInvalidReportingPrivacyEventCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The reporting-privacy event page cursor is invalid.", nil)
+		return
+	}
 	if err != nil {
 		writeOperationsError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, http.StatusOK, out)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 
 type reportingPrivacyTransitionRequest struct {

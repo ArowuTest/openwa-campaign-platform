@@ -94,6 +94,26 @@ func (r *PostgreSQLRepository) ListByCampaign(ctx context.Context, campaignID st
 	return items, rows.Err()
 }
 
+func (r *PostgreSQLRepository) ListByCampaignPage(ctx context.Context, campaignID string, limit int, before *time.Time, beforeID string) ([]MaterialisationJob, error) {
+	if r == nil || r.DB == nil {
+		return nil, errors.New("database is required")
+	}
+	rows, err := r.DB.QueryContext(ctx, materialisationSelect+` WHERE campaign_id=$1::uuid AND ($3::timestamptz IS NULL OR requested_at<$3 OR (requested_at=$3 AND id<NULLIF($4,'')::uuid)) ORDER BY requested_at DESC,id DESC LIMIT $2`, campaignID, limit, before, beforeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []MaterialisationJob{}
+	for rows.Next() {
+		item, scanErr := scanMaterialisation(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 func (r *PostgreSQLRepository) Claim(ctx context.Context, owner string, limit int, lease time.Duration, now time.Time) ([]MaterialisationJob, error) {
 	if r == nil || r.DB == nil {
 		return nil, errors.New("database is required")

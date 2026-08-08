@@ -126,6 +126,26 @@ func (r *PostgreSQLRepository) ListByCampaign(ctx context.Context, campaignID st
 	return items, rows.Err()
 }
 
+func (r *PostgreSQLRepository) ListByCampaignPage(ctx context.Context, campaignID string, limit int, beforeVersion int) ([]Version, error) {
+	if r == nil || r.DB == nil {
+		return nil, errors.New("database is required")
+	}
+	rows, err := r.DB.QueryContext(ctx, messageSelect+` WHERE campaign_id=$1::uuid AND ($3=0 OR version<$3) ORDER BY version DESC LIMIT $2`, campaignID, limit, beforeVersion)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Version{}
+	for rows.Next() {
+		value, err := scanVersion(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, value)
+	}
+	return items, rows.Err()
+}
+
 func (r *PostgreSQLRepository) Approve(ctx context.Context, identifier, actorID, expectedContentHash string, now time.Time) (Version, error) {
 	if r == nil || r.DB == nil {
 		return Version{}, errors.New("database is required")

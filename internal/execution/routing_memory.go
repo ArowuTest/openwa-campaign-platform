@@ -2,6 +2,7 @@ package execution
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"time"
 )
@@ -62,6 +63,24 @@ func (s *MemoryRoutingPlanStore) ListByCampaign(_ context.Context, id string) ([
 	}
 	return out, nil
 }
+func (s *MemoryRoutingPlanStore) ListRoutingPlanPage(_ context.Context, campaignID string, limit int, beforeVersion int64) ([]RoutingPlan, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	items := make([]RoutingPlan, 0)
+	for _, planID := range s.byCampaign[campaignID] {
+		plan := s.plans[planID]
+		if beforeVersion > 0 && plan.Version >= beforeVersion {
+			continue
+		}
+		items = append(items, plan)
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].Version > items[j].Version })
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	return items, nil
+}
+
 func (s *MemoryRoutingPlanStore) LatestByCampaign(_ context.Context, id string) (RoutingPlan, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

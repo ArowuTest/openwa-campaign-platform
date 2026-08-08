@@ -109,7 +109,33 @@ func (r *MemoryRepository) List(_ context.Context) ([]Organisation, error) {
 	for _, e := range r.items {
 		out = append(out, e)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	return out, nil
+}
+func (r *MemoryRepository) ListPage(_ context.Context, limit int, before *time.Time, beforeID string) ([]Organisation, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]Organisation, 0, len(r.items))
+	for _, e := range r.items {
+		if before != nil && (e.CreatedAt.After(*before) || e.CreatedAt.Equal(*before) && e.ID >= beforeID) {
+			continue
+		}
+		out = append(out, e)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
 	return out, nil
 }
 func (r *MemoryRepository) Get(_ context.Context, id string) (Organisation, error) {
@@ -149,6 +175,25 @@ func (r *MemoryRepository) ListEvents(_ context.Context, id string) ([]Event, er
 	}
 	return append([]Event(nil), r.events[id]...), nil
 }
+func (r *MemoryRepository) ListEventPage(_ context.Context, id string, limit int, afterVersion int64) ([]Event, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if _, ok := r.items[id]; !ok {
+		return nil, ErrNotFound
+	}
+	out := make([]Event, 0, limit)
+	for _, event := range r.events[id] {
+		if event.Version <= afterVersion {
+			continue
+		}
+		out = append(out, event)
+		if len(out) == limit {
+			break
+		}
+	}
+	return out, nil
+}
+
 func normalisedFingerprint(e Organisation) string {
 	return strings.ToLower(strings.Join(strings.Fields(e.LegalName), " ")) + "\x1f" + strings.ToUpper(strings.TrimSpace(e.CountryISO2))
 }

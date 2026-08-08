@@ -36,6 +36,29 @@ func (r *IdentityAdministrationRepository) ListAccounts(ctx context.Context) ([]
 	}
 	return out, rows.Err()
 }
+func (r *IdentityAdministrationRepository) ListAccountPage(ctx context.Context, limit int, before *time.Time, beforeID string) ([]identity.Account, error) {
+	if r == nil || r.DB == nil {
+		return nil, errors.New("identity administration repository is not configured")
+	}
+	if limit <= 0 || limit > 501 {
+		limit = 100
+	}
+	rows, err := r.DB.QueryContext(ctx, accountSelect+` WHERE ($2::timestamptz IS NULL OR u.created_at<$2 OR (u.created_at=$2 AND u.id<NULLIF($3::text,'')::uuid)) GROUP BY u.id ORDER BY u.created_at DESC,u.id DESC LIMIT $1`, limit, before, beforeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]identity.Account, 0, limit)
+	for rows.Next() {
+		account, scanErr := scanAccount(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out = append(out, account)
+	}
+	return out, rows.Err()
+}
+
 func (r *IdentityAdministrationRepository) GetAccount(ctx context.Context, id string) (identity.Account, error) {
 	a, err := scanAccount(r.DB.QueryRowContext(ctx, accountSelect+` WHERE u.id=$1::uuid GROUP BY u.id`, id))
 	if errors.Is(err, sql.ErrNoRows) {

@@ -43,6 +43,32 @@ func (p *PostgreSQLStore) ListPolicies(ctx context.Context, status Status, limit
 	}
 	return out, rows.Err()
 }
+func (p *PostgreSQLStore) ListPolicyPage(ctx context.Context, status Status, limit int, before *time.Time, beforeID string) ([]Policy, error) {
+	if p == nil || p.DB == nil {
+		return nil, errors.New("database is required")
+	}
+	if limit <= 0 || limit > 501 {
+		limit = 100
+	}
+	rows, err := p.DB.QueryContext(ctx, `SELECT `+policyColumns+` FROM retention_policies
+WHERE ($1='' OR status=$1)
+  AND ($3::timestamptz IS NULL OR created_at<$3 OR (created_at=$3 AND id<NULLIF($4,'')::uuid))
+ORDER BY created_at DESC,id DESC LIMIT $2`, string(status), limit, before, beforeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]Policy, 0, limit)
+	for rows.Next() {
+		value, scanErr := scanPolicy(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out = append(out, value)
+	}
+	return out, rows.Err()
+}
+
 func (p *PostgreSQLStore) GetPolicy(ctx context.Context, key string) (Policy, error) {
 	v, err := scanPolicy(p.DB.QueryRowContext(ctx, `SELECT `+policyColumns+` FROM retention_policies WHERE id=$1::uuid`, key))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -168,7 +194,10 @@ func (p *PostgreSQLStore) ActivatePolicy(ctx context.Context, v Policy, e int64,
 	return p.updatePolicy(ctx, v, e, ev, true)
 }
 func (p *PostgreSQLStore) ListEvents(ctx context.Context, key string, limit int) ([]Event, error) {
-	rows, err := p.DB.QueryContext(ctx, `SELECT id::text,retention_policy_id::text,event_type,version,actor_id::text,reason,evidence,occurred_at FROM retention_policy_events WHERE retention_policy_id=$1::uuid ORDER BY occurred_at DESC,id DESC LIMIT $2`, key, limit)
+	return p.ListEventPage(ctx, key, limit, nil, "")
+}
+func (p *PostgreSQLStore) ListEventPage(ctx context.Context, key string, limit int, before *time.Time, beforeID string) ([]Event, error) {
+	rows, err := p.DB.QueryContext(ctx, `SELECT id::text,retention_policy_id::text,event_type,version,actor_id::text,reason,evidence,occurred_at FROM retention_policy_events WHERE retention_policy_id=$1::uuid AND ($3::timestamptz IS NULL OR occurred_at<$3 OR (occurred_at=$3 AND id<NULLIF($4,'')::uuid)) ORDER BY occurred_at DESC,id DESC LIMIT $2`, key, limit, before, beforeID)
 	if err != nil {
 		return nil, err
 	}
@@ -538,4 +567,27 @@ func deleteRetentionObject(ctx context.Context, objects storage.ObjectStore, key
 		return true, nil
 	}
 	return false, err
+}
+
+func (p *PostgreSQLStore) ListJobPage(ctx context.Context, status JobStatus, limit int, before *time.Time, beforeID string) ([]Job, error) {
+	if limit <= 0 || limit > 501 {
+		limit = 100
+	}
+	rows, err := p.DB.QueryContext(ctx, `SELECT `+jobColumns+` FROM retention_jobs
+WHERE ($1='' OR status=$1)
+  AND ($3::timestamptz IS NULL OR created_at<$3 OR (created_at=$3 AND id<NULLIF($4,'')::uuid))
+ORDER BY created_at DESC,id DESC LIMIT $2`, status, limit, before, beforeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]Job, 0, limit)
+	for rows.Next() {
+		value, scanErr := scanJob(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		items = append(items, value)
+	}
+	return items, rows.Err()
 }

@@ -103,22 +103,26 @@ func (s *Server) listPrivacyCaseEvents(w http.ResponseWriter, r *http.Request) {
 	if !s.privacyServiceAvailable(w, r) {
 		return
 	}
-	limit, err := optionalPositiveIntQuery(r, "limit", 500)
+	request, err := httpx.ParsePage(r, 100, 500)
 	if err != nil {
-		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_LIMIT", "The page limit must be between 1 and 500.", nil)
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE", "The privacy-case event page request is invalid.", nil)
 		return
 	}
-	items, err := s.deps.PrivacyCases.Events(r.Context(), r.PathValue("id"), limit)
+	page, err := s.deps.PrivacyCases.EventsPage(r.Context(), r.PathValue("id"), request.Limit, request.Cursor)
+	if errors.Is(err, privacy.ErrInvalidEventCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The privacy-case event page cursor is invalid.", nil)
+		return
+	}
 	if err != nil {
 		writePrivacyError(w, r, err)
 		return
 	}
 	principal, _ := identity.PrincipalFromContext(r.Context())
-	if err := s.deps.PrivacyCases.RecordAccess(r.Context(), principal.User.ID, "PRIVACY_CASE_HISTORY_VIEWED", r.PathValue("id"), r.Header.Get("X-Request-ID"), map[string]any{"eventCount": len(items)}); err != nil {
+	if err := s.deps.PrivacyCases.RecordAccess(r.Context(), principal.User.ID, "PRIVACY_CASE_HISTORY_VIEWED", r.PathValue("id"), r.Header.Get("X-Request-ID"), map[string]any{"eventCount": len(page.Items)}); err != nil {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, http.StatusOK, items)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 
 func (s *Server) assignPrivacyCase(w http.ResponseWriter, r *http.Request) {
@@ -327,22 +331,26 @@ func (s *Server) listPrivacyLegalHoldEvents(w http.ResponseWriter, r *http.Reque
 	if !s.privacyServiceAvailable(w, r) {
 		return
 	}
-	limit, err := optionalPositiveIntQuery(r, "limit", 500)
+	request, err := httpx.ParsePage(r, 100, 500)
 	if err != nil {
-		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_LIMIT", "The page limit must be between 1 and 500.", nil)
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE", "The privacy legal-hold event page request is invalid.", nil)
 		return
 	}
-	items, err := s.deps.PrivacyCases.LegalHoldEvents(r.Context(), r.PathValue("id"), limit)
+	page, err := s.deps.PrivacyCases.LegalHoldEventsPage(r.Context(), r.PathValue("id"), request.Limit, request.Cursor)
+	if errors.Is(err, privacy.ErrInvalidEventCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The privacy legal-hold event page cursor is invalid.", nil)
+		return
+	}
 	if err != nil {
 		writePrivacyError(w, r, err)
 		return
 	}
 	principal, _ := identity.PrincipalFromContext(r.Context())
-	if err := s.deps.PrivacyCases.RecordAccess(r.Context(), principal.User.ID, "PRIVACY_LEGAL_HOLD_HISTORY_VIEWED", r.PathValue("id"), r.Header.Get("X-Request-ID"), map[string]any{"eventCount": len(items)}); err != nil {
+	if err := s.deps.PrivacyCases.RecordAccess(r.Context(), principal.User.ID, "PRIVACY_LEGAL_HOLD_HISTORY_VIEWED", r.PathValue("id"), r.Header.Get("X-Request-ID"), map[string]any{"eventCount": len(page.Items)}); err != nil {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, http.StatusOK, items)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 
 func (s *Server) listPrivacyLegalHolds(w http.ResponseWriter, r *http.Request) {
@@ -354,9 +362,9 @@ func (s *Server) listPrivacyLegalHolds(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, http.StatusForbidden, "STEP_UP_REQUIRED", "Recent multi-factor verification is required to search legal holds.", nil)
 		return
 	}
-	limit, err := optionalPositiveIntQuery(r, "limit", 500)
+	request, err := httpx.ParsePage(r, 100, 500)
 	if err != nil {
-		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_LIMIT", "The page limit must be between 1 and 500.", nil)
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE", "The legal-hold page request is invalid.", nil)
 		return
 	}
 	activeOnly, err := optionalBoolQuery(r, "activeOnly")
@@ -364,16 +372,20 @@ func (s *Server) listPrivacyLegalHolds(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, http.StatusBadRequest, "PRIVACY_ACTIVE_FILTER_INVALID", "The activeOnly filter must be true or false.", nil)
 		return
 	}
-	items, err := s.deps.PrivacyCases.ListLegalHolds(r.Context(), r.URL.Query().Get("msisdn"), activeOnly, limit)
+	page, err := s.deps.PrivacyCases.ListLegalHoldsPage(r.Context(), r.URL.Query().Get("msisdn"), activeOnly, request.Limit, request.Cursor)
+	if errors.Is(err, privacy.ErrInvalidLegalHoldListCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The legal-hold page cursor is invalid.", nil)
+		return
+	}
 	if err != nil {
 		writePrivacyError(w, r, err)
 		return
 	}
-	if err := s.deps.PrivacyCases.RecordAccess(r.Context(), principal.User.ID, "PRIVACY_LEGAL_HOLDS_SEARCHED", "", r.Header.Get("X-Request-ID"), map[string]any{"activeOnly": activeOnly, "resultCount": len(items)}); err != nil {
+	if err := s.deps.PrivacyCases.RecordAccess(r.Context(), principal.User.ID, "PRIVACY_LEGAL_HOLDS_SEARCHED", "", r.Header.Get("X-Request-ID"), map[string]any{"activeOnly": activeOnly, "resultCount": len(page.Items)}); err != nil {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, http.StatusOK, items)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 
 func (s *Server) releasePrivacyLegalHold(w http.ResponseWriter, r *http.Request) {

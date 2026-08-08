@@ -427,7 +427,7 @@ func (r *PostgreSQLRepository) Events(ctx context.Context, id string, limit int)
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	rows, err := r.DB.QueryContext(ctx, `SELECT job_id::text,action,actor_id::text,reason,previous_status,current_status,occurred_at FROM durable_job_administration_events WHERE job_id=$1::uuid ORDER BY occurred_at DESC,id DESC LIMIT $2`, id, limit)
+	rows, err := r.DB.QueryContext(ctx, `SELECT id::text,job_id::text,action,actor_id::text,reason,previous_status,current_status,occurred_at FROM durable_job_administration_events WHERE job_id=$1::uuid ORDER BY occurred_at DESC,id DESC LIMIT $2`, id, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -435,10 +435,66 @@ func (r *PostgreSQLRepository) Events(ctx context.Context, id string, limit int)
 	var out []AdministrationEvent
 	for rows.Next() {
 		var v AdministrationEvent
-		if err := rows.Scan(&v.JobID, &v.Action, &v.ActorID, &v.Reason, &v.Previous, &v.Current, &v.OccurredAt); err != nil {
+		if err := rows.Scan(&v.ID, &v.JobID, &v.Action, &v.ActorID, &v.Reason, &v.Previous, &v.Current, &v.OccurredAt); err != nil {
 			return nil, err
 		}
 		out = append(out, v)
 	}
 	return out, rows.Err()
+}
+
+func (r *PostgreSQLRepository) ListAdministrationEventPage(ctx context.Context, jobID string, limit int, before *time.Time, beforeID string) ([]AdministrationEvent, error) {
+	if r == nil || r.DB == nil {
+		return nil, errors.New("database is required")
+	}
+	rows, err := r.DB.QueryContext(ctx, `SELECT id::text,job_id::text,action,actor_id::text,reason,previous_status,current_status,occurred_at FROM durable_job_administration_events WHERE job_id=$1::uuid AND ($3::timestamptz IS NULL OR occurred_at<$3 OR (occurred_at=$3 AND id<NULLIF($4,'')::uuid)) ORDER BY occurred_at DESC,id DESC LIMIT $2`, jobID, limit, before, beforeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []AdministrationEvent{}
+	for rows.Next() {
+		var event AdministrationEvent
+		if err := rows.Scan(&event.ID, &event.JobID, &event.Action, &event.ActorID, &event.Reason, &event.Previous, &event.Current, &event.OccurredAt); err != nil {
+			return nil, err
+		}
+		out = append(out, event)
+	}
+	return out, rows.Err()
+}
+
+func (r *PostgreSQLRepository) ListPage(ctx context.Context, q Query, before *time.Time, beforeID string) ([]Job, error) {
+	if r == nil || r.DB == nil {
+		return nil, errors.New("database is required")
+	}
+	if q.Limit <= 0 || q.Limit > 501 {
+		q.Limit = 100
+	}
+	statuses, err := json.Marshal(q.Statuses)
+	if err != nil {
+		return nil, err
+	}
+	types, err := json.Marshal(q.Types)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.DB.QueryContext(ctx, `SELECT id,job_type,deduplication_key,payload,status,priority,attempt_count,max_attempts,available_at,lease_owner,lease_expires_at,lease_version,last_error_code,last_error_detail,created_at,updated_at,completed_at
+FROM durable_jobs
+WHERE (jsonb_array_length($1::jsonb)=0 OR status IN (SELECT jsonb_array_elements_text($1::jsonb)))
+  AND (jsonb_array_length($2::jsonb)=0 OR job_type IN (SELECT jsonb_array_elements_text($2::jsonb)))
+  AND ($3::timestamptz IS NULL OR created_at<$3 OR (created_at=$3 AND id<NULLIF($4,'')::uuid))
+ORDER BY created_at DESC,id DESC LIMIT $5`, string(statuses), string(types), before, beforeID, q.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]Job, 0, q.Limit)
+	for rows.Next() {
+		value, scanErr := scanJob(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		items = append(items, value)
+	}
+	return items, rows.Err()
 }

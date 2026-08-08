@@ -61,6 +61,31 @@ func (m *MemoryAlertStore) ListAlertPolicies(_ context.Context, status AlertPoli
 	}
 	return out, nil
 }
+func (m *MemoryAlertStore) ListAlertPolicyPage(_ context.Context, status AlertPolicyStatus, limit int, before *time.Time, beforeID string) ([]AlertPolicy, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]AlertPolicy, 0, len(m.policies))
+	for _, v := range m.policies {
+		if status != "" && v.Status != status {
+			continue
+		}
+		if before != nil && !(v.CreatedAt.Before(*before) || (v.CreatedAt.Equal(*before) && v.ID < beforeID)) {
+			continue
+		}
+		out = append(out, v)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	if limit <= 0 || limit > len(out) {
+		limit = len(out)
+	}
+	return out[:limit], nil
+}
+
 func (m *MemoryAlertStore) GetAlertPolicy(_ context.Context, key string) (AlertPolicy, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -136,13 +161,29 @@ func (m *MemoryAlertStore) ActivateAlertPolicy(_ context.Context, v AlertPolicy,
 	m.policies[v.ID] = v
 	return v, nil
 }
-func (m *MemoryAlertStore) ListAlertPolicyEvents(_ context.Context, key string, limit int) ([]AlertPolicyEvent, error) {
+func (m *MemoryAlertStore) ListAlertPolicyEvents(ctx context.Context, key string, limit int) ([]AlertPolicyEvent, error) {
+	return m.ListAlertPolicyEventPage(ctx, key, limit, nil, "")
+}
+
+func (m *MemoryAlertStore) ListAlertPolicyEventPage(_ context.Context, key string, limit int, before *time.Time, beforeID string) ([]AlertPolicyEvent, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	out := append([]AlertPolicyEvent(nil), m.policyEvents[key]...)
-	sort.Slice(out, func(i, j int) bool { return out[i].OccurredAt.After(out[j].OccurredAt) })
-	if len(out) > limit {
-		out = out[:limit]
+	items := append([]AlertPolicyEvent(nil), m.policyEvents[key]...)
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].OccurredAt.Equal(items[j].OccurredAt) {
+			return items[i].ID > items[j].ID
+		}
+		return items[i].OccurredAt.After(items[j].OccurredAt)
+	})
+	out := make([]AlertPolicyEvent, 0, limit)
+	for _, item := range items {
+		if before != nil && (item.OccurredAt.After(*before) || item.OccurredAt.Equal(*before) && item.ID >= beforeID) {
+			continue
+		}
+		out = append(out, item)
+		if len(out) == limit {
+			break
+		}
 	}
 	return out, nil
 }
@@ -279,6 +320,29 @@ func (m *MemoryAlertStore) ListAlertEvents(_ context.Context, key string, limit 
 	}
 	return out, nil
 }
+func (m *MemoryAlertStore) ListAlertEventPage(_ context.Context, key string, limit int, after *time.Time, afterID string) ([]AlertEvent, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	items := append([]AlertEvent(nil), m.alertEvents[key]...)
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].OccurredAt.Equal(items[j].OccurredAt) {
+			return items[i].ID < items[j].ID
+		}
+		return items[i].OccurredAt.Before(items[j].OccurredAt)
+	})
+	out := make([]AlertEvent, 0, limit)
+	for _, item := range items {
+		if after != nil && (item.OccurredAt.Before(*after) || (item.OccurredAt.Equal(*after) && item.ID <= afterID)) {
+			continue
+		}
+		out = append(out, item)
+		if len(out) == limit {
+			break
+		}
+	}
+	return out, nil
+}
+
 func (m *MemoryAlertStore) ClaimEscalations(_ context.Context, worker string, now time.Time, lease time.Duration, limit int) ([]Alert, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -404,4 +468,63 @@ func (m *MemoryAlertStore) ListNotifications(_ context.Context, status string, l
 		out = out[:limit]
 	}
 	return out, nil
+}
+
+func (m *MemoryAlertStore) ListAlertPage(_ context.Context, status AlertStatus, severity Severity, limit int, before *time.Time, beforeID string) ([]Alert, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	items := make([]Alert, 0, len(m.alerts))
+	for _, alert := range m.alerts {
+		if status != "" && alert.Status != status {
+			continue
+		}
+		if severity != "" && alert.Severity != severity {
+			continue
+		}
+		if before != nil && !(alert.LastObservedAt.Before(*before) || (alert.LastObservedAt.Equal(*before) && alert.ID < beforeID)) {
+			continue
+		}
+		items = append(items, alert)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].LastObservedAt.Equal(items[j].LastObservedAt) {
+			return items[i].ID > items[j].ID
+		}
+		return items[i].LastObservedAt.After(items[j].LastObservedAt)
+	})
+	if limit <= 0 || limit > 501 {
+		limit = 100
+	}
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	return items, nil
+}
+
+func (m *MemoryAlertStore) ListNotificationPage(_ context.Context, status string, limit int, before *time.Time, beforeID string) ([]Notification, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	items := make([]Notification, 0, len(m.notifications))
+	for _, notification := range m.notifications {
+		if status != "" && notification.Status != status {
+			continue
+		}
+		if before != nil && !(notification.CreatedAt.Before(*before) || (notification.CreatedAt.Equal(*before) && notification.ID < beforeID)) {
+			continue
+		}
+		items = append(items, notification)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].CreatedAt.Equal(items[j].CreatedAt) {
+			return items[i].ID > items[j].ID
+		}
+		return items[i].CreatedAt.After(items[j].CreatedAt)
+	})
+	if limit <= 0 || limit > 501 {
+		limit = 100
+	}
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	return items, nil
 }

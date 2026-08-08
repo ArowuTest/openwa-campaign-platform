@@ -28,6 +28,29 @@ func (r *OrganisationPolicyRepository) List(ctx context.Context, organisationID 
 	}
 	return out, rows.Err()
 }
+func (r *OrganisationPolicyRepository) ListPolicyPage(ctx context.Context, organisationID string, limit int, before *time.Time, beforeID string) ([]organisation.Policy, error) {
+	if r == nil || r.DB == nil {
+		return nil, errors.New("database is required")
+	}
+	if limit <= 0 || limit > 501 {
+		limit = 100
+	}
+	rows, err := r.DB.QueryContext(ctx, policySelect+` WHERE organisation_id=$1::uuid AND ($3::timestamptz IS NULL OR created_at<$3 OR (created_at=$3 AND id<NULLIF($4::text,'')::uuid)) ORDER BY created_at DESC,id DESC LIMIT $2`, organisationID, limit, before, beforeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]organisation.Policy, 0, limit)
+	for rows.Next() {
+		p, scanErr := scanPolicy(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 func (r *OrganisationPolicyRepository) Get(ctx context.Context, id string) (organisation.Policy, error) {
 	p, err := scanPolicy(r.DB.QueryRowContext(ctx, policySelect+` WHERE id=$1::uuid`, id))
 	if errors.Is(err, sql.ErrNoRows) {

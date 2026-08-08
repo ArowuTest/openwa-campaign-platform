@@ -3,6 +3,7 @@ package inbound
 import (
 	"context"
 	"errors"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -232,4 +233,27 @@ func (m *MemoryRotationRepository) FailRun(_ context.Context, r RotationRun, now
 	current.LeaseOwner = ""
 	m.runs[r.ID] = current
 	return nil
+}
+
+func (m *MemoryRotationRepository) ListRunPage(_ context.Context, limit int, before *time.Time, beforeID string) ([]RotationRun, error) {
+	items := make([]RotationRun, 0, len(m.runs))
+	for _, run := range m.runs {
+		if before != nil && !(run.RequestedAt.Before(*before) || (run.RequestedAt.Equal(*before) && run.ID < beforeID)) {
+			continue
+		}
+		items = append(items, run)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].RequestedAt.Equal(items[j].RequestedAt) {
+			return items[i].ID > items[j].ID
+		}
+		return items[i].RequestedAt.After(items[j].RequestedAt)
+	})
+	if limit <= 0 || limit > 201 {
+		limit = 50
+	}
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	return items, nil
 }

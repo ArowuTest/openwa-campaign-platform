@@ -283,6 +283,31 @@ func (m *MemoryPolicyStore) List(_ context.Context, org string) ([]Policy, error
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
 	return out, nil
 }
+func (m *MemoryPolicyStore) ListPolicyPage(_ context.Context, org string, limit int, before *time.Time, beforeID string) ([]Policy, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]Policy, 0, len(m.items))
+	for _, p := range m.items {
+		if org != "" && p.OrganisationID != org {
+			continue
+		}
+		if before != nil && !(p.CreatedAt.Before(*before) || (p.CreatedAt.Equal(*before) && p.ID < beforeID)) {
+			continue
+		}
+		out = append(out, p)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	if limit <= 0 || limit > len(out) {
+		limit = len(out)
+	}
+	return out[:limit], nil
+}
+
 func (m *MemoryPolicyStore) Get(_ context.Context, id string) (Policy, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

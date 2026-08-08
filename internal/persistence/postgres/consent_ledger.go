@@ -201,3 +201,27 @@ func insertConsentEvent(ctx context.Context, tx *sql.Tx, contact, grant, suppres
 	_, err := tx.ExecContext(ctx, `INSERT INTO consent_events(id,contact_id,grant_id,suppression_id,event_type,actor_id,reason,source_reference,occurred_at) VALUES(gen_random_uuid(),NULLIF($1,'')::uuid,NULLIF($2,'')::uuid,NULLIF($3,'')::uuid,$4,NULLIF($5,'')::uuid,NULLIF($6,''),NULLIF($7,''),$8)`, contact, grant, suppression, eventType, actor, reason, source, at)
 	return err
 }
+
+func (r *ConsentLedgerRepository) EventPage(ctx context.Context, contactID string, limit int, before *time.Time, beforeID string) ([]consent.ConsentEvent, error) {
+	if limit <= 0 || limit > 1001 {
+		limit = 100
+	}
+	rows, err := r.DB.QueryContext(ctx, `SELECT id::text,coalesce(contact_id::text,''),coalesce(grant_id::text,''),coalesce(suppression_id::text,''),event_type,coalesce(actor_id::text,''),coalesce(reason,''),coalesce(source_reference,''),occurred_at
+FROM consent_events
+WHERE ($1='' OR contact_id=NULLIF($1,'')::uuid)
+  AND ($3::timestamptz IS NULL OR occurred_at<$3 OR (occurred_at=$3 AND id<NULLIF($4,'')::uuid))
+ORDER BY occurred_at DESC,id DESC LIMIT $2`, contactID, limit, before, beforeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]consent.ConsentEvent, 0, limit)
+	for rows.Next() {
+		var value consent.ConsentEvent
+		if err := rows.Scan(&value.ID, &value.ContactID, &value.GrantID, &value.SuppressionID, &value.EventType, &value.ActorID, &value.Reason, &value.SourceReference, &value.OccurredAt); err != nil {
+			return nil, err
+		}
+		out = append(out, value)
+	}
+	return out, rows.Err()
+}

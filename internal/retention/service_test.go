@@ -126,3 +126,35 @@ func TestRetentionWorkerCompletesAndHoldsReviewJobs(t *testing.T) {
 		t.Fatalf("held review missing: %#v", held)
 	}
 }
+
+func TestRetentionJobPageContinuesWithoutDuplicates(t *testing.T) {
+	base := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	store := NewMemoryStore()
+	for _, job := range []Job{
+		{ID: "job-a", Status: JobPending, CreatedAt: base, UpdatedAt: base},
+		{ID: "job-b", Status: JobPending, CreatedAt: base.Add(time.Minute), UpdatedAt: base.Add(time.Minute)},
+		{ID: "job-c", Status: JobPending, CreatedAt: base.Add(2 * time.Minute), UpdatedAt: base.Add(2 * time.Minute)},
+	} {
+		if err := store.AddJob(job); err != nil {
+			t.Fatal(err)
+		}
+	}
+	admin := &Administration{Store: store}
+	first, err := admin.JobsPage(context.Background(), "", 2, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Items) != 2 || first.NextCursor == "" || first.Items[0].ID != "job-c" || first.Items[1].ID != "job-b" {
+		t.Fatalf("unexpected first retention-job page: %#v", first)
+	}
+	second, err := admin.JobsPage(context.Background(), "", 2, first.NextCursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second.Items) != 1 || second.NextCursor != "" || second.Items[0].ID != "job-a" {
+		t.Fatalf("unexpected second retention-job page: %#v", second)
+	}
+	if _, err := admin.JobsPage(context.Background(), "", 2, "invalid"); !errors.Is(err, ErrInvalidRetentionJobCursor) {
+		t.Fatalf("invalid retention-job cursor accepted: %v", err)
+	}
+}

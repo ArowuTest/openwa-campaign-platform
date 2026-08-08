@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"strings"
 	"testing"
+	"time"
 )
 
 func validAudienceEnv(t *testing.T) {
@@ -143,5 +144,26 @@ func TestLoadPlatformGovernanceRejectsShortLeases(t *testing.T) {
 	t.Setenv("ALERT_ESCALATION_LEASE", "5s")
 	if _, err := LoadPlatformGovernance(); err == nil {
 		t.Fatal("expected short escalation lease to fail")
+	}
+}
+
+func TestLoadPlatformGovernanceGatewayStaleAfterSecondsIsStrictAndBounded(t *testing.T) {
+	t.Setenv("DATABASE_URL", "postgres://example")
+	t.Setenv("OBJECT_STORE_ROOT", t.TempDir())
+	cfg, err := LoadPlatformGovernance()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.GatewayStaleAfter != 120*time.Second {
+		t.Fatalf("unexpected gateway stale default: %s", cfg.GatewayStaleAfter)
+	}
+	t.Setenv("GATEWAY_STALE_AFTER_SECONDS", "300")
+	cfg, err = LoadPlatformGovernance()
+	if err != nil || cfg.GatewayStaleAfter != 300*time.Second {
+		t.Fatalf("valid gateway stale override rejected: %+v %v", cfg, err)
+	}
+	t.Setenv("GATEWAY_STALE_AFTER_SECONDS", "3601")
+	if _, err = LoadPlatformGovernance(); err == nil || !strings.Contains(err.Error(), "GATEWAY_STALE_AFTER_SECONDS") {
+		t.Fatalf("expected unsafe gateway stale threshold rejection, got %v", err)
 	}
 }

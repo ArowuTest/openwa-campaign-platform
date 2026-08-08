@@ -1,8 +1,10 @@
 package httpserver
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -36,5 +38,21 @@ func TestConsentLedgerHTTPWorkflow(t *testing.T) {
 	events := post(http.MethodGet, "/api/v1/consent-events?contactId=00000000-0000-4000-8000-000000000010", "", "")
 	if events.Code != http.StatusOK || !strings.Contains(events.Body.String(), "SUPPRESSION_CREATED") || !strings.Contains(events.Body.String(), "GRANT_CREATED") {
 		t.Fatalf("events: %d %s", events.Code, events.Body.String())
+	}
+	first := post(http.MethodGet, "/api/v1/consent-events?contactId=00000000-0000-4000-8000-000000000010&limit=1", "", "")
+	var firstPage struct {
+		Items      []map[string]any `json:"items"`
+		NextCursor string           `json:"nextCursor"`
+		HasMore    bool             `json:"hasMore"`
+	}
+	if first.Code != http.StatusOK || json.Unmarshal(first.Body.Bytes(), &firstPage) != nil || len(firstPage.Items) != 1 || firstPage.NextCursor == "" || !firstPage.HasMore {
+		t.Fatalf("first consent page: %d %s", first.Code, first.Body.String())
+	}
+	second := post(http.MethodGet, "/api/v1/consent-events?contactId=00000000-0000-4000-8000-000000000010&limit=1&cursor="+url.QueryEscape(firstPage.NextCursor), "", "")
+	var secondPage struct {
+		Items []map[string]any `json:"items"`
+	}
+	if second.Code != http.StatusOK || json.Unmarshal(second.Body.Bytes(), &secondPage) != nil || len(secondPage.Items) != 1 || firstPage.Items[0]["id"] == secondPage.Items[0]["id"] {
+		t.Fatalf("second consent page: %d %s", second.Code, second.Body.String())
 	}
 }

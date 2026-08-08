@@ -26,6 +26,29 @@ func (s *PostgreSQLStore) List(ctx context.Context) ([]Definition, error) {
 	}
 	return out, rows.Err()
 }
+func (s *PostgreSQLStore) ListDefinitionPage(ctx context.Context, limit int, before *time.Time, beforeID string) ([]Definition, error) {
+	if s == nil || s.DB == nil {
+		return nil, errors.New("database is required")
+	}
+	if limit <= 0 || limit > 501 {
+		limit = 100
+	}
+	rows, err := s.DB.QueryContext(ctx, providerSelect+` WHERE ($2::timestamptz IS NULL OR created_at<$2 OR (created_at=$2 AND id<NULLIF($3,'')::uuid)) ORDER BY created_at DESC,id DESC LIMIT $1`, limit, before, beforeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]Definition, 0, limit)
+	for rows.Next() {
+		d, scanErr := scanDefinition(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out = append(out, d)
+	}
+	return out, rows.Err()
+}
+
 func (s *PostgreSQLStore) Get(ctx context.Context, id string) (Definition, error) {
 	d, err := scanDefinition(s.DB.QueryRowContext(ctx, providerSelect+` WHERE id=$1::uuid`, id))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -112,7 +135,10 @@ SELECT id,'SUPERSEDED',$3::uuid,$4,version,$2 FROM superseded`, d.EffectiveFrom,
 }
 
 func (s *PostgreSQLStore) ListEvents(ctx context.Context, definitionID string) ([]Event, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT id,definition_id::text,action,actor_id::text,reason,definition_version,occurred_at FROM provider_capability_events WHERE definition_id=$1::uuid ORDER BY id DESC LIMIT 5000`, definitionID)
+	return s.ListEventPage(ctx, definitionID, 5000, 0)
+}
+func (s *PostgreSQLStore) ListEventPage(ctx context.Context, definitionID string, limit int, beforeID int64) ([]Event, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT id,definition_id::text,action,actor_id::text,reason,definition_version,occurred_at FROM provider_capability_events WHERE definition_id=$1::uuid AND ($3::bigint=0 OR id<$3) ORDER BY id DESC LIMIT $2`, definitionID, limit, beforeID)
 	if err != nil {
 		return nil, err
 	}

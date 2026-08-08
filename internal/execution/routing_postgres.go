@@ -132,6 +132,34 @@ func (s *PostgreSQLRoutingPlanStore) ListByCampaign(ctx context.Context, campaig
 	}
 	return out, nil
 }
+func (s *PostgreSQLRoutingPlanStore) ListRoutingPlanPage(ctx context.Context, campaignID string, limit int, beforeVersion int64) ([]RoutingPlan, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT id::text FROM campaign_routing_plans WHERE campaign_id=$1::uuid AND ($3=0 OR plan_version<$3) ORDER BY plan_version DESC LIMIT $2`, campaignID, limit, beforeVersion)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	ids := []string{}
+	for rows.Next() {
+		var identifier string
+		if err := rows.Scan(&identifier); err != nil {
+			return nil, err
+		}
+		ids = append(ids, identifier)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	out := make([]RoutingPlan, 0, len(ids))
+	for _, identifier := range ids {
+		plan, err := s.Get(ctx, identifier)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, plan)
+	}
+	return out, nil
+}
+
 func (s *PostgreSQLRoutingPlanStore) LatestByCampaign(ctx context.Context, campaignID string) (RoutingPlan, error) {
 	if s == nil || s.DB == nil {
 		return RoutingPlan{}, errors.New("database is required")

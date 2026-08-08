@@ -78,6 +78,29 @@ func (r *PacingPolicyRepository) List(ctx context.Context) ([]sender.PacingPolic
 	}
 	return out, rows.Err()
 }
+func (r *PacingPolicyRepository) ListPacingPage(ctx context.Context, limit int, before *time.Time, beforeID string) ([]sender.PacingPolicy, error) {
+	if r == nil || r.DB == nil {
+		return nil, errors.New("database is required")
+	}
+	if limit <= 0 || limit > 501 {
+		limit = 100
+	}
+	rows, err := r.DB.QueryContext(ctx, pacingSelect+` WHERE ($2::timestamptz IS NULL OR created_at<$2 OR (created_at=$2 AND id<NULLIF($3::text,'')::uuid)) ORDER BY created_at DESC,id DESC LIMIT $1`, limit, before, beforeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]sender.PacingPolicy, 0, limit)
+	for rows.Next() {
+		policy, scanErr := scanPacing(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out = append(out, policy)
+	}
+	return out, rows.Err()
+}
+
 func (r *PacingPolicyRepository) CompareAndSwap(ctx context.Context, p sender.PacingPolicy, expected int64) (sender.PacingPolicy, error) {
 	tx, err := r.DB.BeginTx(ctx, nil)
 	if err != nil {

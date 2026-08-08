@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"time"
 
 	"campaign-platform/internal/commercial"
 )
@@ -62,6 +63,29 @@ func (r *CommercialRepository) List(ctx context.Context, org string) ([]commerci
 	}
 	return out, rows.Err()
 }
+func (r *CommercialRepository) ListPage(ctx context.Context, org string, limit int, before *time.Time, beforeID string) ([]commercial.Record, error) {
+	if r == nil || r.DB == nil {
+		return nil, errors.New("database is required")
+	}
+	if limit <= 0 || limit > 501 {
+		limit = 100
+	}
+	rows, err := r.DB.QueryContext(ctx, commercialSelect+` WHERE ($1::text='' OR organisation_id=NULLIF($1::text,'')::uuid) AND ($3::timestamptz IS NULL OR created_at<$3 OR (created_at=$3 AND id<NULLIF($4::text,'')::uuid)) ORDER BY created_at DESC,id DESC LIMIT $2`, org, limit, before, beforeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]commercial.Record, 0, limit)
+	for rows.Next() {
+		v, scanErr := scanCommercial(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
 func (r *CommercialRepository) CompareAndSwap(ctx context.Context, v commercial.Record, expected int64) (commercial.Record, error) {
 	res, err := r.DB.ExecContext(ctx, `UPDATE campaign_commercial_approvals SET payment_reference=NULLIF($2,''),payment_received_at=$3,status=$4,version=$5,submitted_by=NULLIF($6,'')::uuid,approved_by=NULLIF($7,'')::uuid,reason=$8,updated_at=$9 WHERE id=$1::uuid AND version=$10`, v.ID, v.PaymentReference, v.PaymentReceivedAt, v.Status, v.Version, v.SubmittedBy, v.ApprovedBy, v.Reason, v.UpdatedAt, expected)
 	if err != nil {

@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadRejectsExplicitMalformedValues(t *testing.T) {
@@ -187,5 +188,27 @@ func TestLoadVersionedInboundContentKeyring(t *testing.T) {
 	}
 	if cfg.InboundContentActiveKey != "v2" {
 		t.Fatalf("active=%s", cfg.InboundContentActiveKey)
+	}
+}
+
+func TestLoadGatewayStaleAfterSecondsIsStrictAndBounded(t *testing.T) {
+	setDevelopmentEnvironment(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.GatewayStaleAfter != 120*time.Second {
+		t.Fatalf("unexpected gateway stale default: %s", cfg.GatewayStaleAfter)
+	}
+	setDevelopmentEnvironment(t)
+	t.Setenv("GATEWAY_STALE_AFTER_SECONDS", "180")
+	cfg, err = Load()
+	if err != nil || cfg.GatewayStaleAfter != 180*time.Second {
+		t.Fatalf("valid gateway stale override rejected: %+v %v", cfg, err)
+	}
+	setDevelopmentEnvironment(t)
+	t.Setenv("GATEWAY_STALE_AFTER_SECONDS", "29")
+	if _, err = Load(); err == nil || !strings.Contains(err.Error(), "GATEWAY_STALE_AFTER_SECONDS") {
+		t.Fatalf("expected unsafe gateway stale threshold rejection, got %v", err)
 	}
 }

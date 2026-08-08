@@ -321,7 +321,8 @@ func buildPostgreSQLRuntime(ctx context.Context, cfg config.Config, protector *s
 	reportingPrivacy := &operations.ReportingPrivacyAdministration{Store: &operations.PostgreSQLReportingPrivacyStore{DB: db}, Audit: auditRecorder}
 	alertStore := &operations.PostgreSQLAlertStore{DB: db}
 	alertPolicies := &operations.AlertAdministration{Store: alertStore}
-	operationsService := &operations.Service{Repo: &operations.PostgreSQLRepository{DB: db}, Audit: auditRecorder, AuditRepository: auditRepository, Deliveries: deliveryEvents, ReportingPrivacy: reportingPrivacy, Alerting: alertStore}
+	operationsRepo := &operations.PostgreSQLRepository{DB: db, RuntimeHealth: &operations.PlatformGatewayRuntimeHealthResolver{Configurations: configurations, FallbackStaleAfter: cfg.GatewayStaleAfter}, FallbackGatewayStaleAfter: cfg.GatewayStaleAfter}
+	operationsService := &operations.Service{Repo: operationsRepo, Audit: auditRecorder, AuditRepository: auditRepository, Deliveries: deliveryEvents, ReportingPrivacy: reportingPrivacy, Alerting: alertStore}
 	alertEvaluator := &operations.AlertEvaluator{Store: alertStore, Dashboard: operationsService}
 	platformRetentionStore := &retention.PostgreSQLStore{DB: db}
 	platformRetention := &retention.Administration{Store: platformRetentionStore}

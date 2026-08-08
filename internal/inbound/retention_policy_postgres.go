@@ -30,6 +30,29 @@ func (s *PostgreSQLRetentionPolicyStore) List(ctx context.Context) ([]RetentionP
 	}
 	return out, rows.Err()
 }
+func (s *PostgreSQLRetentionPolicyStore) ListRetentionPolicyPage(ctx context.Context, limit int, before *time.Time, beforeID string) ([]RetentionPolicy, error) {
+	if s == nil || s.DB == nil {
+		return nil, errors.New("database is required")
+	}
+	if limit <= 0 || limit > 501 {
+		limit = 100
+	}
+	rows, err := s.DB.QueryContext(ctx, `SELECT id,retention_days,status,effective_from,effective_to,version,created_by,coalesce(submitted_by::text,''),coalesce(approved_by::text,''),reason,created_at,updated_at FROM inbound_retention_policies WHERE ($2::timestamptz IS NULL OR created_at<$2 OR (created_at=$2 AND id<$3::text)) ORDER BY created_at DESC,id DESC LIMIT $1`, limit, before, beforeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]RetentionPolicy, 0, limit)
+	for rows.Next() {
+		p, scanErr := scanRetentionPolicy(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
 func (s *PostgreSQLRetentionPolicyStore) Get(ctx context.Context, id string) (RetentionPolicy, error) {
 	p, err := scanRetentionPolicy(s.DB.QueryRowContext(ctx, `SELECT id,retention_days,status,effective_from,effective_to,version,created_by,coalesce(submitted_by::text,''),coalesce(approved_by::text,''),reason,created_at,updated_at FROM inbound_retention_policies WHERE id=$1`, id))
 	if errors.Is(err, sql.ErrNoRows) {

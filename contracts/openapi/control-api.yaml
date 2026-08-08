@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Internal Audience & Campaign Control API
-  version: 0.8.27
+  version: 0.8.28
   description: >
     Internal-only API for organisation records, offline consent reviews, secure audience imports,
     governed cohort definitions and controlled campaign lifecycle management.
@@ -80,8 +80,22 @@ paths:
     get:
       operationId: listInboundRetentionPolicies
       summary: List governed effective-dated inbound content retention policies
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Retention policy list }
+        '200':
+          description: Retention policy list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
     post:
       operationId: createInboundRetentionPolicy
       summary: Create a draft inbound content retention policy
@@ -113,8 +127,22 @@ paths:
     get:
       operationId: listInboundReencryptionRuns
       summary: List resumable inbound-content re-encryption runs
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Re-encryption run list }
+        '200':
+          description: Re-encryption run list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
   /admin/inbound-reencryption-runs/{id}:
     get:
       operationId: getInboundReencryptionRun
@@ -128,8 +156,22 @@ paths:
     get:
       operationId: listOptOutPolicies
       summary: List governed effective-dated opt-out policies
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Policy list }
+        '200':
+          description: Policy list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
     post:
       operationId: createOptOutPolicy
       summary: Create a draft exact-match opt-out policy
@@ -155,8 +197,22 @@ paths:
     get:
       operationId: listProviderCapabilities
       summary: List governed provider and engine capability definitions
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Provider capability definition list }
+        '200':
+          description: Provider capability definition list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
     post:
       operationId: createProviderCapability
       summary: Create a draft provider capability definition
@@ -194,8 +250,22 @@ paths:
       summary: List append-only provider capability lifecycle events
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque cursor returned by the previous page. }
       responses:
-        '200': { description: Provider capability event history }
+        '200':
+          description: Provider capability event history
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
+        '400': { description: Invalid page limit or cursor }
   /admin/provider-capabilities/resolve:
     post:
       operationId: resolveProviderCapability
@@ -208,8 +278,22 @@ paths:
     get:
       operationId: listSenderPacingPolicies
       summary: List governed sender pacing policies
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Pacing policy list }
+        '200':
+          description: Pacing policy list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
     post:
       operationId: createSenderPacingPolicy
       summary: Create a draft sender pacing policy
@@ -242,8 +326,22 @@ paths:
     get:
       operationId: listInternalUsers
       summary: List provisioned internal users
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Internal user list }
+        '200':
+          description: Internal user list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
     post:
       operationId: createInternalUser
       summary: Provision a named internal user
@@ -460,8 +558,22 @@ paths:
     get:
       operationId: listSegments
       summary: List saved governed audience segments
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Segments returned }
+        '200':
+          description: Segments returned
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
     post:
       operationId: createSegment
       summary: Create a saved governed audience segment
@@ -501,8 +613,21 @@ paths:
       summary: List immutable versions of a saved audience segment
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Segment versions returned }
+        '200':
+          description: Segment versions returned
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
         '404': { description: Segment not found }
   /segments/{id}/clone:
     post:
@@ -572,8 +697,22 @@ paths:
     get:
       operationId: listOrganisations
       summary: List internal organisation records
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Organisation list }
+        '200':
+          description: Organisation list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
     post:
       operationId: createOrganisation
       summary: Create an internal organisation record
@@ -698,8 +837,21 @@ paths:
       summary: List immutable organisation lifecycle events
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Organisation event history }
+        '200':
+          description: Organisation event history
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
         '404': { $ref: '#/components/responses/NotFound' }
   /consent-reviews:
     get:
@@ -707,8 +859,21 @@ paths:
       summary: List offline consent reviews
       parameters:
         - { name: organisationId, in: query, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Consent review list }
+        '200':
+          description: Consent review list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
     post:
       operationId: createConsentReview
       summary: Record an offline consent review for compliance decision
@@ -983,15 +1148,41 @@ paths:
       summary: List immutable material-change and approval-invalidation evidence
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Ordered material-change evidence }
+        '200':
+          description: Ordered material-change evidence
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
         '404': { $ref: '#/components/responses/NotFound' }
   /inbound-replies:
     get:
       summary: List governed inbound replies for authorised operations users
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
         '200':
           description: Inbound reply work queue
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
   /inbound-replies/{id}/review:
     post:
       summary: Classify and optionally escalate one inbound reply
@@ -1056,8 +1247,21 @@ paths:
       summary: List immutable multi-pool routing plans for a campaign
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Routing plan list }
+        '200':
+          description: Routing plan list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
     post:
       operationId: createCampaignRoutingPlan
       summary: Approve a multi-pool routing plan and atomically reserve pool capacity
@@ -1128,8 +1332,21 @@ paths:
       summary: List immutable pool-reallocation evidence for a dispatch shard
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Reallocation history }
+        '200':
+          description: Reallocation history
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
   /campaigns/{id}/execution-plan:
     get:
       summary: Evaluate measured sender capacity and forecast campaign completion
@@ -1184,13 +1401,31 @@ paths:
       operationId: getOperationsDashboard
       summary: Get authoritative operational campaign, queue, sender and incident counters
       responses:
-        '200': { description: Operational dashboard snapshot }
+        '200':
+          description: Operational dashboard snapshot including the applied gateway-staleness policy evidence.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OperationsDashboard' }
   /operations/incidents:
     get:
       operationId: listOperationsIncidents
       summary: List operational incidents
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Incident list }
+        '200':
+          description: Incident list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
     post:
       operationId: createOperationsIncident
       summary: Create a governed operational incident
@@ -1221,8 +1456,20 @@ paths:
       parameters:
         - { name: campaignId, in: query, schema: { type: string, format: uuid } }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Delivery exception queue }
+        '200':
+          description: Delivery exception queue
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
   /operations/delivery-exceptions/{id}/resolve:
     post:
       operationId: resolveDeliveryException
@@ -1243,8 +1490,20 @@ paths:
         - { name: status, in: query, schema: { type: string } }
         - { name: type, in: query, schema: { type: string } }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Durable job list }
+        '200':
+          description: Durable job list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
   /operations/jobs/summary:
     get:
       operationId: getOperationalJobSummary
@@ -1267,8 +1526,20 @@ paths:
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 500 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Job administration event list }
+        '200':
+          description: Job administration event list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
   /operations/jobs/{id}/retry:
     post:
       operationId: retryOperationalJob
@@ -1328,10 +1599,21 @@ paths:
       operationId: listControlledExports
       summary: List controlled exports using bounded cursor pagination
       parameters:
-        - { name: cursor, in: query, required: false, schema: { type: string } }
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: after, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Controlled export page }
+        '200':
+          description: Controlled export page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
     post:
       operationId: requestControlledExport
       summary: Request a purpose-bound controlled report or audit export
@@ -1415,8 +1697,20 @@ paths:
         - { name: id, in: path, required: true, schema: { type: string } }
         - { name: status, in: query, required: false, schema: { type: string, enum: [PENDING, RESOLVED, REJECTED], default: PENDING } }
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Conflict records returned }
+        '200':
+          description: Conflict records returned
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
         '400': { description: Invalid query }
         '401': { description: Authentication required }
         '403': { description: Permission denied }
@@ -1548,8 +1842,21 @@ paths:
       summary: List durable audience materialisation jobs for a campaign
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Materialisation jobs returned }
+        '200':
+          description: Materialisation jobs returned
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
   /audience-materialisations/{id}:
     get:
       operationId: getAudienceMaterialisation
@@ -1608,8 +1915,21 @@ paths:
       summary: listMessageVersions
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Request completed }
+        '200':
+          description: Request completed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
         '400': { description: Invalid request }
         '401': { description: Authentication required }
         '403': { description: Permission denied }
@@ -1649,8 +1969,22 @@ paths:
     get:
       operationId: listConsentEvents
       summary: listConsentEvents
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Request completed }
+        '200':
+          description: Request completed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
         '400': { description: Invalid request }
         '401': { description: Authentication required }
         '403': { description: Permission denied }
@@ -1720,8 +2054,22 @@ paths:
     get:
       operationId: listTestRecipients
       summary: List governed approved test recipients
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Test recipient list }
+        '200':
+          description: Test recipient list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
     post:
       operationId: createTestRecipient
       summary: Register a draft encrypted test recipient
@@ -1760,8 +2108,21 @@ paths:
       summary: List controlled test messages for a campaign
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Test message list }
+        '200':
+          description: Test message list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
     post:
       operationId: scheduleTestMessage
       summary: Schedule an idempotent test message to an approved test recipient
@@ -1808,8 +2169,22 @@ paths:
     get:
       operationId: listSenderNodes
       summary: listSenderNodes
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Request completed }
+        '200':
+          description: Request completed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
         '400': { description: Invalid request }
         '401': { description: Authentication required }
         '403': { description: Permission denied }
@@ -1825,8 +2200,22 @@ paths:
     get:
       operationId: listSenderPools
       summary: listSenderPools
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Request completed }
+        '200':
+          description: Request completed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
         '400': { description: Invalid request }
         '401': { description: Authentication required }
         '403': { description: Permission denied }
@@ -1864,8 +2253,22 @@ paths:
     get:
       operationId: listSenderSessions
       summary: listSenderSessions
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Request completed }
+        '200':
+          description: Request completed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
         '400': { description: Invalid request }
         '401': { description: Authentication required }
         '403': { description: Permission denied }
@@ -2109,8 +2512,21 @@ paths:
           name: id
           required: true
           schema: { type: string, format: uuid }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Organisation policy versions }
+        '200':
+          description: Organisation policy versions
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
     post:
       summary: Create a draft organisation policy version
       parameters:
@@ -2165,8 +2581,22 @@ paths:
     get:
       operationId: listCommercialRecords
       summary: List governed commercial records
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Commercial records }
+        '200':
+          description: Commercial records
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
   /campaigns/{id}/commercial-record:
     post:
       operationId: createCommercialRecord
@@ -2310,15 +2740,41 @@ paths:
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Contact lifecycle event list }
+        '200':
+          description: Contact lifecycle event list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
         '404': { description: Contact not found }
   /admin/audience-import-mappings:
     get:
       operationId: listAudienceImportMappings
       summary: List governed reusable audience import mappings
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Mapping list }
+        '200':
+          description: Mapping list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
     post:
       operationId: createAudienceImportMapping
       summary: Create a draft reusable audience import mapping
@@ -2346,8 +2802,22 @@ paths:
       summary: List immutable mapping lifecycle events
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque cursor returned by the previous page. }
       responses:
-        '200': { description: Mapping event list }
+        '200':
+          description: Mapping event list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
+        '400': { description: Invalid page limit or cursor }
   /admin/audience-import-mappings/{id}/submit:
     post:
       operationId: submitAudienceImportMapping
@@ -2378,8 +2848,22 @@ paths:
     get:
       operationId: listPrivacyCases
       summary: List governed privacy and data-subject cases
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500 } }
+        - { name: after, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Privacy case list }
+        '200':
+          description: Privacy case list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
     post:
       operationId: createPrivacyCase
       summary: Create a governed access, portability, rectification, erasure, objection or restriction case
@@ -2400,8 +2884,22 @@ paths:
       summary: List immutable privacy-case lifecycle events
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque cursor returned by the previous page. }
       responses:
-        '200': { description: Privacy case event list }
+        '200':
+          description: Privacy case event list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
+        '400': { description: Invalid page limit or cursor }
   /privacy/cases/{id}/assign:
     post:
       operationId: assignPrivacyCase
@@ -2450,8 +2948,22 @@ paths:
     get:
       operationId: listPrivacyLegalHolds
       summary: List active and released privacy legal holds
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Legal hold list }
+        '200':
+          description: Legal hold list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
     post:
       operationId: createPrivacyLegalHold
       summary: Create a legal hold preventing erasure or conflicting retention action
@@ -2481,8 +2993,22 @@ paths:
       summary: List immutable privacy legal hold lifecycle events
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque cursor returned by the previous page. }
       responses:
-        '200': { description: Legal hold event list }
+        '200':
+          description: Legal hold event list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
+        '400': { description: Invalid page limit or cursor }
   /privacy/legal-holds/{id}/release:
     post:
       operationId: releasePrivacyLegalHold
@@ -2496,8 +3022,22 @@ paths:
     get:
       operationId: listReportingPrivacyPolicies
       summary: List governed minimum-cohort reporting privacy policies
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Reporting privacy policy list }
+        '200':
+          description: Reporting privacy policy list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
     post:
       operationId: createReportingPrivacyPolicy
       summary: Create a draft reporting privacy policy
@@ -2523,8 +3063,22 @@ paths:
       summary: List immutable reporting privacy policy events
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque cursor returned by the previous page. }
       responses:
-        '200': { description: Reporting privacy policy event list }
+        '200':
+          description: Reporting privacy policy event list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
+        '400': { description: Invalid page limit or cursor }
   /admin/reporting-privacy-policies/{id}/submit:
     post:
       operationId: submitReportingPrivacyPolicy
@@ -2555,8 +3109,22 @@ paths:
     get:
       operationId: listPlatformConfigurations
       summary: List governed effective-dated platform configurations
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Configuration list }
+        '200':
+          description: Configuration list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
     post:
       operationId: createPlatformConfiguration
       summary: Create a draft governed platform configuration
@@ -2605,14 +3173,42 @@ paths:
       summary: List immutable platform configuration events
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque cursor returned by the previous page. }
       responses:
-        '200': { description: Configuration event history }
+        '200':
+          description: Configuration event history
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
+        '400': { description: Invalid page limit or cursor }
   /admin/maintenance-windows:
     get:
       operationId: listMaintenanceWindows
       summary: List governed maintenance windows
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Maintenance-window list }
+        '200':
+          description: Maintenance-window list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
     post:
       operationId: createMaintenanceWindow
       summary: Create a draft maintenance window
@@ -2654,14 +3250,42 @@ paths:
       summary: List immutable maintenance-window events
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque cursor returned by the previous page. }
       responses:
-        '200': { description: Maintenance-window event history }
+        '200':
+          description: Maintenance-window event history
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
+        '400': { description: Invalid page limit or cursor }
   /admin/gateway-pools:
     get:
       operationId: listGovernedGatewayPools
       summary: List governed OpenWA gateway pools
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Gateway-pool list }
+        '200':
+          description: Gateway-pool list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
     post:
       operationId: createGovernedGatewayPool
       summary: Create a draft gateway pool
@@ -2705,8 +3329,22 @@ paths:
       summary: List immutable gateway-pool events
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque cursor returned by the previous page. }
       responses:
-        '200': { description: Gateway-pool event history }
+        '200':
+          description: Gateway-pool event history
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
+        '400': { description: Invalid page limit or cursor }
   /admin/gateway-nodes/{id}:
     get:
       operationId: getGovernedGatewayNode
@@ -2714,7 +3352,11 @@ paths:
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
       responses:
-        '200': { description: Gateway-node detail }
+        '200':
+          description: Gateway-node detail including the latest signed container-scoped resource-health evidence.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GatewayNode' }
   /admin/gateway-nodes/{id}/{action}:
     post:
       operationId: transitionGovernedGatewayNode
@@ -2730,8 +3372,22 @@ paths:
       summary: List signed gateway runtime registration evidence
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque cursor returned by the previous page. }
       responses:
-        '200': { description: Gateway runtime event history }
+        '200':
+          description: Gateway runtime event history
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
+        '400': { description: Invalid page limit or cursor }
   /internal/gateway-nodes/{id}/runtime:
     post:
       operationId: registerGatewayRuntime
@@ -2742,16 +3398,39 @@ paths:
         - { name: X-Gateway-Runtime-Timestamp, in: header, required: true, schema: { type: string } }
         - { name: X-Gateway-Runtime-Nonce, in: header, required: true, schema: { type: string } }
         - { name: X-Gateway-Runtime-Signature, in: header, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GatewayRuntimeReport' }
       responses:
-        '200': { description: Signed runtime report accepted }
+        '200':
+          description: Signed runtime report accepted and the latest container resource-health evidence persisted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GatewayNode' }
         '401': { description: Signature or timestamp invalid }
         '409': { description: Replay or governed runtime drift }
   /admin/retention-policies:
     get:
       operationId: listCrossDomainRetentionPolicies
       summary: List governed cross-domain retention policies
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Retention-policy list }
+        '200':
+          description: Retention-policy list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
     post:
       operationId: createCrossDomainRetentionPolicy
       summary: Create a draft cross-domain retention policy
@@ -2795,20 +3474,62 @@ paths:
       summary: List immutable retention-policy events
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 1000, default: 200 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque cursor returned by the previous page. }
       responses:
-        '200': { description: Retention-policy event history }
+        '200':
+          description: Retention-policy event history
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
+        '400': { description: Invalid page limit or cursor }
   /operations/retention-jobs:
     get:
       operationId: listRetentionJobs
       summary: List durable cross-domain retention jobs
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Retention-job list }
+        '200':
+          description: Retention-job list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
   /operations/alert-policies:
     get:
       operationId: listOperationalAlertPolicies
       summary: List governed operational alert policies
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Alert-policy list }
+        '200':
+          description: Alert-policy list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
     post:
       operationId: createOperationalAlertPolicy
       summary: Create a draft operational alert policy
@@ -2844,14 +3565,42 @@ paths:
       summary: List immutable alert-policy events
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque cursor returned by the previous page. }
       responses:
-        '200': { description: Alert-policy event history }
+        '200':
+          description: Alert-policy event history
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
+        '400': { description: Invalid page limit or cursor }
   /operations/alerts:
     get:
       operationId: listGovernedOperationalAlerts
       summary: List active, acknowledged, or resolved operational alerts
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Operational-alert list }
+        '200':
+          description: Operational-alert list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
   /operations/alerts/evaluate:
     post:
       operationId: evaluateGovernedOperationalAlerts
@@ -2872,14 +3621,41 @@ paths:
       summary: List immutable alert lifecycle and escalation events
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Alert event history }
+        '200':
+          description: Alert event history
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
   /operations/notifications:
     get:
       operationId: listOperationalNotifications
       summary: List operational portal and future transport-neutral notifications
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
-        '200': { description: Operational-notification list }
+        '200':
+          description: Operational-notification list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { type: object } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
   /operations/incidents/{id}/timeline:
     get:
       operationId: getOperationalIncidentTimeline
@@ -3118,15 +3894,38 @@ components:
         nextReviewAt: { type: string, format: date-time }
         expectedVersion: { type: integer, format: int64, minimum: 1 }
         reason: { type: string, minLength: 5 }
+    OperationsDashboard:
+      type: object
+      required: [generatedAt, campaigns, recipients, senders, openIncidents, criticalIncidents, unknownOutcomes, queueDepth, staleWorkerNodes, unavailableGatewayNodes, gatewayStaleAfterSeconds, gatewayRuntimeHealthSource, unhealthySenderSessions, campaignsAtRisk, capacityShortfallPools, reconciliationBacklog]
+      properties:
+        generatedAt: { type: string, format: date-time }
+        campaigns: { type: object, additionalProperties: { type: integer, format: int64 } }
+        recipients: { type: object, additionalProperties: { type: integer, format: int64 } }
+        senders: { type: object, additionalProperties: { type: integer, format: int64 } }
+        openIncidents: { type: integer, format: int64, minimum: 0 }
+        criticalIncidents: { type: integer, format: int64, minimum: 0 }
+        unknownOutcomes: { type: integer, format: int64, minimum: 0 }
+        queueDepth: { type: integer, format: int64, minimum: 0 }
+        oldestQueuedAt: { type: string, format: date-time }
+        staleWorkerNodes: { type: integer, format: int64, minimum: 0 }
+        unavailableGatewayNodes: { type: integer, format: int64, minimum: 0 }
+        gatewayStaleAfterSeconds: { type: integer, format: int64, minimum: 30, maximum: 3600 }
+        gatewayRuntimeHealthSource: { type: string, enum: [DEPLOYMENT_BOOTSTRAP, GOVERNED_CONFIGURATION] }
+        gatewayRuntimeHealthConfigurationId: { type: string, format: uuid }
+        gatewayRuntimeHealthConfigurationVersion: { type: integer, format: int64, minimum: 1 }
+        unhealthySenderSessions: { type: integer, format: int64, minimum: 0 }
+        campaignsAtRisk: { type: integer, format: int64, minimum: 0 }
+        capacityShortfallPools: { type: integer, format: int64, minimum: 0 }
+        reconciliationBacklog: { type: integer, format: int64, minimum: 0 }
     PlatformConfigurationCreateRequest:
       type: object
       additionalProperties: false
       required: [key, scopeType, value, reason]
       properties:
-        key: { type: string, minLength: 3, maxLength: 120, description: Configuration key. SENDER.TRANSPORT_RECOVERY uses SenderTransportRecoveryConfiguration. }
+        key: { type: string, minLength: 3, maxLength: 120, description: Configuration key. SENDER.TRANSPORT_RECOVERY uses SenderTransportRecoveryConfiguration; GATEWAY.RUNTIME_HEALTH uses GatewayRuntimeHealthConfiguration. }
         scopeType: { type: string, enum: [PLATFORM, ENVIRONMENT, ORGANISATION, CAMPAIGN, PROVIDER, GATEWAY_POOL, SENDER_POOL, SENDER_SESSION] }
         scopeId: { type: string, maxLength: 200, description: Required for non-PLATFORM scopes; SENDER_SESSION uses the governed sender-session ID. }
-        value: { type: object, additionalProperties: true, description: Configuration-key-specific JSON. For SENDER.TRANSPORT_RECOVERY use SenderTransportRecoveryConfiguration. }
+        value: { type: object, additionalProperties: true, description: Configuration-key-specific JSON. Use SenderTransportRecoveryConfiguration for SENDER.TRANSPORT_RECOVERY and GatewayRuntimeHealthConfiguration for GATEWAY.RUNTIME_HEALTH. }
         effectiveFrom: { type: string, format: date-time }
         effectiveTo: { type: string, format: date-time }
         reason: { type: string, minLength: 1 }
@@ -3144,6 +3943,84 @@ components:
         watchdogProbeTimeoutMs: { type: integer, format: int64, minimum: 100, maximum: 60000 }
         watchdogFailureThreshold: { type: integer, minimum: 1, maximum: 10 }
         engineTeardownTimeoutMs: { type: integer, format: int64, minimum: 1000, maximum: 120000 }
+    GatewayRuntimeHealthConfiguration:
+      type: object
+      additionalProperties: false
+      description: Governed value for GATEWAY.RUNTIME_HEALTH. Controls when a missing gateway heartbeat is considered stale; deployment bootstrap is used only when no approved effective configuration exists.
+      required: [staleAfterSeconds]
+      properties:
+        staleAfterSeconds: { type: integer, minimum: 30, maximum: 3600 }
+    GatewayRuntimeResourceHealth:
+      type: object
+      additionalProperties: false
+      description: Resource health measured from inside the gateway container only. This is not host or VPS inventory evidence.
+      required: [scope, filesystemPath, processId, processUptimeSeconds, networkInterfaceCount]
+      properties:
+        scope: { type: string, enum: [CONTAINER] }
+        filesystemPath: { type: string }
+        diskTotalBytes: { type: integer, format: int64, minimum: 0 }
+        diskFreeBytes: { type: integer, format: int64, minimum: 0 }
+        diskAvailableBytes: { type: integer, format: int64, minimum: 0 }
+        inodesTotal: { type: integer, format: int64, minimum: 0 }
+        inodesFree: { type: integer, format: int64, minimum: 0 }
+        processId: { type: integer, minimum: 1 }
+        processUptimeSeconds: { type: integer, format: int64, minimum: 0 }
+        openFileDescriptorCount: { type: integer, format: int64, minimum: 0 }
+        networkRxBytes: { type: integer, format: int64, minimum: 0 }
+        networkTxBytes: { type: integer, format: int64, minimum: 0 }
+        networkInterfaceCount: { type: integer, minimum: 0 }
+    GatewayRuntimeReport:
+      type: object
+      additionalProperties: false
+      required: [nodeId, expectedNodeVersion, gatewayPoolId, provider, engine, adapterVersion, gatewayVersion, workerVersion, configurationVersion, bootId, internalUrl, capabilities, runtimeState, capacity, sessionCount, queueDepth, cpuPercent, memoryBytes, resourceHealth, observedAt]
+      properties:
+        nodeId: { type: string, format: uuid }
+        expectedNodeVersion: { type: integer, format: int64, minimum: 1 }
+        gatewayPoolId: { type: string, format: uuid }
+        provider: { type: string, enum: [OPENWA] }
+        engine: { type: string, enum: [WHATSAPP_WEB_JS, BAILEYS] }
+        adapterVersion: { type: string }
+        gatewayVersion: { type: string }
+        workerVersion: { type: string }
+        configurationVersion: { type: string }
+        bootId: { type: string }
+        internalUrl: { type: string, format: uri }
+        capabilities: { type: array, uniqueItems: true, items: { type: string } }
+        runtimeState: { type: string, enum: [READY, DEGRADED, UNAVAILABLE, DRAINING] }
+        capacity: { type: integer, minimum: 0, maximum: 1000 }
+        sessionCount: { type: integer, minimum: 0, maximum: 10000 }
+        queueDepth: { type: integer, format: int64, minimum: 0 }
+        cpuPercent: { type: number, minimum: 0, maximum: 100 }
+        memoryBytes: { type: integer, format: int64, minimum: 0 }
+        resourceHealth: { $ref: '#/components/schemas/GatewayRuntimeResourceHealth' }
+        observedAt: { type: string, format: date-time }
+    GatewayNode:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        internalUrl: { type: string, format: uri }
+        gatewayPoolId: { type: string, format: uuid }
+        provider: { type: string }
+        engine: { type: string }
+        adapterVersion: { type: string }
+        bootId: { type: string }
+        status: { type: string }
+        gatewayVersion: { type: string }
+        workerVersion: { type: string }
+        configurationVersion: { type: string }
+        runtimeCapabilities: { type: array, items: { type: string } }
+        runtimeState: { type: string }
+        capacity: { type: integer }
+        sessionCount: { type: integer }
+        queueDepth: { type: integer, format: int64 }
+        cpuPercent: { type: number }
+        memoryBytes: { type: integer, format: int64 }
+        resourceHealth: { $ref: '#/components/schemas/GatewayRuntimeResourceHealth' }
+        draining: { type: boolean }
+        registeredAt: { type: string, format: date-time }
+        lastHeartbeatAt: { type: string, format: date-time }
+        version: { type: integer, format: int64 }
     SenderSessionRegistrationRequest:
       type: object
       additionalProperties: false

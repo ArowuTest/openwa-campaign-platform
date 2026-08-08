@@ -10,7 +10,30 @@ import (
 	"time"
 )
 
-type PostgreSQLRepository struct{ DB *sql.DB }
+type PostgreSQLRepository struct {
+	DB                        *sql.DB
+	RuntimeHealth             GatewayRuntimeHealthPolicyResolver
+	FallbackGatewayStaleAfter time.Duration
+}
+
+func (r *PostgreSQLRepository) gatewayStaleBefore(ctx context.Context, now time.Time) (time.Time, GatewayRuntimeHealthPolicy, error) {
+	fallback := r.FallbackGatewayStaleAfter
+	if fallback <= 0 {
+		fallback = 2 * time.Minute
+	}
+	policy := GatewayRuntimeHealthPolicy{StaleAfter: fallback, Source: "DEPLOYMENT_BOOTSTRAP"}
+	if r.RuntimeHealth != nil {
+		resolved, err := r.RuntimeHealth.ResolveGatewayRuntimeHealth(ctx, now.UTC())
+		if err != nil {
+			return time.Time{}, GatewayRuntimeHealthPolicy{}, err
+		}
+		policy = resolved
+	}
+	if policy.StaleAfter <= 0 {
+		return time.Time{}, GatewayRuntimeHealthPolicy{}, errors.New("gateway stale threshold must be positive")
+	}
+	return now.UTC().Add(-policy.StaleAfter), policy, nil
+}
 
 const capacityShortfallQuery = `WITH reserved AS (
   SELECT sender_pool_id,sum(reserved_daily_units) AS reserved
@@ -28,6 +51,14 @@ func (r *PostgreSQLRepository) Dashboard(ctx context.Context, now time.Time) (Da
 		return Dashboard{}, errors.New("database is required")
 	}
 	d := Dashboard{GeneratedAt: now.UTC(), Campaigns: map[string]int64{}, Recipients: map[string]int64{}, Senders: map[string]int64{}}
+	staleBefore, runtimeHealthPolicy, err := r.gatewayStaleBefore(ctx, now)
+	if err != nil {
+		return d, err
+	}
+	d.GatewayStaleAfterSeconds = int64(runtimeHealthPolicy.StaleAfter / time.Second)
+	d.GatewayRuntimeHealthSource = runtimeHealthPolicy.Source
+	d.GatewayRuntimeHealthConfigurationID = runtimeHealthPolicy.ConfigurationID
+	d.GatewayRuntimeHealthConfigurationVersion = runtimeHealthPolicy.Version
 	if err := loadStatusCounts(ctx, r.DB, `SELECT status,count(*) FROM campaigns GROUP BY status`, d.Campaigns); err != nil {
 		return d, err
 	}
@@ -79,7 +110,7 @@ WHERE status IN('SUBMITTING','FAILED_RETRYABLE')`).Scan(&submitting, &retryable)
 	if err := r.DB.QueryRowContext(ctx, `SELECT count(*) FILTER(WHERE status NOT IN ('RESOLVED','CLOSED')),count(*) FILTER(WHERE status NOT IN ('RESOLVED','CLOSED') AND severity='CRITICAL') FROM operations_incidents`).Scan(&d.OpenIncidents, &d.CriticalIncidents); err != nil {
 		return d, err
 	}
-	staleBefore := now.UTC().Add(-2 * time.Minute)
+
 	if err := r.DB.QueryRowContext(ctx, `SELECT count(*) FROM sender_nodes WHERE last_heartbeat_at IS NULL OR last_heartbeat_at < $1`, staleBefore).Scan(&d.StaleWorkerNodes); err != nil {
 		return d, err
 	}
@@ -926,4 +957,53 @@ func (r *PostgreSQLRepository) FailExpiration(ctx context.Context, id, detail st
 		return ErrConflict
 	}
 	return nil
+}
+
+func (r *PostgreSQLRepository) ListIncidentPage(ctx context.Context, status IncidentStatus, limit int, afterSeverity int, before *time.Time, beforeID string) ([]Incident, error) {
+	if limit <= 0 || limit > 501 {
+		limit = 100
+	}
+	const rank = `CASE severity WHEN 'CRITICAL' THEN 1 WHEN 'WARNING' THEN 2 ELSE 3 END`
+	query := incidentSelect + ` WHERE ($1='' OR status=$1)
+AND ($3::timestamptz IS NULL OR ` + rank + `>$4 OR (` + rank + `=$4 AND (created_at<$3 OR (created_at=$3 AND id<NULLIF($5,'')::uuid))))
+ORDER BY ` + rank + `,created_at DESC,id DESC LIMIT $2`
+	rows, err := r.DB.QueryContext(ctx, query, status, limit, before, afterSeverity, beforeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]Incident, 0, limit)
+	for rows.Next() {
+		value, scanErr := scanIncident(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		items = append(items, value)
+	}
+	return items, rows.Err()
+}
+
+func (r *PostgreSQLRepository) ListExceptionPage(ctx context.Context, campaignID string, limit int, before *time.Time, beforeID string) ([]DeliveryException, error) {
+	if limit <= 0 || limit > 501 {
+		limit = 100
+	}
+	rows, err := r.DB.QueryContext(ctx, `SELECT id::text,campaign_id::text,status,coalesce(assigned_session_id::text,''),coalesce(provider_message_id,''),attempt_count,coalesce(last_error_code,''),updated_at
+FROM campaign_recipients
+WHERE ($1='' OR campaign_id=NULLIF($1,'')::uuid)
+  AND (status IN('FAILED_RETRYABLE','FAILED_PERMANENT','UNKNOWN') OR reconciliation_required=true)
+  AND ($3::timestamptz IS NULL OR updated_at<$3 OR (updated_at=$3 AND id<NULLIF($4,'')::uuid))
+ORDER BY updated_at DESC,id DESC LIMIT $2`, campaignID, limit, before, beforeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]DeliveryException, 0, limit)
+	for rows.Next() {
+		var value DeliveryException
+		if err := rows.Scan(&value.RecipientID, &value.CampaignID, &value.Status, &value.AssignedSessionID, &value.ProviderMessageID, &value.AttemptCount, &value.ErrorCode, &value.UpdatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, value)
+	}
+	return items, rows.Err()
 }

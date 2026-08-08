@@ -35,7 +35,7 @@ INSERT INTO consent_review_events(
   consent_review_id,event_type,actor_id,reason,review_version,evidence
 ) VALUES(
   $1::uuid,'CREATED',$2::uuid,'consent review created',$3,
-  jsonb_build_object('scope',$4,'campaignId',nullif($5,''),'sourceSystem',nullif($6,''))
+  jsonb_build_object('scope',$4::text,'campaignId',nullif($5::text,''),'sourceSystem',nullif($6::text,''))
 )`, review.ID, review.CreatedBy, review.Version, review.Scope, review.CampaignID, review.SourceSystem)
 	if err != nil {
 		return err
@@ -68,15 +68,15 @@ INSERT INTO consent_reviews(
   external_evidence_references,sample_review_notes,outcome,
   parent_review_id,created_by,submitted_by,next_review_at
 ) VALUES(
-  $1::uuid,$2::uuid,$3,NULLIF($4,''),$5,$6,$7,
+  $1::uuid,$2::uuid,$3,NULLIF($4::text,''),$5,$6,$7,
   $8,$9,$10,
   ARRAY(SELECT value::char(2) FROM jsonb_array_elements_text($11::jsonb) value),
-  NULLIF($12,''),NULLIF($13,''),$14,
+  NULLIF($12::text,''),NULLIF($13::text,''),$14,
   $15,$15,$16,NULLIF($17,''),
-  $18,NULLIF($19,'')::uuid,NULLIF($20,''),NULLIF($21,''),$22,$23,
-  NULLIF($24,''),NULLIF($25,''),$26::jsonb,NULLIF($27,''),NULLIF($28,''),
-  $29::jsonb,NULLIF($30,''),$31,
-  NULLIF($32,'')::uuid,$33::uuid,NULLIF($34,'')::uuid,$35
+  $18,NULLIF($19::text,'')::uuid,NULLIF($20::text,''),NULLIF($21::text,''),$22,$23,
+  NULLIF($24::text,''),NULLIF($25::text,''),$26::jsonb,NULLIF($27::text,''),NULLIF($28::text,''),
+  $29::jsonb,NULLIF($30::text,''),$31,
+  NULLIF($32::text,'')::uuid,$33::uuid,NULLIF($34::text,'')::uuid,$35
 )`,
 		review.ID, review.OrganisationID, review.Name, review.PurposeDescription, review.Channel,
 		review.ConsentSource, review.WordingVersion, review.PrivacyNoticeReviewed,
@@ -257,6 +257,29 @@ func (r *ConsentRepository) List(ctx context.Context, organisationID string) ([]
 		items = append(items, review)
 	}
 	return items, rows.Err()
+}
+
+func (r *ConsentRepository) ListReviewPage(ctx context.Context, organisationID string, limit int, before *time.Time, beforeID string) ([]consent.Review, error) {
+	if r == nil || r.DB == nil {
+		return nil, errors.New("database is required")
+	}
+	if limit <= 0 || limit > 501 {
+		limit = 100
+	}
+	rows, err := r.DB.QueryContext(ctx, consentSelect+` WHERE ($1::text='' OR cr.organisation_id=NULLIF($1::text,'')::uuid) AND ($3::timestamptz IS NULL OR cr.created_at<$3 OR (cr.created_at=$3 AND cr.id<NULLIF($4::text,'')::uuid)) ORDER BY cr.created_at DESC,cr.id DESC LIMIT $2`, organisationID, limit, before, beforeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]consent.Review, 0, limit)
+	for rows.Next() {
+		review, scanErr := scanConsent(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out = append(out, review)
+	}
+	return out, rows.Err()
 }
 
 func (r *ConsentRepository) Get(ctx context.Context, id string) (consent.Review, error) {

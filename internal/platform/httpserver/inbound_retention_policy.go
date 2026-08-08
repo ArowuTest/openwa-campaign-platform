@@ -3,6 +3,7 @@ package httpserver
 import (
 	"errors"
 	"net/http"
+	"strings"
 	"time"
 
 	"campaign-platform/internal/identity"
@@ -26,12 +27,21 @@ func (s *Server) listInboundRetentionPolicies(w http.ResponseWriter, r *http.Req
 		httpx.WriteError(w, r, http.StatusServiceUnavailable, "RETENTION_POLICY_UNAVAILABLE", "Inbound retention policy administration is unavailable.", nil)
 		return
 	}
-	items, err := s.deps.InboundRetentionPolicies.Store.List(r.Context())
+	req, err := httpx.ParsePage(r, 100, 500)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE", "The inbound-retention-policy page request is invalid.", nil)
+		return
+	}
+	page, err := s.deps.InboundRetentionPolicies.ListPage(r.Context(), req.Limit, req.Cursor)
+	if errors.Is(err, inbound.ErrInvalidRetentionPolicyCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The inbound-retention-policy page cursor is invalid.", nil)
+		return
+	}
 	if err != nil {
 		httpx.WriteError(w, r, http.StatusInternalServerError, "RETENTION_POLICY_LIST_FAILED", "Retention policies could not be listed.", nil)
 		return
 	}
-	httpx.WriteListAuto(w, http.StatusOK, items)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 func (s *Server) createInboundRetentionPolicy(w http.ResponseWriter, r *http.Request) {
 	principal, _ := identity.PrincipalFromContext(r.Context())
@@ -94,12 +104,21 @@ func (s *Server) listInboundReencryptionRuns(w http.ResponseWriter, r *http.Requ
 		httpx.WriteError(w, r, http.StatusServiceUnavailable, "INBOUND_REENCRYPT_UNAVAILABLE", "Inbound content re-encryption is unavailable.", nil)
 		return
 	}
-	items, err := s.deps.InboundRotation.List(r.Context(), 50)
+	limit, err := optionalPositiveIntQuery(r, "limit", 200)
 	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_LIMIT", "The page limit must be between 1 and 200.", nil)
+		return
+	}
+	page, err := s.deps.InboundRotation.ListPage(r.Context(), limit, strings.TrimSpace(r.URL.Query().Get("cursor")))
+	if err != nil {
+		if errors.Is(err, inbound.ErrInvalidRotationCursor) {
+			httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The re-encryption-run page cursor is invalid.", nil)
+			return
+		}
 		httpx.WriteError(w, r, http.StatusInternalServerError, "INBOUND_REENCRYPT_LIST_FAILED", "Re-encryption runs could not be listed.", nil)
 		return
 	}
-	httpx.WriteListAuto(w, http.StatusOK, items)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 func (s *Server) getInboundReencryptionRun(w http.ResponseWriter, r *http.Request) {
 	if s.deps.InboundRotation == nil {

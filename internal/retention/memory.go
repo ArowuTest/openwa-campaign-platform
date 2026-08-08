@@ -45,6 +45,31 @@ func (m *MemoryStore) ListPolicies(_ context.Context, status Status, limit int) 
 	}
 	return out, nil
 }
+func (m *MemoryStore) ListPolicyPage(_ context.Context, status Status, limit int, before *time.Time, beforeID string) ([]Policy, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]Policy, 0, len(m.policies))
+	for _, v := range m.policies {
+		if status != "" && v.Status != status {
+			continue
+		}
+		if before != nil && !(v.CreatedAt.Before(*before) || (v.CreatedAt.Equal(*before) && v.ID < beforeID)) {
+			continue
+		}
+		out = append(out, v)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	if limit <= 0 || limit > len(out) {
+		limit = len(out)
+	}
+	return out[:limit], nil
+}
+
 func (m *MemoryStore) GetPolicy(_ context.Context, key string) (Policy, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -246,4 +271,58 @@ func (m *MemoryStore) AddJob(v Job) error {
 	}
 	m.jobs[v.ID] = v
 	return nil
+}
+
+func (m *MemoryStore) ListJobPage(_ context.Context, status JobStatus, limit int, before *time.Time, beforeID string) ([]Job, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	items := make([]Job, 0, len(m.jobs))
+	for _, job := range m.jobs {
+		if status != "" && job.Status != status {
+			continue
+		}
+		if before != nil && !(job.CreatedAt.Before(*before) || (job.CreatedAt.Equal(*before) && job.ID < beforeID)) {
+			continue
+		}
+		items = append(items, job)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].CreatedAt.Equal(items[j].CreatedAt) {
+			return items[i].ID > items[j].ID
+		}
+		return items[i].CreatedAt.After(items[j].CreatedAt)
+	})
+	if limit <= 0 || limit > 501 {
+		limit = 100
+	}
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	return items, nil
+}
+
+func (m *MemoryStore) ListEventPage(_ context.Context, key string, limit int, before *time.Time, beforeID string) ([]Event, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.policies[key]; !ok {
+		return nil, ErrNotFound
+	}
+	items := append([]Event(nil), m.events[key]...)
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].OccurredAt.Equal(items[j].OccurredAt) {
+			return items[i].ID > items[j].ID
+		}
+		return items[i].OccurredAt.After(items[j].OccurredAt)
+	})
+	out := make([]Event, 0, limit)
+	for _, item := range items {
+		if before != nil && (item.OccurredAt.After(*before) || item.OccurredAt.Equal(*before) && item.ID >= beforeID) {
+			continue
+		}
+		out = append(out, item)
+		if len(out) == limit {
+			break
+		}
+	}
+	return out, nil
 }

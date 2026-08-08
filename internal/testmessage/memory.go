@@ -28,6 +28,28 @@ func (r *MemoryRepository) CreateRecipient(_ context.Context, v Recipient) (Reci
 	r.recipients[v.ID] = v
 	return v, nil
 }
+func (r *MemoryRepository) ListRecipientPage(_ context.Context, limit int, before *time.Time, beforeID string) ([]Recipient, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]Recipient, 0, len(r.recipients))
+	for _, value := range r.recipients {
+		if before != nil && !(value.CreatedAt.Before(*before) || (value.CreatedAt.Equal(*before) && value.ID < beforeID)) {
+			continue
+		}
+		out = append(out, value)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	if limit <= 0 || limit > len(out) {
+		limit = len(out)
+	}
+	return out[:limit], nil
+}
+
 func (r *MemoryRepository) GetRecipient(_ context.Context, id string) (Recipient, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -95,6 +117,30 @@ func (r *MemoryRepository) ListSends(_ context.Context, campaignID string) ([]Se
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
 	return out, nil
+}
+func (r *MemoryRepository) ListSendPage(_ context.Context, campaignID string, limit int, before *time.Time, beforeID string) ([]Send, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	items := []Send{}
+	for _, value := range r.sends {
+		if value.CampaignID != campaignID {
+			continue
+		}
+		if before != nil && (value.CreatedAt.After(*before) || (value.CreatedAt.Equal(*before) && value.ID >= beforeID)) {
+			continue
+		}
+		items = append(items, value)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].CreatedAt.Equal(items[j].CreatedAt) {
+			return items[i].ID > items[j].ID
+		}
+		return items[i].CreatedAt.After(items[j].CreatedAt)
+	})
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	return items, nil
 }
 func (r *MemoryRepository) ClaimSends(_ context.Context, owner string, now time.Time, lease time.Duration, limit int) ([]Send, error) {
 	r.mu.Lock()

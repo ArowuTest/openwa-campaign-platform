@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -261,6 +262,31 @@ func (m *MemoryReportingPrivacyStore) List(_ context.Context, org string, limit 
 	}
 	return out, nil
 }
+func (m *MemoryReportingPrivacyStore) ListReportingPrivacyPage(_ context.Context, org string, limit int, before *time.Time, beforeID string) ([]ReportingPrivacyPolicy, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]ReportingPrivacyPolicy, 0, len(m.policies))
+	for _, p := range m.policies {
+		if org != "" && p.OrganisationID != org {
+			continue
+		}
+		if before != nil && !(p.CreatedAt.Before(*before) || (p.CreatedAt.Equal(*before) && p.ID < beforeID)) {
+			continue
+		}
+		out = append(out, p)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	if limit <= 0 || limit > len(out) {
+		limit = len(out)
+	}
+	return out[:limit], nil
+}
+
 func (m *MemoryReportingPrivacyStore) CompareAndSwap(_ context.Context, p ReportingPrivacyPolicy, expected int64, e ReportingPrivacyEvent) (ReportingPrivacyPolicy, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -330,9 +356,36 @@ func (m *MemoryReportingPrivacyStore) Events(_ context.Context, id string, limit
 	return append([]ReportingPrivacyEvent(nil), items...), nil
 }
 
+func (m *MemoryReportingPrivacyStore) ListReportingPrivacyEventPage(_ context.Context, id string, limit int, before *time.Time, beforeID string) ([]ReportingPrivacyEvent, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if _, ok := m.policies[id]; !ok {
+		return nil, ErrNotFound
+	}
+	items := append([]ReportingPrivacyEvent(nil), m.events[id]...)
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].OccurredAt.Equal(items[j].OccurredAt) {
+			return items[i].ID > items[j].ID
+		}
+		return items[i].OccurredAt.After(items[j].OccurredAt)
+	})
+	out := make([]ReportingPrivacyEvent, 0, limit)
+	for _, item := range items {
+		if before != nil && (item.OccurredAt.After(*before) || item.OccurredAt.Equal(*before) && item.ID >= beforeID) {
+			continue
+		}
+		out = append(out, item)
+		if len(out) == limit {
+			break
+		}
+	}
+	return out, nil
+}
+
 type PostgreSQLReportingPrivacyStore struct{ DB *sql.DB }
 
-const reportingPrivacySelect = `SELECT id::text,coalesce(organisation_id::text,''),status,minimum_cohort_size,suppression_label,apply_geography,apply_demographics,apply_attributes,effective_from,effective_to,created_by::text,coalesce(submitted_by::text,''),coalesce(approved_by::text,''),reason,version,created_at,updated_at FROM reporting_privacy_policies`
+const reportingPrivacyColumns = `id::text,coalesce(organisation_id::text,''),status,minimum_cohort_size,suppression_label,apply_geography,apply_demographics,apply_attributes,effective_from,effective_to,created_by::text,coalesce(submitted_by::text,''),coalesce(approved_by::text,''),reason,version,created_at,updated_at`
+const reportingPrivacySelect = `SELECT ` + reportingPrivacyColumns + ` FROM reporting_privacy_policies`
 
 func scanReportingPrivacy(s interface{ Scan(...any) error }) (ReportingPrivacyPolicy, error) {
 	var p ReportingPrivacyPolicy
@@ -383,6 +436,29 @@ func (p *PostgreSQLReportingPrivacyStore) List(ctx context.Context, org string, 
 	}
 	return out, rows.Err()
 }
+func (p *PostgreSQLReportingPrivacyStore) ListReportingPrivacyPage(ctx context.Context, org string, limit int, before *time.Time, beforeID string) ([]ReportingPrivacyPolicy, error) {
+	if p == nil || p.DB == nil {
+		return nil, errors.New("database is required")
+	}
+	if limit <= 0 || limit > 501 {
+		limit = 100
+	}
+	rows, err := p.DB.QueryContext(ctx, reportingPrivacySelect+` WHERE ($1='' OR organisation_id=NULLIF($1,'')::uuid) AND ($3::timestamptz IS NULL OR created_at<$3 OR (created_at=$3 AND id<NULLIF($4,'')::uuid)) ORDER BY created_at DESC,id DESC LIMIT $2`, org, limit, before, beforeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]ReportingPrivacyPolicy, 0, limit)
+	for rows.Next() {
+		v, scanErr := scanReportingPrivacy(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
 func (p *PostgreSQLReportingPrivacyStore) CompareAndSwap(ctx context.Context, v ReportingPrivacyPolicy, expected int64, e ReportingPrivacyEvent) (ReportingPrivacyPolicy, error) {
 	tx, err := p.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
@@ -410,7 +486,7 @@ func (p *PostgreSQLReportingPrivacyStore) CompareAndSwap(ctx context.Context, v 
 			return v, err
 		}
 	}
-	updated, err := scanReportingPrivacy(tx.QueryRowContext(ctx, `UPDATE reporting_privacy_policies SET organisation_id=NULLIF($3,'')::uuid,status=$4,minimum_cohort_size=$5,suppression_label=$6,apply_geography=$7,apply_demographics=$8,apply_attributes=$9,effective_from=$10,effective_to=$11,submitted_by=NULLIF($12,'')::uuid,approved_by=NULLIF($13,'')::uuid,reason=$14,version=$15,updated_at=$16 WHERE id=$1::uuid AND version=$2 RETURNING `+strings.TrimPrefix(reportingPrivacySelect, "SELECT "), v.ID, expected, v.OrganisationID, v.Status, v.MinimumCohortSize, v.SuppressionLabel, v.ApplyGeography, v.ApplyDemographics, v.ApplyAttributes, v.EffectiveFrom, v.EffectiveTo, v.SubmittedBy, v.ApprovedBy, v.Reason, v.Version, v.UpdatedAt))
+	updated, err := scanReportingPrivacy(tx.QueryRowContext(ctx, `UPDATE reporting_privacy_policies SET organisation_id=NULLIF($3,'')::uuid,status=$4,minimum_cohort_size=$5,suppression_label=$6,apply_geography=$7,apply_demographics=$8,apply_attributes=$9,effective_from=$10,effective_to=$11,submitted_by=NULLIF($12,'')::uuid,approved_by=NULLIF($13,'')::uuid,reason=$14,version=$15,updated_at=$16 WHERE id=$1::uuid AND version=$2 RETURNING `+reportingPrivacyColumns, v.ID, expected, v.OrganisationID, v.Status, v.MinimumCohortSize, v.SuppressionLabel, v.ApplyGeography, v.ApplyDemographics, v.ApplyAttributes, v.EffectiveFrom, v.EffectiveTo, v.SubmittedBy, v.ApprovedBy, v.Reason, v.Version, v.UpdatedAt))
 	if errors.Is(err, sql.ErrNoRows) {
 		return v, ErrConflict
 	}
@@ -437,7 +513,11 @@ func (p *PostgreSQLReportingPrivacyStore) Events(ctx context.Context, id string,
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	rows, err := p.DB.QueryContext(ctx, `SELECT id::text,policy_id::text,event_type,actor_id::text,coalesce(reason,''),policy_version,occurred_at FROM reporting_privacy_policy_events WHERE policy_id=$1::uuid ORDER BY occurred_at DESC,id DESC LIMIT $2`, id, limit)
+	return p.ListReportingPrivacyEventPage(ctx, id, limit, nil, "")
+}
+
+func (p *PostgreSQLReportingPrivacyStore) ListReportingPrivacyEventPage(ctx context.Context, id string, limit int, before *time.Time, beforeID string) ([]ReportingPrivacyEvent, error) {
+	rows, err := p.DB.QueryContext(ctx, `SELECT id::text,policy_id::text,event_type,actor_id::text,coalesce(reason,''),policy_version,occurred_at FROM reporting_privacy_policy_events WHERE policy_id=$1::uuid AND ($3::timestamptz IS NULL OR occurred_at<$3 OR (occurred_at=$3 AND id<NULLIF($4,'')::uuid)) ORDER BY occurred_at DESC,id DESC LIMIT $2`, id, limit, before, beforeID)
 	if err != nil {
 		return nil, err
 	}

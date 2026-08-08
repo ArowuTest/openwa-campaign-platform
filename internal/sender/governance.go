@@ -28,31 +28,32 @@ type Pool struct {
 }
 
 type Node struct {
-	ID                   string       `json:"id"`
-	Name                 string       `json:"name"`
-	PublicIP             string       `json:"publicIp,omitempty"`
-	InternalURL          string       `json:"internalUrl,omitempty"`
-	GatewayPoolID        string       `json:"gatewayPoolId,omitempty"`
-	Provider             string       `json:"provider,omitempty"`
-	Engine               string       `json:"engine,omitempty"`
-	AdapterVersion       string       `json:"adapterVersion,omitempty"`
-	BootID               string       `json:"bootId,omitempty"`
-	Status               string       `json:"status"`
-	BuildVersion         string       `json:"buildVersion,omitempty"`
-	GatewayVersion       string       `json:"gatewayVersion,omitempty"`
-	WorkerVersion        string       `json:"workerVersion,omitempty"`
-	ConfigurationVersion string       `json:"configurationVersion,omitempty"`
-	RuntimeCapabilities  []Capability `json:"runtimeCapabilities,omitempty"`
-	RuntimeState         RuntimeState `json:"runtimeState,omitempty"`
-	Capacity             int          `json:"capacity"`
-	SessionCount         int          `json:"sessionCount"`
-	QueueDepth           int64        `json:"queueDepth"`
-	CPUPercent           float64      `json:"cpuPercent"`
-	MemoryBytes          int64        `json:"memoryBytes"`
-	Draining             bool         `json:"draining"`
-	RegisteredAt         *time.Time   `json:"registeredAt,omitempty"`
-	LastHeartbeatAt      *time.Time   `json:"lastHeartbeatAt,omitempty"`
-	Version              int64        `json:"version"`
+	ID                   string                `json:"id"`
+	Name                 string                `json:"name"`
+	PublicIP             string                `json:"publicIp,omitempty"`
+	InternalURL          string                `json:"internalUrl,omitempty"`
+	GatewayPoolID        string                `json:"gatewayPoolId,omitempty"`
+	Provider             string                `json:"provider,omitempty"`
+	Engine               string                `json:"engine,omitempty"`
+	AdapterVersion       string                `json:"adapterVersion,omitempty"`
+	BootID               string                `json:"bootId,omitempty"`
+	Status               string                `json:"status"`
+	BuildVersion         string                `json:"buildVersion,omitempty"`
+	GatewayVersion       string                `json:"gatewayVersion,omitempty"`
+	WorkerVersion        string                `json:"workerVersion,omitempty"`
+	ConfigurationVersion string                `json:"configurationVersion,omitempty"`
+	RuntimeCapabilities  []Capability          `json:"runtimeCapabilities,omitempty"`
+	RuntimeState         RuntimeState          `json:"runtimeState,omitempty"`
+	Capacity             int                   `json:"capacity"`
+	SessionCount         int                   `json:"sessionCount"`
+	QueueDepth           int64                 `json:"queueDepth"`
+	CPUPercent           float64               `json:"cpuPercent"`
+	MemoryBytes          int64                 `json:"memoryBytes"`
+	ResourceHealth       RuntimeResourceHealth `json:"resourceHealth"`
+	Draining             bool                  `json:"draining"`
+	RegisteredAt         *time.Time            `json:"registeredAt,omitempty"`
+	LastHeartbeatAt      *time.Time            `json:"lastHeartbeatAt,omitempty"`
+	Version              int64                 `json:"version"`
 }
 
 type GovernedSession struct {

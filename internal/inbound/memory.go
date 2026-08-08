@@ -2,6 +2,7 @@ package inbound
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"time"
 )
@@ -141,3 +142,28 @@ func (r *MemoryRepository) SetLegalHold(_ context.Context, id string, expected i
 }
 
 func (r *MemoryRepository) ReencryptContent(context.Context, int) (int64, error) { return 0, nil }
+
+func (r *MemoryRepository) ListReplyPage(_ context.Context, limit int, before *time.Time, beforeID string) ([]Reply, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	items := make([]Reply, 0, len(r.byID))
+	for _, reply := range r.byID {
+		if before != nil && !(reply.CreatedAt.Before(*before) || (reply.CreatedAt.Equal(*before) && reply.ID < beforeID)) {
+			continue
+		}
+		items = append(items, reply)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].CreatedAt.Equal(items[j].CreatedAt) {
+			return items[i].ID > items[j].ID
+		}
+		return items[i].CreatedAt.After(items[j].CreatedAt)
+	})
+	if limit <= 0 || limit > 501 {
+		limit = 100
+	}
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	return items, nil
+}

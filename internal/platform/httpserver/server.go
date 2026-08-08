@@ -805,12 +805,16 @@ func (s *Server) listSegments(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_LIMIT", "The page limit must be between 1 and 500.", nil)
 		return
 	}
-	items, err := s.deps.SegmentDefinitions.List(r.Context(), r.URL.Query().Get("organisationId"), limit)
+	page, err := s.deps.SegmentDefinitions.ListPage(r.Context(), r.URL.Query().Get("organisationId"), limit, strings.TrimSpace(r.URL.Query().Get("cursor")))
+	if errors.Is(err, segment.ErrInvalidDefinitionCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The segment page cursor is invalid.", nil)
+		return
+	}
 	if err != nil {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, http.StatusOK, items)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 func (s *Server) createSegment(w http.ResponseWriter, r *http.Request) {
 	if s.deps.SegmentDefinitions == nil {
@@ -896,16 +900,20 @@ func (s *Server) listSegmentVersions(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_LIMIT", "The page limit must be between 1 and 500.", nil)
 		return
 	}
-	items, err := s.deps.SegmentDefinitions.Versions(r.Context(), r.PathValue("id"), limit)
+	page, err := s.deps.SegmentDefinitions.VersionsPage(r.Context(), r.PathValue("id"), limit, strings.TrimSpace(r.URL.Query().Get("cursor")))
 	if errors.Is(err, segment.ErrDefinitionNotFound) {
 		httpx.WriteError(w, r, http.StatusNotFound, "SEGMENT_NOT_FOUND", "The segment was not found.", nil)
+		return
+	}
+	if errors.Is(err, segment.ErrInvalidVersionCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The segment-version page cursor is invalid.", nil)
 		return
 	}
 	if err != nil {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, http.StatusOK, items)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 
 func (s *Server) cloneSegment(w http.ResponseWriter, r *http.Request) {
@@ -993,12 +1001,21 @@ func (s *Server) listAreas(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listOrganisations(w http.ResponseWriter, r *http.Request) {
-	items, err := s.deps.Organisations.List(r.Context())
+	limit, err := optionalPositiveIntQuery(r, "limit", 500)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_LIMIT", "The page limit must be between 1 and 500.", nil)
+		return
+	}
+	page, err := s.deps.Organisations.ListPage(r.Context(), limit, strings.TrimSpace(r.URL.Query().Get("cursor")))
+	if errors.Is(err, organisation.ErrInvalidOrganisationCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The organisation page cursor is invalid.", nil)
+		return
+	}
 	if err != nil {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, http.StatusOK, items)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 
 func (s *Server) createOrganisation(w http.ResponseWriter, r *http.Request) {
@@ -1077,16 +1094,25 @@ func (s *Server) setOrganisationStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listOrganisationEvents(w http.ResponseWriter, r *http.Request) {
-	items, err := s.deps.Organisations.ListEvents(r.Context(), r.PathValue("id"))
+	limit, err := optionalPositiveIntQuery(r, "limit", 500)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_LIMIT", "The page limit must be between 1 and 500.", nil)
+		return
+	}
+	page, err := s.deps.Organisations.ListEventsPage(r.Context(), r.PathValue("id"), limit, strings.TrimSpace(r.URL.Query().Get("cursor")))
 	if errors.Is(err, organisation.ErrNotFound) {
 		httpx.WriteError(w, r, http.StatusNotFound, "ORGANISATION_NOT_FOUND", "The organisation was not found.", nil)
+		return
+	}
+	if errors.Is(err, organisation.ErrInvalidEventCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The organisation-event page cursor is invalid.", nil)
 		return
 	}
 	if err != nil {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, http.StatusOK, items)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 
 func (s *Server) listOrganisationPolicies(w http.ResponseWriter, r *http.Request) {
@@ -1094,12 +1120,21 @@ func (s *Server) listOrganisationPolicies(w http.ResponseWriter, r *http.Request
 		httpx.WriteError(w, r, http.StatusServiceUnavailable, "ORGANISATION_POLICY_UNAVAILABLE", "Organisation policy administration is not configured.", nil)
 		return
 	}
-	items, err := s.deps.OrganisationPolicies.List(r.Context(), r.PathValue("id"))
+	req, err := httpx.ParsePage(r, 100, 500)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE", "The organisation-policy page request is invalid.", nil)
+		return
+	}
+	page, err := s.deps.OrganisationPolicies.ListPage(r.Context(), r.PathValue("id"), req.Limit, req.Cursor)
+	if errors.Is(err, organisation.ErrInvalidPolicyListCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The organisation-policy page cursor is invalid.", nil)
+		return
+	}
 	if err != nil {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, http.StatusOK, items)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 func (s *Server) createOrganisationPolicy(w http.ResponseWriter, r *http.Request) {
 	if s.deps.OrganisationPolicies == nil {
@@ -1174,12 +1209,21 @@ func (s *Server) listCommercialRecords(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, http.StatusServiceUnavailable, "COMMERCIAL_UNAVAILABLE", "Commercial governance is not configured.", nil)
 		return
 	}
-	items, err := s.deps.Commercial.List(r.Context(), strings.TrimSpace(r.URL.Query().Get("organisationId")))
+	req, err := httpx.ParsePage(r, 100, 500)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE", "The commercial page request is invalid.", nil)
+		return
+	}
+	page, err := s.deps.Commercial.ListPage(r.Context(), strings.TrimSpace(r.URL.Query().Get("organisationId")), req.Limit, req.Cursor)
+	if errors.Is(err, commercial.ErrInvalidListCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The commercial page cursor is invalid.", nil)
+		return
+	}
 	if err != nil {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, http.StatusOK, items)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 func (s *Server) createCommercialRecord(w http.ResponseWriter, r *http.Request) {
 	if s.deps.Commercial == nil || s.deps.Campaigns == nil {
@@ -1280,12 +1324,21 @@ func (s *Server) revokeCommercialRecord(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) listConsentReviews(w http.ResponseWriter, r *http.Request) {
-	items, err := s.deps.ConsentReviews.List(r.Context(), strings.TrimSpace(r.URL.Query().Get("organisationId")))
+	req, err := httpx.ParsePage(r, 100, 500)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE", "The consent-review page request is invalid.", nil)
+		return
+	}
+	page, err := s.deps.ConsentReviews.ListPage(r.Context(), strings.TrimSpace(r.URL.Query().Get("organisationId")), req.Limit, req.Cursor)
+	if errors.Is(err, consent.ErrInvalidReviewListCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The consent-review page cursor is invalid.", nil)
+		return
+	}
 	if err != nil {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, http.StatusOK, items)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 
 func (s *Server) createConsentReview(w http.ResponseWriter, r *http.Request) {
@@ -1614,16 +1667,25 @@ func (s *Server) amendCampaignMaterial(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) listCampaignMaterialChanges(w http.ResponseWriter, r *http.Request) {
-	items, err := s.deps.Campaigns.ListMaterialChanges(r.Context(), r.PathValue("id"))
+	limit, err := optionalPositiveIntQuery(r, "limit", 500)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_LIMIT", "The page limit must be between 1 and 500.", nil)
+		return
+	}
+	page, err := s.deps.Campaigns.ListMaterialChangesPage(r.Context(), r.PathValue("id"), limit, strings.TrimSpace(r.URL.Query().Get("cursor")))
 	if errors.Is(err, campaign.ErrNotFound) {
 		httpx.WriteError(w, r, http.StatusNotFound, "CAMPAIGN_NOT_FOUND", "The campaign was not found.", nil)
+		return
+	}
+	if errors.Is(err, campaign.ErrInvalidMaterialChangeCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The campaign material-change page cursor is invalid.", nil)
 		return
 	}
 	if err != nil {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, http.StatusOK, items)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 
 type audienceImportMetadata struct {
@@ -1820,12 +1882,16 @@ func (s *Server) listAudienceImportConflicts(w http.ResponseWriter, r *http.Requ
 		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_LIMIT", "The page limit must be between 1 and 500.", nil)
 		return
 	}
-	items, err := s.deps.AudienceConflicts.List(r.Context(), r.PathValue("id"), importer.ConflictStatus(strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("status")))), limit)
+	page, err := s.deps.AudienceConflicts.ListPage(r.Context(), r.PathValue("id"), importer.ConflictStatus(strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("status")))), limit, strings.TrimSpace(r.URL.Query().Get("cursor")))
 	if err != nil {
+		if errors.Is(err, importer.ErrInvalidConflictCursor) {
+			httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The audience-conflict page cursor is invalid.", nil)
+			return
+		}
 		httpx.WriteError(w, r, http.StatusBadRequest, "AUDIENCE_CONFLICT_QUERY_INVALID", "The conflict query is invalid.", map[string]any{"detail": err.Error()})
 		return
 	}
-	httpx.WriteListAuto(w, http.StatusOK, items)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 
 type resolveAudienceConflictsBatchRequest struct {
@@ -2164,12 +2230,21 @@ func (s *Server) listMessageVersions(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, http.StatusServiceUnavailable, "MESSAGE_SERVICE_UNAVAILABLE", "Message versioning is unavailable.", nil)
 		return
 	}
-	items, err := s.deps.Messages.ListByCampaign(r.Context(), r.PathValue("id"))
+	limit, err := optionalPositiveIntQuery(r, "limit", 500)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_LIMIT", "The page limit must be between 1 and 500.", nil)
+		return
+	}
+	page, err := s.deps.Messages.ListByCampaignPage(r.Context(), r.PathValue("id"), limit, strings.TrimSpace(r.URL.Query().Get("cursor")))
+	if errors.Is(err, message.ErrInvalidMessageVersionCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The message-version page cursor is invalid.", nil)
+		return
+	}
 	if err != nil {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, http.StatusOK, items)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 
 func (s *Server) createMessageVersion(w http.ResponseWriter, r *http.Request) {
@@ -2231,12 +2306,21 @@ func (s *Server) listTestRecipients(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, http.StatusServiceUnavailable, "TEST_MESSAGE_UNAVAILABLE", "Test-message operations are not configured.", nil)
 		return
 	}
-	items, err := s.deps.TestMessages.ListRecipients(r.Context())
+	request, err := httpx.ParsePage(r, 100, 500)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE", "The test-recipient page request is invalid.", nil)
+		return
+	}
+	page, err := s.deps.TestMessages.ListRecipientsPage(r.Context(), request.Limit, request.Cursor)
+	if errors.Is(err, testmessage.ErrInvalidRecipientCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The test-recipient page cursor is invalid.", nil)
+		return
+	}
 	if err != nil {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, http.StatusOK, items)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 func (s *Server) createTestRecipient(w http.ResponseWriter, r *http.Request) {
 	if s.deps.TestMessages == nil {
@@ -2358,12 +2442,21 @@ func (s *Server) listTestMessages(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, http.StatusServiceUnavailable, "TEST_MESSAGE_UNAVAILABLE", "Test-message operations are not configured.", nil)
 		return
 	}
-	items, err := s.deps.TestMessages.ListSends(r.Context(), r.PathValue("id"))
+	limit, err := optionalPositiveIntQuery(r, "limit", 500)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_LIMIT", "The page limit must be between 1 and 500.", nil)
+		return
+	}
+	page, err := s.deps.TestMessages.ListSendsPage(r.Context(), r.PathValue("id"), limit, strings.TrimSpace(r.URL.Query().Get("cursor")))
+	if errors.Is(err, testmessage.ErrInvalidSendCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The test-message send page cursor is invalid.", nil)
+		return
+	}
 	if err != nil {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, http.StatusOK, items)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 func (s *Server) getTestMessage(w http.ResponseWriter, r *http.Request) {
 	if s.deps.TestMessages == nil {
@@ -2622,12 +2715,21 @@ func (s *Server) listAudienceMaterialisations(w http.ResponseWriter, r *http.Req
 		httpx.WriteError(w, r, http.StatusServiceUnavailable, "AUDIENCE_MATERIALISATION_UNAVAILABLE", "Audience materialisation is unavailable.", nil)
 		return
 	}
-	items, err := s.deps.AudienceMaterialisations.List(r.Context(), r.PathValue("id"), 50)
+	limit, err := optionalPositiveIntQuery(r, "limit", 200)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_LIMIT", "The page limit must be between 1 and 200.", nil)
+		return
+	}
+	page, err := s.deps.AudienceMaterialisations.ListPage(r.Context(), r.PathValue("id"), limit, strings.TrimSpace(r.URL.Query().Get("cursor")))
+	if errors.Is(err, materialisation.ErrInvalidMaterialisationCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The audience-materialisation page cursor is invalid.", nil)
+		return
+	}
 	if err != nil {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, http.StatusOK, items)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 func (s *Server) getAudienceMaterialisation(w http.ResponseWriter, r *http.Request) {
 	if s.deps.AudienceMaterialisations == nil {
@@ -2817,12 +2919,21 @@ func (s *Server) listDispatchShardReallocations(w http.ResponseWriter, r *http.R
 		httpx.WriteError(w, r, http.StatusServiceUnavailable, "SHARD_REALLOCATION_UNAVAILABLE", "Dispatch-shard reallocation is not configured.", nil)
 		return
 	}
-	values, err := s.deps.ShardReallocations.List(r.Context(), r.PathValue("id"))
+	limit, err := optionalPositiveIntQuery(r, "limit", 500)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_LIMIT", "The page limit must be between 1 and 500.", nil)
+		return
+	}
+	page, err := s.deps.ShardReallocations.ListPage(r.Context(), r.PathValue("id"), limit, strings.TrimSpace(r.URL.Query().Get("cursor")))
+	if errors.Is(err, execution.ErrInvalidReallocationCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The shard-reallocation page cursor is invalid.", nil)
+		return
+	}
 	if err != nil {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, http.StatusOK, values)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 
 func (s *Server) getCampaignExecutionForecast(w http.ResponseWriter, r *http.Request) {
@@ -3029,18 +3140,22 @@ func (s *Server) listInboundReplies(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_LIMIT", "The page limit must be between 1 and 500.", nil)
 		return
 	}
-	items, err := s.deps.InboundReplies.List(r.Context(), limit)
+	page, err := s.deps.InboundReplies.ListPage(r.Context(), limit, strings.TrimSpace(r.URL.Query().Get("cursor")))
 	if err != nil {
+		if errors.Is(err, inbound.ErrInvalidReplyCursor) {
+			httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The inbound-reply page cursor is invalid.", nil)
+			return
+		}
 		s.internalError(w, r, err)
 		return
 	}
 	principal, _ := identity.PrincipalFromContext(r.Context())
 	if !principal.User.HasPermission("inbound.content.read") {
-		for index := range items {
-			items[index].MessageText = ""
+		for index := range page.Items {
+			page.Items[index].MessageText = ""
 		}
 	}
-	httpx.WriteListAuto(w, http.StatusOK, items)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 
 func (s *Server) getInboundReplyContent(w http.ResponseWriter, r *http.Request) {
@@ -3174,12 +3289,21 @@ func (s *Server) listSenderPacingPolicies(w http.ResponseWriter, r *http.Request
 		httpx.WriteError(w, r, http.StatusServiceUnavailable, "PACING_POLICY_UNAVAILABLE", "Sender pacing policy administration is not configured.", nil)
 		return
 	}
-	values, err := s.deps.PacingPolicies.List(r.Context())
+	request, err := httpx.ParsePage(r, 100, 500)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE", "The pacing-policy page request is invalid.", nil)
+		return
+	}
+	page, err := s.deps.PacingPolicies.ListPage(r.Context(), request.Limit, request.Cursor)
+	if errors.Is(err, sender.ErrInvalidPacingListCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The pacing-policy page cursor is invalid.", nil)
+		return
+	}
 	if err != nil {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, http.StatusOK, values)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 
 func (s *Server) createSenderPacingPolicy(w http.ResponseWriter, r *http.Request) {
@@ -3292,12 +3416,21 @@ func (s *Server) listCampaignRoutingPlans(w http.ResponseWriter, r *http.Request
 		httpx.WriteError(w, r, http.StatusServiceUnavailable, "ROUTING_PLAN_UNAVAILABLE", "Campaign routing-plan administration is not configured.", nil)
 		return
 	}
-	values, err := s.deps.RoutingPlans.ListByCampaign(r.Context(), r.PathValue("id"))
+	limit, err := optionalPositiveIntQuery(r, "limit", 500)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_LIMIT", "The page limit must be between 1 and 500.", nil)
+		return
+	}
+	page, err := s.deps.RoutingPlans.ListByCampaignPage(r.Context(), r.PathValue("id"), limit, strings.TrimSpace(r.URL.Query().Get("cursor")))
+	if errors.Is(err, execution.ErrInvalidRoutingPlanCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The routing-plan page cursor is invalid.", nil)
+		return
+	}
 	if err != nil {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, http.StatusOK, values)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 func (s *Server) createCampaignRoutingPlan(w http.ResponseWriter, r *http.Request) {
 	if s.deps.RoutingPlans == nil {

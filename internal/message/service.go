@@ -190,6 +190,25 @@ func (r *MemoryRepository) ListByCampaign(_ context.Context, campaignID string) 
 	return items, nil
 }
 
+func (r *MemoryRepository) ListByCampaignPage(_ context.Context, campaignID string, limit int, beforeVersion int) ([]Version, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	identifiers := append([]string(nil), r.byCampaign[campaignID]...)
+	items := make([]Version, 0, len(identifiers))
+	for _, identifier := range identifiers {
+		value := r.items[identifier]
+		if beforeVersion > 0 && value.Version >= beforeVersion {
+			continue
+		}
+		items = append(items, cloneVersion(value))
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].Version > items[j].Version })
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	return items, nil
+}
+
 func (r *MemoryRepository) Approve(_ context.Context, identifier, actorID, expectedContentHash string, now time.Time) (Version, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

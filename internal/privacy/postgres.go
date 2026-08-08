@@ -132,7 +132,10 @@ func (r *PostgreSQLRepository) ListEvents(ctx context.Context, identifier string
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	rows, err := r.DB.QueryContext(ctx, `SELECT id::text,privacy_case_id::text,event_type,actor_id::text,coalesce(reason,''),case_version,evidence,occurred_at FROM privacy_case_events WHERE privacy_case_id=$1::uuid ORDER BY occurred_at DESC,id DESC LIMIT $2`, identifier, limit)
+	return r.ListEventPage(ctx, identifier, limit, nil, "")
+}
+func (r *PostgreSQLRepository) ListEventPage(ctx context.Context, identifier string, limit int, before *time.Time, beforeID string) ([]Event, error) {
+	rows, err := r.DB.QueryContext(ctx, `SELECT id::text,privacy_case_id::text,event_type,actor_id::text,coalesce(reason,''),case_version,evidence,occurred_at FROM privacy_case_events WHERE privacy_case_id=$1::uuid AND ($3::timestamptz IS NULL OR occurred_at<$3 OR (occurred_at=$3 AND id<NULLIF($4,'')::uuid)) ORDER BY occurred_at DESC,id DESC LIMIT $2`, identifier, limit, before, beforeID)
 	if err != nil {
 		return nil, err
 	}
@@ -534,7 +537,10 @@ func (r *PostgreSQLRepository) ListLegalHoldEvents(ctx context.Context, identifi
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	rows, err := r.DB.QueryContext(ctx, `SELECT id::text,legal_hold_id::text,event_type,actor_id::text,coalesce(reason,''),hold_version,evidence,occurred_at FROM privacy_legal_hold_events WHERE legal_hold_id=$1::uuid ORDER BY occurred_at DESC,id DESC LIMIT $2`, identifier, limit)
+	return r.ListLegalHoldEventPage(ctx, identifier, limit, nil, "")
+}
+func (r *PostgreSQLRepository) ListLegalHoldEventPage(ctx context.Context, identifier string, limit int, before *time.Time, beforeID string) ([]LegalHoldEvent, error) {
+	rows, err := r.DB.QueryContext(ctx, `SELECT id::text,legal_hold_id::text,event_type,actor_id::text,coalesce(reason,''),hold_version,evidence,occurred_at FROM privacy_legal_hold_events WHERE legal_hold_id=$1::uuid AND ($3::timestamptz IS NULL OR occurred_at<$3 OR (occurred_at=$3 AND id<NULLIF($4,'')::uuid)) ORDER BY occurred_at DESC,id DESC LIMIT $2`, identifier, limit, before, beforeID)
 	if err != nil {
 		return nil, err
 	}
@@ -569,6 +575,29 @@ func (r *PostgreSQLRepository) ListLegalHolds(ctx context.Context, lookup []byte
 		hold, err := scanLegalHold(rows)
 		if err != nil {
 			return nil, err
+		}
+		out = append(out, hold)
+	}
+	return out, rows.Err()
+}
+
+func (r *PostgreSQLRepository) ListLegalHoldPage(ctx context.Context, lookup []byte, activeOnly bool, limit int, before *time.Time, beforeID string) ([]LegalHold, error) {
+	if r == nil || r.DB == nil {
+		return nil, errors.New("privacy PostgreSQL repository is not configured")
+	}
+	if limit <= 0 || limit > 501 {
+		limit = 100
+	}
+	rows, err := r.DB.QueryContext(ctx, legalHoldSelect+` WHERE subject_lookup_hmac=$1 AND (NOT $2::boolean OR (status='ACTIVE' AND released_at IS NULL AND (expires_at IS NULL OR expires_at>now()))) AND ($4::timestamptz IS NULL OR created_at<$4 OR (created_at=$4 AND id<NULLIF($5,'')::uuid)) ORDER BY created_at DESC,id DESC LIMIT $3`, lookup, activeOnly, limit, before, beforeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]LegalHold, 0, limit)
+	for rows.Next() {
+		hold, scanErr := scanLegalHold(rows)
+		if scanErr != nil {
+			return nil, scanErr
 		}
 		out = append(out, hold)
 	}

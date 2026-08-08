@@ -1,9 +1,24 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
-import { readdir } from 'node:fs/promises';
+import { readFile, readdir, statfs } from 'node:fs/promises';
 import { GatewayIdentityService } from './gateway-identity.service';
 import { GatewayObservabilityService } from './observability.service';
 
+export interface ContainerResourceHealth {
+  scope: 'CONTAINER';
+  filesystemPath: string;
+  diskTotalBytes: number;
+  diskFreeBytes: number;
+  diskAvailableBytes: number;
+  inodesTotal: number;
+  inodesFree: number;
+  processId: number;
+  processUptimeSeconds: number;
+  openFileDescriptorCount: number;
+  networkRxBytes: number;
+  networkTxBytes: number;
+  networkInterfaceCount: number;
+}
 @Injectable()
 export class RuntimeRegistrationService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(RuntimeRegistrationService.name);
@@ -85,6 +100,8 @@ export class RuntimeRegistrationService implements OnModuleInit, OnModuleDestroy
     const cpuPercent = elapsedMicros > 0 ? Math.min(100, Math.max(0, usedMicros / elapsedMicros * 100)) : 0;
     this.lastCPU = nowCPU; this.lastCPUAt = now;
     const identity = this.identity.describe();
+    const resourceFilesystemPath = String(process.env.GATEWAY_RESOURCE_FILESYSTEM_PATH ?? process.env.GATEWAY_SESSION_DATA_DIR ?? '/data').trim() || '/data';
+    const resourceHealth = await collectContainerResourceHealth(resourceFilesystemPath);
     return {
       nodeId: identity.nodeId,
       expectedNodeVersion: identity.nodeVersion,
@@ -104,11 +121,64 @@ export class RuntimeRegistrationService implements OnModuleInit, OnModuleDestroy
       queueDepth: eventDepth + inboundDepth,
       cpuPercent: Number(cpuPercent.toFixed(3)),
       memoryBytes: process.memoryUsage().rss,
+      resourceHealth,
       observedAt: new Date().toISOString()
     };
   }
 }
 
+function measuredInteger(value: bigint, name: string): number {
+  if (value < 0n || value > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new Error(`${name} is outside the safe integer range`);
+  }
+  return Number(value);
+}
+
+async function containerNetworkCounters(): Promise<{ rxBytes: number; txBytes: number; interfaceCount: number }> {
+  const raw = await readFile('/proc/net/dev', 'utf8');
+  let rxBytes = 0n;
+  let txBytes = 0n;
+  let interfaceCount = 0;
+  for (const line of raw.split(/\r?\n/u)) {
+    const separator = line.indexOf(':');
+    if (separator < 0) continue;
+    const name = line.slice(0, separator).trim();
+    if (!name || name === 'lo') continue;
+    const fields = line.slice(separator + 1).trim().split(/\s+/u);
+    if (fields.length < 16) continue;
+    try {
+      rxBytes += BigInt(fields[0]);
+      txBytes += BigInt(fields[8]);
+      interfaceCount += 1;
+    } catch { continue; }
+  }
+  if (interfaceCount < 1) throw new Error('no non-loopback container network interface is measurable');
+  return { rxBytes: measuredInteger(rxBytes, 'networkRxBytes'), txBytes: measuredInteger(txBytes, 'networkTxBytes'), interfaceCount };
+}
+export async function collectContainerResourceHealth(filesystemPath: string): Promise<ContainerResourceHealth> {
+  const measuredPath = filesystemPath.trim() || '/data';
+  const [filesystem, descriptors, network] = await Promise.all([
+    statfs(measuredPath, { bigint: true }),
+    readdir('/proc/self/fd'),
+    containerNetworkCounters()
+  ]);
+  const blockSize = filesystem.bsize;
+  return {
+    scope: 'CONTAINER',
+    filesystemPath: measuredPath,
+    diskTotalBytes: measuredInteger(blockSize * filesystem.blocks, 'diskTotalBytes'),
+    diskFreeBytes: measuredInteger(blockSize * filesystem.bfree, 'diskFreeBytes'),
+    diskAvailableBytes: measuredInteger(blockSize * filesystem.bavail, 'diskAvailableBytes'),
+    inodesTotal: measuredInteger(filesystem.files, 'inodesTotal'),
+    inodesFree: measuredInteger(filesystem.ffree, 'inodesFree'),
+    processId: process.pid,
+    processUptimeSeconds: Math.max(0, Math.floor(process.uptime())),
+    openFileDescriptorCount: descriptors.length,
+    networkRxBytes: network.rxBytes,
+    networkTxBytes: network.txBytes,
+    networkInterfaceCount: network.interfaceCount
+  };
+}
 async function countJSONFiles(directory: string): Promise<number> {
   try { return (await readdir(directory)).filter(name => name.endsWith('.json')).length; }
   catch (error) { if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') return 0; throw error; }

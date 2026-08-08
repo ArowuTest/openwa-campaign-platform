@@ -38,6 +38,9 @@ func TestAdministrationRetriesDeadLetterWithEvidence(t *testing.T) {
 	if len(events) != 1 || events[0].Action != "RETRY_DEAD_LETTER" {
 		t.Fatalf("unexpected events: %#v", events)
 	}
+	if events[0].ID == "" {
+		t.Fatalf("administration event identity was discarded: %#v", events[0])
+	}
 }
 
 func TestAdministrationRejectsWrongStateAndWeakReason(t *testing.T) {
@@ -68,5 +71,45 @@ func TestAdministrationSummaryAndCancel(t *testing.T) {
 	}
 	if summary.CountsByStatus[StatusCancelled] != 1 || summary.CountsByStatus[StatusPending] != 1 {
 		t.Fatalf("unexpected summary: %#v", summary)
+	}
+}
+
+func TestAdministrationListPageContinuesWithoutDuplicates(t *testing.T) {
+	repo := NewMemoryRepository()
+	base := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	repo.items["job-a"] = Job{ID: "job-a", Type: "DISPATCH", Status: StatusPending, CreatedAt: base, UpdatedAt: base}
+	repo.items["job-b"] = Job{ID: "job-b", Type: "DISPATCH", Status: StatusPending, CreatedAt: base.Add(time.Minute), UpdatedAt: base.Add(time.Minute)}
+	repo.items["job-c"] = Job{ID: "job-c", Type: "DISPATCH", Status: StatusPending, CreatedAt: base.Add(2 * time.Minute), UpdatedAt: base.Add(2 * time.Minute)}
+	svc := &AdministrationService{Repository: repo}
+	first, err := svc.ListPage(context.Background(), Query{Limit: 2}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Items) != 2 || first.NextCursor == "" || first.Items[0].ID != "job-c" || first.Items[1].ID != "job-b" {
+		t.Fatalf("unexpected first page: %#v", first)
+	}
+	second, err := svc.ListPage(context.Background(), Query{Limit: 2}, first.NextCursor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second.Items) != 1 || second.NextCursor != "" || second.Items[0].ID != "job-a" {
+		t.Fatalf("unexpected second page: %#v", second)
+	}
+	if _, err := svc.ListPage(context.Background(), Query{Limit: 2}, "not-a-cursor"); !errors.Is(err, ErrInvalidJobCursor) {
+		t.Fatalf("invalid cursor accepted: %v", err)
+	}
+}
+
+func TestAdministrationGetDoesNotDependOnLatestListWindow(t *testing.T) {
+	repo := NewMemoryRepository()
+	now := time.Now().UTC()
+	repo.items["old-job"] = Job{ID: "old-job", Type: "DISPATCH", Status: StatusCompleted, CreatedAt: now.Add(-24 * time.Hour), UpdatedAt: now}
+	svc := &AdministrationService{Repository: repo}
+	job, err := svc.Get(context.Background(), "old-job")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.ID != "old-job" {
+		t.Fatalf("wrong job returned: %#v", job)
 	}
 }

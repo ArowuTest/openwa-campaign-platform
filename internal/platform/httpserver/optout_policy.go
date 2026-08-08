@@ -23,15 +23,24 @@ type transitionOptOutPolicyRequest struct {
 
 func (s *Server) listOptOutPolicies(w http.ResponseWriter, r *http.Request) {
 	if s.deps.OptOutPolicies == nil {
-		httpx.WriteError(w, r, 503, "OPT_OUT_POLICY_UNAVAILABLE", "Opt-out policy administration is unavailable.", nil)
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "OPT_OUT_POLICY_UNAVAILABLE", "Opt-out policy administration is unavailable.", nil)
 		return
 	}
-	items, err := s.deps.OptOutPolicies.Store.List(r.Context())
+	req, err := httpx.ParsePage(r, 100, 500)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE", "The opt-out-policy page request is invalid.", nil)
+		return
+	}
+	page, err := s.deps.OptOutPolicies.ListPage(r.Context(), req.Limit, req.Cursor)
+	if errors.Is(err, consent.ErrInvalidOptOutPolicyCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The opt-out-policy page cursor is invalid.", nil)
+		return
+	}
 	if err != nil {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, 200, items)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 func (s *Server) createOptOutPolicy(w http.ResponseWriter, r *http.Request) {
 	if s.deps.OptOutPolicies == nil {

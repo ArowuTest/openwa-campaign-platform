@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 )
 
 type PostgreSQLDefinitionRepository struct{ DB *sql.DB }
@@ -76,6 +77,30 @@ func (r *PostgreSQLDefinitionRepository) List(ctx context.Context, org string, l
 	}
 	return out, rows.Err()
 }
+func (r *PostgreSQLDefinitionRepository) ListPage(ctx context.Context, org string, limit int, before *time.Time, beforeID string) ([]Definition, error) {
+	if r == nil || r.DB == nil {
+		return nil, errors.New("database is required")
+	}
+	rows, err := r.DB.QueryContext(ctx, `SELECT id::text,organisation_id::text,name,coalesce(description,''),definition,status,version,coalesce(created_by::text,''),coalesce(updated_by::text,''),created_at,updated_at FROM segments WHERE ($1='' OR organisation_id=NULLIF($1,'')::uuid) AND ($3::timestamptz IS NULL OR updated_at<$3 OR (updated_at=$3 AND id>NULLIF($4,'')::uuid)) ORDER BY updated_at DESC,id ASC LIMIT $2`, org, limit, before, beforeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Definition{}
+	for rows.Next() {
+		var value Definition
+		var payload []byte
+		if err := rows.Scan(&value.ID, &value.OrganisationID, &value.Name, &value.Description, &payload, &value.Status, &value.Version, &value.CreatedBy, &value.UpdatedBy, &value.CreatedAt, &value.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(payload, &value.Definition); err != nil {
+			return nil, err
+		}
+		out = append(out, value)
+	}
+	return out, rows.Err()
+}
+
 func (r *PostgreSQLDefinitionRepository) Update(ctx context.Context, v Definition, expected int64, reason string) (Definition, error) {
 	if r == nil || r.DB == nil {
 		return Definition{}, errors.New("database is required")
@@ -115,6 +140,42 @@ func (r *PostgreSQLDefinitionRepository) Update(ctx context.Context, v Definitio
 	}
 	return v, nil
 }
+func (r *PostgreSQLDefinitionRepository) VersionsPage(ctx context.Context, id string, limit int, beforeVersion int64) ([]DefinitionVersion, error) {
+	if r == nil || r.DB == nil {
+		return nil, errors.New("database is required")
+	}
+	rows, err := r.DB.QueryContext(ctx, `SELECT segment_id::text,version,name,coalesce(description,''),definition,status,changed_by::text,reason,created_at FROM segment_definition_versions WHERE segment_id=$1::uuid AND ($3=0 OR version<$3) ORDER BY version DESC LIMIT $2`, id, limit, beforeVersion)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []DefinitionVersion{}
+	for rows.Next() {
+		var v DefinitionVersion
+		var payload []byte
+		if err := rows.Scan(&v.SegmentID, &v.Version, &v.Name, &v.Description, &payload, &v.Status, &v.ChangedBy, &v.Reason, &v.CreatedAt); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(payload, &v.Definition); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		var exists bool
+		if err := r.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM segments WHERE id=$1::uuid)`, id).Scan(&exists); err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, ErrDefinitionNotFound
+		}
+	}
+	return out, nil
+}
+
 func (r *PostgreSQLDefinitionRepository) Versions(ctx context.Context, id string, limit int) ([]DefinitionVersion, error) {
 	if r == nil || r.DB == nil {
 		return nil, errors.New("database is required")

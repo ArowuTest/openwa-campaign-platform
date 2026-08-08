@@ -37,6 +37,33 @@ func (r *PostgreSQLConflictRepository) List(ctx context.Context, importID string
 	return out, rows.Err()
 }
 
+func (r *PostgreSQLConflictRepository) ListConflictPage(ctx context.Context, importID string, status ConflictStatus, limit int, after *time.Time, afterID string) ([]ProfileConflict, error) {
+	if r == nil || r.DB == nil {
+		return nil, errors.New("database is required")
+	}
+	rows, err := r.DB.QueryContext(ctx, `SELECT id::text,audience_import_id::text,contact_id::text,masked_msisdn,field_name,coalesce(existing_value,''),coalesce(incoming_value,''),status,coalesce(resolution,''),coalesce(reason,''),coalesce(resolved_by::text,''),resolved_at,version,created_at FROM audience_profile_conflicts WHERE audience_import_id=$1::uuid AND status=$2 AND ($4::timestamptz IS NULL OR created_at>$4 OR (created_at=$4 AND id>NULLIF($5,'')::uuid)) ORDER BY created_at,id LIMIT $3`, importID, status, limit, after, afterID)
+	if err != nil {
+		return nil, fmt.Errorf("list audience profile conflict page: %w", err)
+	}
+	defer rows.Close()
+	out := make([]ProfileConflict, 0)
+	for rows.Next() {
+		var value ProfileConflict
+		var resolvedAt sql.NullTime
+		var resolution string
+		if err := rows.Scan(&value.ID, &value.AudienceImportID, &value.ContactID, &value.MaskedMSISDN, &value.Field, &value.ExistingValue, &value.IncomingValue, &value.Status, &resolution, &value.Reason, &value.ResolvedBy, &resolvedAt, &value.Version, &value.CreatedAt); err != nil {
+			return nil, err
+		}
+		value.Resolution = ConflictResolution(resolution)
+		if resolvedAt.Valid {
+			t := resolvedAt.Time
+			value.ResolvedAt = &t
+		}
+		out = append(out, value)
+	}
+	return out, rows.Err()
+}
+
 func (r *PostgreSQLConflictRepository) Resolve(ctx context.Context, conflictID string, resolution ConflictResolution, reason, actor string, expectedVersion int64, now time.Time) (ProfileConflict, error) {
 	if r == nil || r.DB == nil {
 		return ProfileConflict{}, errors.New("database is required")

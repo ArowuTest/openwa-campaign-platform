@@ -602,6 +602,31 @@ func (r *MemoryRepository) List(_ context.Context, org string) ([]Review, error)
 	sort.Slice(items, func(i, j int) bool { return items[i].CreatedAt.After(items[j].CreatedAt) })
 	return items, nil
 }
+func (r *MemoryRepository) ListReviewPage(_ context.Context, org string, limit int, before *time.Time, beforeID string) ([]Review, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	out := make([]Review, 0, len(r.items))
+	for _, v := range r.items {
+		if org != "" && v.OrganisationID != org {
+			continue
+		}
+		if before != nil && !(v.CreatedAt.Before(*before) || (v.CreatedAt.Equal(*before) && v.ID < beforeID)) {
+			continue
+		}
+		out = append(out, v)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	if limit <= 0 || limit > len(out) {
+		limit = len(out)
+	}
+	return out[:limit], nil
+}
+
 func (r *MemoryRepository) Get(_ context.Context, id string) (Review, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

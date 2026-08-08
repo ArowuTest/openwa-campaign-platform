@@ -76,6 +76,29 @@ func (r *PostgreSQLRepository) ListRecipients(ctx context.Context) ([]Recipient,
 	return out, nil
 }
 
+func (r *PostgreSQLRepository) ListRecipientPage(ctx context.Context, limit int, before *time.Time, beforeID string) ([]Recipient, error) {
+	if r == nil || r.DB == nil {
+		return nil, errors.New("test-message database is required")
+	}
+	rows, err := r.DB.QueryContext(ctx, `SELECT id::text,label,msisdn_encrypted,msisdn_lookup_hash,masked_msisdn,status,created_by::text,coalesce(submitted_by::text,''),coalesce(approved_by::text,''),reason,version,created_at,updated_at FROM approved_test_recipients WHERE ($2::timestamptz IS NULL OR created_at<$2 OR (created_at=$2 AND id<NULLIF($3::text,'')::uuid)) ORDER BY created_at DESC,id DESC LIMIT $1`, limit, before, beforeID)
+	if err != nil {
+		return nil, fmt.Errorf("list approved test recipient page: %w", err)
+	}
+	defer rows.Close()
+	out := []Recipient{}
+	for rows.Next() {
+		value, scanErr := scanRecipient(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("scan approved test recipient page: %w", scanErr)
+		}
+		out = append(out, value)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate approved test recipient page: %w", err)
+	}
+	return out, nil
+}
+
 func (r *PostgreSQLRepository) CompareAndSwapRecipient(ctx context.Context, v Recipient, expected int64) (Recipient, error) {
 	if r == nil || r.DB == nil {
 		return Recipient{}, errors.New("test-message database is required")
@@ -230,6 +253,28 @@ func (r *PostgreSQLRepository) ListSends(ctx context.Context, campaignID string)
 	return out, nil
 }
 
+func (r *PostgreSQLRepository) ListSendPage(ctx context.Context, campaignID string, limit int, before *time.Time, beforeID string) ([]Send, error) {
+	if r == nil || r.DB == nil {
+		return nil, errors.New("test-message database is required")
+	}
+	rows, err := r.DB.QueryContext(ctx, sendSelect+` WHERE campaign_id=$1::uuid AND ($3::timestamptz IS NULL OR created_at<$3 OR (created_at=$3 AND id<NULLIF($4,'')::uuid)) ORDER BY created_at DESC,id DESC LIMIT $2`, campaignID, limit, before, beforeID)
+	if err != nil {
+		return nil, fmt.Errorf("list test-message send page: %w", err)
+	}
+	defer rows.Close()
+	out := []Send{}
+	for rows.Next() {
+		value, scanErr := scanSend(rows)
+		if scanErr != nil {
+			return nil, fmt.Errorf("scan test-message send page: %w", scanErr)
+		}
+		out = append(out, value)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate test-message send page: %w", err)
+	}
+	return out, nil
+}
 func (r *PostgreSQLRepository) ClaimSends(ctx context.Context, owner string, now time.Time, lease time.Duration, limit int) ([]Send, error) {
 	if r == nil || r.DB == nil {
 		return nil, errors.New("test-message database is required")

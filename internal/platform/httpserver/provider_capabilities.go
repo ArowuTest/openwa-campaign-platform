@@ -16,12 +16,21 @@ func (s *Server) listProviderCapabilities(w http.ResponseWriter, r *http.Request
 		httpx.WriteError(w, r, http.StatusServiceUnavailable, "PROVIDER_CAPABILITY_UNAVAILABLE", "Provider capability administration is not configured.", nil)
 		return
 	}
-	items, err := s.deps.ProviderCapabilities.Store.List(r.Context())
+	request, err := httpx.ParsePage(r, 100, 500)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE", "The provider-capability page request is invalid.", nil)
+		return
+	}
+	page, err := s.deps.ProviderCapabilities.ListPage(r.Context(), request.Limit, request.Cursor)
+	if errors.Is(err, provider.ErrInvalidDefinitionListCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The provider-capability page cursor is invalid.", nil)
+		return
+	}
 	if err != nil {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, http.StatusOK, items)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 
 func (s *Server) createProviderCapability(w http.ResponseWriter, r *http.Request) {
@@ -179,7 +188,16 @@ func (s *Server) listProviderCapabilityEvents(w http.ResponseWriter, r *http.Req
 		httpx.WriteError(w, r, http.StatusServiceUnavailable, "PROVIDER_CAPABILITY_UNAVAILABLE", "Provider capability administration is not configured.", nil)
 		return
 	}
-	items, err := s.deps.ProviderCapabilities.ListEvents(r.Context(), r.PathValue("id"))
+	request, err := httpx.ParsePage(r, 100, 500)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE", "The provider-capability event page request is invalid.", nil)
+		return
+	}
+	page, err := s.deps.ProviderCapabilities.EventsPage(r.Context(), r.PathValue("id"), request.Limit, request.Cursor)
+	if errors.Is(err, provider.ErrInvalidEventCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The provider-capability event page cursor is invalid.", nil)
+		return
+	}
 	if errors.Is(err, provider.ErrNotFound) {
 		httpx.WriteError(w, r, http.StatusNotFound, "PROVIDER_CAPABILITY_NOT_FOUND", "The provider capability definition was not found.", nil)
 		return
@@ -188,5 +206,5 @@ func (s *Server) listProviderCapabilityEvents(w http.ResponseWriter, r *http.Req
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, http.StatusOK, items)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }

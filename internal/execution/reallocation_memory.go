@@ -3,6 +3,7 @@ package execution
 import (
 	"campaign-platform/internal/shared/id"
 	"context"
+	"sort"
 	"strings"
 	"time"
 )
@@ -40,4 +41,27 @@ func (r *MemoryShardRepository) ListShardReallocations(_ context.Context, shardI
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]ShardReallocation(nil), r.Reallocations[shardID]...), nil
+}
+
+func (r *MemoryShardRepository) ListShardReallocationPage(_ context.Context, shardID string, limit int, after *time.Time, afterID string) ([]ShardReallocation, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	items := append([]ShardReallocation(nil), r.Reallocations[shardID]...)
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].CreatedAt.Equal(items[j].CreatedAt) {
+			return items[i].ID < items[j].ID
+		}
+		return items[i].CreatedAt.Before(items[j].CreatedAt)
+	})
+	out := make([]ShardReallocation, 0, limit)
+	for _, item := range items {
+		if after != nil && (item.CreatedAt.Before(*after) || (item.CreatedAt.Equal(*after) && item.ID <= afterID)) {
+			continue
+		}
+		out = append(out, item)
+		if len(out) == limit {
+			break
+		}
+	}
+	return out, nil
 }

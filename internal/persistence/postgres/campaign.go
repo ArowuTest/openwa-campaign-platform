@@ -245,6 +245,32 @@ WHERE id=$1::uuid AND version=$30`
 	return tx.Commit()
 }
 
+func (r *CampaignRepository) ListMaterialChangePage(ctx context.Context, campaignID string, limit int, afterSequence int64) ([]campaign.MaterialChangeEvent, error) {
+	if r.DB == nil {
+		return nil, errors.New("database is required")
+	}
+	rows, err := r.DB.QueryContext(ctx, `SELECT id::text,campaign_id::text,sequence,actor_id::text,reason,changed_fields,previous_status,new_status,previous_version,new_version,created_at FROM campaign_material_change_events WHERE campaign_id=$1::uuid AND sequence>$2 ORDER BY sequence ASC LIMIT $3`, campaignID, afterSequence, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []campaign.MaterialChangeEvent{}
+	for rows.Next() {
+		var event campaign.MaterialChangeEvent
+		var fields []byte
+		var previous, next string
+		if err := rows.Scan(&event.ID, &event.CampaignID, &event.Sequence, &event.ActorID, &event.Reason, &fields, &previous, &next, &event.PreviousVersion, &event.NewVersion, &event.CreatedAt); err != nil {
+			return nil, err
+		}
+		event.PreviousStatus, event.NewStatus = campaign.Status(previous), campaign.Status(next)
+		if err := json.Unmarshal(fields, &event.ChangedFields); err != nil {
+			return nil, fmt.Errorf("decode campaign material fields: %w", err)
+		}
+		items = append(items, event)
+	}
+	return items, rows.Err()
+}
+
 func (r *CampaignRepository) ListMaterialChanges(ctx context.Context, campaignID string) ([]campaign.MaterialChangeEvent, error) {
 	if r.DB == nil {
 		return nil, errors.New("database is required")

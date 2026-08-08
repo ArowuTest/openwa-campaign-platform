@@ -60,6 +60,7 @@ services:
       GATEWAY_COMMAND_SECRET_PREVIOUS_FILE: /run/secrets/gateway_command_secret_previous
       GATEWAY_RUNTIME_SECRET_FILE: /run/secrets/gateway_runtime_secret
       GATEWAY_RUNTIME_SECRET_PREVIOUS_FILE: /run/secrets/gateway_runtime_secret_previous
+      GATEWAY_STALE_AFTER_SECONDS: ${GATEWAY_STALE_AFTER_SECONDS:-120}
       MEDIA_DOWNLOAD_SECRET_FILE: /run/secrets/media_download_secret
       PROFILING_TOKEN_FILE: /run/secrets/profiling_token
       SECURE_COOKIES: "true"
@@ -242,6 +243,7 @@ services:
       DATABASE_URL_FILE: /run/secrets/platform_governance_worker_database_url
       DATABASE_EXPECTED_ROLE: campaign_platform_governance_worker
       WORKER_ID: ${PLATFORM_GOVERNANCE_WORKER_ID:-platform-governance-worker-01}
+      GATEWAY_STALE_AFTER_SECONDS: ${GATEWAY_STALE_AFTER_SECONDS:-120}
       OBJECT_STORE_DRIVER: s3
       OBJECT_STORE_TEMP_DIR: /tmp
       S3_ENDPOINT: ${S3_ENDPOINT:?S3_ENDPOINT is required}

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"strings"
+	"time"
 
 	"campaign-platform/internal/organisation"
 )
@@ -27,6 +28,25 @@ func (r *OrganisationRepository) List(ctx context.Context) ([]organisation.Organ
 		return nil, errors.New("database is required")
 	}
 	rows, err := r.DB.QueryContext(ctx, organisationSelect+` ORDER BY o.created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []organisation.Organisation{}
+	for rows.Next() {
+		v, err := scanOrganisation(rows)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, v)
+	}
+	return items, rows.Err()
+}
+func (r *OrganisationRepository) ListPage(ctx context.Context, limit int, before *time.Time, beforeID string) ([]organisation.Organisation, error) {
+	if r.DB == nil {
+		return nil, errors.New("database is required")
+	}
+	rows, err := r.DB.QueryContext(ctx, organisationSelect+` WHERE ($2::timestamptz IS NULL OR o.created_at<$2 OR (o.created_at=$2 AND o.id<NULLIF($3,'')::uuid)) ORDER BY o.created_at DESC,o.id DESC LIMIT $1`, limit, before, beforeID)
 	if err != nil {
 		return nil, err
 	}
@@ -131,6 +151,40 @@ func (r *OrganisationRepository) ListEvents(ctx context.Context, organisationID 
 		e.BeforeStatus = organisation.Status(before)
 		e.AfterStatus = organisation.Status(after)
 		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		var exists bool
+		if err := r.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM organisations WHERE id=$1::uuid)`, organisationID).Scan(&exists); err != nil {
+			return nil, err
+		}
+		if !exists {
+			return nil, organisation.ErrNotFound
+		}
+	}
+	return out, nil
+}
+func (r *OrganisationRepository) ListEventPage(ctx context.Context, organisationID string, limit int, afterVersion int64) ([]organisation.Event, error) {
+	if r.DB == nil {
+		return nil, errors.New("database is required")
+	}
+	rows, err := r.DB.QueryContext(ctx, `SELECT id::text,organisation_id::text,version,event_type,coalesce(actor_id::text,''),coalesce(reason,''),coalesce(before_status,''),coalesce(after_status,''),occurred_at FROM organisation_events WHERE organisation_id=$1::uuid AND version>$2 ORDER BY version ASC LIMIT $3`, organisationID, afterVersion, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []organisation.Event{}
+	for rows.Next() {
+		var event organisation.Event
+		var before, after string
+		if err := rows.Scan(&event.ID, &event.OrganisationID, &event.Version, &event.EventType, &event.ActorID, &event.Reason, &before, &after, &event.OccurredAt); err != nil {
+			return nil, err
+		}
+		event.BeforeStatus = organisation.Status(before)
+		event.AfterStatus = organisation.Status(after)
+		out = append(out, event)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

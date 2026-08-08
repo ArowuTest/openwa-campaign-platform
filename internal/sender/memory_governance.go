@@ -38,6 +38,28 @@ func (m *MemoryGovernanceStore) ListPools(context.Context) ([]Pool, error) {
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }
+func (m *MemoryGovernanceStore) ListPoolPage(_ context.Context, limit int, afterName, afterID string) ([]Pool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]Pool, 0, len(m.pools))
+	for _, v := range m.pools {
+		if afterName != "" && !(v.Name > afterName || (v.Name == afterName && v.ID > afterID)) {
+			continue
+		}
+		out = append(out, v)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Name == out[j].Name {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].Name < out[j].Name
+	})
+	if limit <= 0 || limit > len(out) {
+		limit = len(out)
+	}
+	return out[:limit], nil
+}
+
 func (m *MemoryGovernanceStore) CreatePool(_ context.Context, v Pool, _, _ string) (Pool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -80,6 +102,28 @@ func (m *MemoryGovernanceStore) ListNodes(context.Context) ([]Node, error) {
 	}
 	return out, nil
 }
+func (m *MemoryGovernanceStore) ListNodePage(_ context.Context, limit int, afterName, afterID string) ([]Node, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]Node, 0, len(m.nodes))
+	for _, v := range m.nodes {
+		if afterName != "" && !(v.Name > afterName || (v.Name == afterName && v.ID > afterID)) {
+			continue
+		}
+		out = append(out, v)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Name == out[j].Name {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].Name < out[j].Name
+	})
+	if limit <= 0 || limit > len(out) {
+		limit = len(out)
+	}
+	return out[:limit], nil
+}
+
 func (m *MemoryGovernanceStore) GetNode(_ context.Context, id string) (Node, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -170,6 +214,31 @@ func (m *MemoryGovernanceStore) ListSessions(context.Context) ([]GovernedSession
 	return out, nil
 }
 
+func (m *MemoryGovernanceStore) ListSessionPage(_ context.Context, limit int, afterMaskedMSISDN, afterID string) ([]GovernedSession, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	values := make([]GovernedSession, 0, len(m.sessions))
+	for _, value := range m.sessions {
+		values = append(values, value)
+	}
+	sort.Slice(values, func(i, j int) bool {
+		if values[i].MaskedMSISDN == values[j].MaskedMSISDN {
+			return values[i].ID < values[j].ID
+		}
+		return values[i].MaskedMSISDN < values[j].MaskedMSISDN
+	})
+	out := make([]GovernedSession, 0, limit)
+	for _, value := range values {
+		if afterMaskedMSISDN != "" && (value.MaskedMSISDN < afterMaskedMSISDN || value.MaskedMSISDN == afterMaskedMSISDN && value.ID <= afterID) {
+			continue
+		}
+		out = append(out, value)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
 func (m *MemoryGovernanceStore) GetSession(_ context.Context, id string) (GovernedSession, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -300,6 +369,27 @@ func (m *MemoryGovernanceStore) ListGatewayPools(context.Context) ([]GatewayPool
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out, nil
 }
+func (m *MemoryGovernanceStore) ListGatewayPoolPage(_ context.Context, limit int, afterName, afterID string) ([]GatewayPool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]GatewayPool, 0, len(m.gatewayPools))
+	for _, v := range m.gatewayPools {
+		if afterName != "" && !(v.Name > afterName || (v.Name == afterName && v.ID > afterID)) {
+			continue
+		}
+		out = append(out, v)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Name == out[j].Name {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].Name < out[j].Name
+	})
+	if limit <= 0 || limit > len(out) {
+		limit = len(out)
+	}
+	return out[:limit], nil
+}
 
 func (m *MemoryGovernanceStore) GetGatewayPool(_ context.Context, id string) (GatewayPool, error) {
 	m.mu.Lock()
@@ -374,6 +464,32 @@ func (m *MemoryGovernanceStore) ListGatewayPoolEvents(_ context.Context, poolID 
 	return out, nil
 }
 
+func (m *MemoryGovernanceStore) ListGatewayPoolEventPage(_ context.Context, poolID string, limit int, before *time.Time, beforeID string) ([]GatewayPoolEvent, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.gatewayPools[poolID]; !ok {
+		return nil, ErrSenderNotFound
+	}
+	values := append([]GatewayPoolEvent(nil), m.gatewayPoolEvents[poolID]...)
+	sort.Slice(values, func(i, j int) bool {
+		if values[i].OccurredAt.Equal(values[j].OccurredAt) {
+			return values[i].ID > values[j].ID
+		}
+		return values[i].OccurredAt.After(values[j].OccurredAt)
+	})
+	out := make([]GatewayPoolEvent, 0, limit)
+	for _, value := range values {
+		if before != nil && (value.OccurredAt.After(*before) || value.OccurredAt.Equal(*before) && value.ID >= beforeID) {
+			continue
+		}
+		out = append(out, value)
+		if len(out) == limit {
+			break
+		}
+	}
+	return out, nil
+}
+
 func (m *MemoryGovernanceStore) UseRuntimeNonce(_ context.Context, nodeID, nonce, _ string, expiresAt time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -413,6 +529,7 @@ func (m *MemoryGovernanceStore) ApplyRuntimeReport(_ context.Context, nodeID str
 		return Node{}, ErrSenderConflict
 	}
 	previousBootID := current.BootID
+	wasRegistered := current.RegisteredAt != nil
 	current.GatewayPoolID = report.GatewayPoolID
 	current.Provider = report.Provider
 	current.Engine = report.Engine
@@ -429,6 +546,7 @@ func (m *MemoryGovernanceStore) ApplyRuntimeReport(_ context.Context, nodeID str
 	current.QueueDepth = report.QueueDepth
 	current.CPUPercent = report.CPUPercent
 	current.MemoryBytes = report.MemoryBytes
+	current.ResourceHealth = report.ResourceHealth
 	current.Draining = report.RuntimeState == RuntimeDraining
 	status := "READY"
 	switch report.RuntimeState {
@@ -443,10 +561,9 @@ func (m *MemoryGovernanceStore) ApplyRuntimeReport(_ context.Context, nodeID str
 		registered := now
 		current.RegisteredAt = &registered
 	}
-	current.Version++
 	m.nodes[nodeID] = current
 	eventType := "HEARTBEAT"
-	if current.Version == 2 || previousBootID != report.BootID {
+	if !wasRegistered || previousBootID != report.BootID {
 		eventType = "REGISTERED"
 	}
 	m.seq++
@@ -481,6 +598,31 @@ func (m *MemoryGovernanceStore) ListRuntimeEvents(_ context.Context, nodeID stri
 	return out, nil
 }
 
+func (m *MemoryGovernanceStore) ListRuntimeEventPage(_ context.Context, nodeID string, limit int, before *time.Time, beforeID string) ([]RuntimeEvent, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.nodes[nodeID]; !ok {
+		return nil, ErrSenderNotFound
+	}
+	values := append([]RuntimeEvent(nil), m.runtimeEvents[nodeID]...)
+	sort.Slice(values, func(i, j int) bool {
+		if values[i].OccurredAt.Equal(values[j].OccurredAt) {
+			return values[i].ID > values[j].ID
+		}
+		return values[i].OccurredAt.After(values[j].OccurredAt)
+	})
+	out := make([]RuntimeEvent, 0, limit)
+	for _, value := range values {
+		if before != nil && (value.OccurredAt.After(*before) || value.OccurredAt.Equal(*before) && value.ID >= beforeID) {
+			continue
+		}
+		out = append(out, cloneRuntimeEvent(value))
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
 func (m *MemoryGovernanceStore) GatewayPoolUsage(_ context.Context, poolID string, _ time.Time) (GatewayPoolUsage, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

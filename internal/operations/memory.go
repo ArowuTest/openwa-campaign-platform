@@ -252,3 +252,40 @@ func (r *MemoryRepository) RevokeDownloadGrants(_ context.Context, exportID stri
 	}
 	return nil
 }
+
+func (r *MemoryRepository) ListIncidentPage(_ context.Context, status IncidentStatus, limit int, afterSeverity int, before *time.Time, beforeID string) ([]Incident, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	items := make([]Incident, 0, len(r.incidents))
+	for _, item := range r.incidents {
+		if status != "" && item.Status != status {
+			continue
+		}
+		rank := incidentSeverityRank(item.Severity)
+		if before != nil && !(rank > afterSeverity || (rank == afterSeverity && (item.CreatedAt.Before(*before) || (item.CreatedAt.Equal(*before) && item.ID < beforeID)))) {
+			continue
+		}
+		items = append(items, item)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		left, right := incidentSeverityRank(items[i].Severity), incidentSeverityRank(items[j].Severity)
+		if left != right {
+			return left < right
+		}
+		if items[i].CreatedAt.Equal(items[j].CreatedAt) {
+			return items[i].ID > items[j].ID
+		}
+		return items[i].CreatedAt.After(items[j].CreatedAt)
+	})
+	if limit <= 0 || limit > 501 {
+		limit = 100
+	}
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	return items, nil
+}
+
+func (r *MemoryRepository) ListExceptionPage(_ context.Context, _ string, _ int, _ *time.Time, _ string) ([]DeliveryException, error) {
+	return []DeliveryException{}, nil
+}

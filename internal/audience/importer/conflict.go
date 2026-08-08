@@ -150,6 +150,31 @@ func (r *MemoryConflictRepository) List(_ context.Context, importID string, stat
 	return out, nil
 }
 
+func (r *MemoryConflictRepository) ListConflictPage(_ context.Context, importID string, status ConflictStatus, limit int, after *time.Time, afterID string) ([]ProfileConflict, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]ProfileConflict, 0)
+	for _, value := range r.items {
+		if value.AudienceImportID != importID || value.Status != status {
+			continue
+		}
+		if after != nil && (value.CreatedAt.Before(*after) || (value.CreatedAt.Equal(*after) && value.ID <= afterID)) {
+			continue
+		}
+		out = append(out, value)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].CreatedAt.Before(out[j].CreatedAt)
+	})
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
 func (r *MemoryConflictRepository) Resolve(_ context.Context, conflictID string, resolution ConflictResolution, reason, actor string, expectedVersion int64, now time.Time) (ProfileConflict, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

@@ -327,6 +327,28 @@ func (r *MemoryAdministrationRepository) ListAccounts(_ context.Context) ([]Acco
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
 	return out, nil
 }
+func (r *MemoryAdministrationRepository) ListAccountPage(_ context.Context, limit int, before *time.Time, beforeID string) ([]Account, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]Account, 0, len(r.accounts))
+	for _, account := range r.accounts {
+		if before != nil && !(account.CreatedAt.Before(*before) || (account.CreatedAt.Equal(*before) && account.ID < beforeID)) {
+			continue
+		}
+		out = append(out, cloneAccount(account))
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	if limit <= 0 || limit > len(out) {
+		limit = len(out)
+	}
+	return out[:limit], nil
+}
+
 func (r *MemoryAdministrationRepository) GetAccount(_ context.Context, id string) (Account, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

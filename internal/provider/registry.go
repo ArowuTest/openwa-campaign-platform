@@ -286,6 +286,28 @@ func (m *MemoryStore) List(context.Context) ([]Definition, error) {
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
 	return out, nil
 }
+func (m *MemoryStore) ListDefinitionPage(_ context.Context, limit int, before *time.Time, beforeID string) ([]Definition, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]Definition, 0, len(m.items))
+	for _, d := range m.items {
+		if before != nil && !(d.CreatedAt.Before(*before) || (d.CreatedAt.Equal(*before) && d.ID < beforeID)) {
+			continue
+		}
+		out = append(out, d)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	if limit <= 0 || limit > len(out) {
+		limit = len(out)
+	}
+	return out[:limit], nil
+}
+
 func (m *MemoryStore) Get(_ context.Context, id string) (Definition, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -384,4 +406,25 @@ func overlap(a time.Time, ae *time.Time, b time.Time, be *time.Time) bool {
 		bEnd = *be
 	}
 	return a.Before(bEnd) && b.Before(aEnd)
+}
+
+func (m *MemoryStore) ListEventPage(_ context.Context, definitionID string, limit int, beforeID int64) ([]Event, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.items[definitionID]; !ok {
+		return nil, ErrNotFound
+	}
+	items := append([]Event(nil), m.events[definitionID]...)
+	sort.Slice(items, func(i, j int) bool { return items[i].ID > items[j].ID })
+	out := make([]Event, 0, limit)
+	for _, item := range items {
+		if beforeID > 0 && item.ID >= beforeID {
+			continue
+		}
+		out = append(out, item)
+		if len(out) == limit {
+			break
+		}
+	}
+	return out, nil
 }

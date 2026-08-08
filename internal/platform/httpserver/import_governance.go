@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -94,17 +95,21 @@ func (s *Server) listAudienceImportMappings(w http.ResponseWriter, r *http.Reque
 	if a == nil {
 		return
 	}
-	limit, err := optionalPositiveIntQuery(r, "limit", 500)
+	request, err := httpx.ParsePage(r, 100, 500)
 	if err != nil {
-		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_LIMIT", "The page limit must be between 1 and 500.", nil)
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE", "The import-mapping page request is invalid.", nil)
 		return
 	}
-	out, err := a.List(r.Context(), r.URL.Query().Get("organisationId"), r.URL.Query().Get("sourceSystem"), limit)
+	page, err := a.ListPage(r.Context(), r.URL.Query().Get("organisationId"), r.URL.Query().Get("sourceSystem"), request.Limit, request.Cursor)
+	if errors.Is(err, importer.ErrInvalidMappingListCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The import-mapping page cursor is invalid.", nil)
+		return
+	}
 	if err != nil {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, 200, out)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 func (s *Server) createAudienceImportMapping(w http.ResponseWriter, r *http.Request) {
 	a := s.mappingAdmin(w, r)
@@ -141,17 +146,21 @@ func (s *Server) listAudienceImportMappingEvents(w http.ResponseWriter, r *http.
 	if a == nil {
 		return
 	}
-	limit, err := optionalPositiveIntQuery(r, "limit", 500)
+	request, err := httpx.ParsePage(r, 100, 500)
 	if err != nil {
-		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_LIMIT", "The page limit must be between 1 and 500.", nil)
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE", "The mapping-event page request is invalid.", nil)
 		return
 	}
-	out, err := a.Events(r.Context(), r.PathValue("id"), limit)
+	page, err := a.EventsPage(r.Context(), r.PathValue("id"), request.Limit, request.Cursor)
+	if errors.Is(err, importer.ErrInvalidMappingEventCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The mapping-event page cursor is invalid.", nil)
+		return
+	}
 	if err != nil {
 		httpx.WriteError(w, r, 404, "IMPORT_MAPPING_NOT_FOUND", "The mapping was not found.", nil)
 		return
 	}
-	httpx.WriteListAuto(w, 200, out)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 func (s *Server) submitAudienceImportMapping(w http.ResponseWriter, r *http.Request) {
 	a := s.mappingAdmin(w, r)

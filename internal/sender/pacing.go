@@ -299,6 +299,28 @@ func (m *MemoryPacingStore) List(_ context.Context) ([]PacingPolicy, error) {
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
 	return out, nil
 }
+func (m *MemoryPacingStore) ListPacingPage(_ context.Context, limit int, before *time.Time, beforeID string) ([]PacingPolicy, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]PacingPolicy, 0, len(m.values))
+	for _, p := range m.values {
+		if before != nil && !(p.CreatedAt.Before(*before) || (p.CreatedAt.Equal(*before) && p.ID < beforeID)) {
+			continue
+		}
+		out = append(out, p)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	if limit <= 0 || limit > len(out) {
+		limit = len(out)
+	}
+	return out[:limit], nil
+}
+
 func (m *MemoryPacingStore) CompareAndSwap(_ context.Context, p PacingPolicy, expected int64) (PacingPolicy, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

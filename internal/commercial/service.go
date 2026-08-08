@@ -235,6 +235,31 @@ func (m *MemoryStore) List(_ context.Context, o string) ([]Record, error) {
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
 	return out, nil
 }
+func (m *MemoryStore) ListPage(_ context.Context, org string, limit int, before *time.Time, beforeID string) ([]Record, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]Record, 0, len(m.items))
+	for _, r := range m.items {
+		if org != "" && r.OrganisationID != org {
+			continue
+		}
+		if before != nil && !(r.CreatedAt.Before(*before) || (r.CreatedAt.Equal(*before) && r.ID < beforeID)) {
+			continue
+		}
+		out = append(out, r)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].CreatedAt.Equal(out[j].CreatedAt) {
+			return out[i].ID > out[j].ID
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	if limit <= 0 || limit > len(out) {
+		limit = len(out)
+	}
+	return out[:limit], nil
+}
+
 func (m *MemoryStore) CompareAndSwap(_ context.Context, r Record, e int64) (Record, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

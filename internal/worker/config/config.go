@@ -812,6 +812,7 @@ type PlatformGovernanceConfig struct {
 	RetentionLease          time.Duration
 	RetentionPollInterval   time.Duration
 	AlertEvaluationInterval time.Duration
+	GatewayStaleAfter       time.Duration
 	AlertEscalationInterval time.Duration
 	AlertEscalationBatch    int
 	AlertEscalationLease    time.Duration
@@ -860,6 +861,11 @@ func LoadPlatformGovernance() (PlatformGovernanceConfig, error) {
 	if cfg.AlertEvaluationInterval, err = duration("ALERT_EVALUATION_INTERVAL", 30*time.Second); err != nil {
 		return PlatformGovernanceConfig{}, err
 	}
+	var gatewayStaleSeconds int
+	if gatewayStaleSeconds, err = integer("GATEWAY_STALE_AFTER_SECONDS", 120); err != nil {
+		return PlatformGovernanceConfig{}, err
+	}
+	cfg.GatewayStaleAfter = time.Duration(gatewayStaleSeconds) * time.Second
 	if cfg.AlertEscalationInterval, err = duration("ALERT_ESCALATION_INTERVAL", 30*time.Second); err != nil {
 		return PlatformGovernanceConfig{}, err
 	}
@@ -913,6 +919,9 @@ func (c PlatformGovernanceConfig) Validate() error {
 	}
 	if c.AlertEscalationLease < 15*time.Second || c.AlertEscalationLease > 10*time.Minute {
 		return errors.New("ALERT_ESCALATION_LEASE must be between 15 seconds and 10 minutes")
+	}
+	if c.GatewayStaleAfter < 30*time.Second || c.GatewayStaleAfter > time.Hour {
+		return errors.New("GATEWAY_STALE_AFTER_SECONDS must be between 30 and 3600")
 	}
 	if c.RetentionPollInterval <= 0 || c.AlertEvaluationInterval <= 0 || c.AlertEscalationInterval <= 0 || c.FailureBackoff <= 0 {
 		return errors.New("platform governance worker intervals must be positive")

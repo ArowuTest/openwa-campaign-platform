@@ -35,26 +35,42 @@ const (
 	RuntimeDraining    RuntimeState = "DRAINING"
 )
 
+type RuntimeResourceHealth struct {
+	Scope                   string `json:"scope"`
+	FilesystemPath          string `json:"filesystemPath"`
+	DiskTotalBytes          *int64 `json:"diskTotalBytes,omitempty"`
+	DiskFreeBytes           *int64 `json:"diskFreeBytes,omitempty"`
+	DiskAvailableBytes      *int64 `json:"diskAvailableBytes,omitempty"`
+	InodesTotal             *int64 `json:"inodesTotal,omitempty"`
+	InodesFree              *int64 `json:"inodesFree,omitempty"`
+	ProcessID               int64  `json:"processId"`
+	ProcessUptimeSeconds    int64  `json:"processUptimeSeconds"`
+	OpenFileDescriptorCount *int64 `json:"openFileDescriptorCount,omitempty"`
+	NetworkRXBytes          *int64 `json:"networkRxBytes,omitempty"`
+	NetworkTXBytes          *int64 `json:"networkTxBytes,omitempty"`
+	NetworkInterfaceCount   int64  `json:"networkInterfaceCount"`
+}
 type RuntimeReport struct {
-	NodeID               string       `json:"nodeId"`
-	ExpectedNodeVersion  int64        `json:"expectedNodeVersion"`
-	GatewayPoolID        string       `json:"gatewayPoolId"`
-	Provider             string       `json:"provider"`
-	Engine               string       `json:"engine"`
-	AdapterVersion       string       `json:"adapterVersion"`
-	GatewayVersion       string       `json:"gatewayVersion"`
-	WorkerVersion        string       `json:"workerVersion"`
-	ConfigurationVersion string       `json:"configurationVersion"`
-	BootID               string       `json:"bootId"`
-	InternalURL          string       `json:"internalUrl"`
-	Capabilities         []Capability `json:"capabilities"`
-	RuntimeState         RuntimeState `json:"runtimeState"`
-	Capacity             int          `json:"capacity"`
-	SessionCount         int          `json:"sessionCount"`
-	QueueDepth           int64        `json:"queueDepth"`
-	CPUPercent           float64      `json:"cpuPercent"`
-	MemoryBytes          int64        `json:"memoryBytes"`
-	ObservedAt           time.Time    `json:"observedAt"`
+	NodeID               string                `json:"nodeId"`
+	ExpectedNodeVersion  int64                 `json:"expectedNodeVersion"`
+	GatewayPoolID        string                `json:"gatewayPoolId"`
+	Provider             string                `json:"provider"`
+	Engine               string                `json:"engine"`
+	AdapterVersion       string                `json:"adapterVersion"`
+	GatewayVersion       string                `json:"gatewayVersion"`
+	WorkerVersion        string                `json:"workerVersion"`
+	ConfigurationVersion string                `json:"configurationVersion"`
+	BootID               string                `json:"bootId"`
+	InternalURL          string                `json:"internalUrl"`
+	Capabilities         []Capability          `json:"capabilities"`
+	RuntimeState         RuntimeState          `json:"runtimeState"`
+	Capacity             int                   `json:"capacity"`
+	SessionCount         int                   `json:"sessionCount"`
+	QueueDepth           int64                 `json:"queueDepth"`
+	CPUPercent           float64               `json:"cpuPercent"`
+	MemoryBytes          int64                 `json:"memoryBytes"`
+	ResourceHealth       RuntimeResourceHealth `json:"resourceHealth"`
+	ObservedAt           time.Time             `json:"observedAt"`
 }
 
 type RuntimeEvent struct {
@@ -202,6 +218,31 @@ func normalizeRuntimeCapabilities(values []Capability) ([]Capability, error) {
 	return out, nil
 }
 
+func validateRuntimeResourceHealth(health *RuntimeResourceHealth) error {
+	health.Scope = strings.ToUpper(strings.TrimSpace(health.Scope))
+	health.FilesystemPath = strings.TrimSpace(health.FilesystemPath)
+	if health.Scope != "CONTAINER" || health.FilesystemPath == "" || len(health.FilesystemPath) > 512 ||
+		!strings.HasPrefix(health.FilesystemPath, "/") || health.ProcessID <= 0 ||
+		health.ProcessUptimeSeconds < 0 || health.NetworkInterfaceCount < 1 {
+		return ErrRuntimeDrift
+	}
+	values := []*int64{
+		health.DiskTotalBytes, health.DiskFreeBytes, health.DiskAvailableBytes,
+		health.InodesTotal, health.InodesFree, health.OpenFileDescriptorCount,
+		health.NetworkRXBytes, health.NetworkTXBytes,
+	}
+	for _, value := range values {
+		if value == nil || *value < 0 {
+			return ErrRuntimeDrift
+		}
+	}
+	if *health.DiskTotalBytes <= 0 || *health.DiskFreeBytes > *health.DiskTotalBytes ||
+		*health.DiskAvailableBytes > *health.DiskTotalBytes || *health.InodesTotal <= 0 ||
+		*health.InodesFree > *health.InodesTotal {
+		return ErrRuntimeDrift
+	}
+	return nil
+}
 func validateRuntimeReport(report *RuntimeReport, pathNodeID string, pool GatewayPool, now time.Time) error {
 	report.NodeID = strings.TrimSpace(report.NodeID)
 	report.GatewayPoolID = strings.TrimSpace(report.GatewayPoolID)
@@ -235,6 +276,9 @@ func validateRuntimeReport(report *RuntimeReport, pathNodeID string, pool Gatewa
 	}
 	if report.Capacity < 0 || report.Capacity > 1000 || report.SessionCount < 0 || report.SessionCount > 10000 || report.QueueDepth < 0 || report.CPUPercent < 0 || report.CPUPercent > 100 || report.MemoryBytes < 0 {
 		return ErrRuntimeDrift
+	}
+	if err := validateRuntimeResourceHealth(&report.ResourceHealth); err != nil {
+		return err
 	}
 	if report.ObservedAt.IsZero() {
 		report.ObservedAt = now

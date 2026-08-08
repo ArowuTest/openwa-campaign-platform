@@ -74,6 +74,32 @@ func (p *PostgreSQLAlertStore) ListAlertPolicies(ctx context.Context, status Ale
 	}
 	return out, rows.Err()
 }
+func (p *PostgreSQLAlertStore) ListAlertPolicyPage(ctx context.Context, status AlertPolicyStatus, limit int, before *time.Time, beforeID string) ([]AlertPolicy, error) {
+	if p == nil || p.DB == nil {
+		return nil, errors.New("database is required")
+	}
+	if limit <= 0 || limit > 501 {
+		limit = 100
+	}
+	rows, err := p.DB.QueryContext(ctx, `SELECT `+alertPolicyColumns+` FROM operational_alert_policies
+WHERE ($1='' OR status=$1)
+  AND ($3::timestamptz IS NULL OR created_at<$3 OR (created_at=$3 AND id<NULLIF($4,'')::uuid))
+ORDER BY created_at DESC,id DESC LIMIT $2`, status, limit, before, beforeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]AlertPolicy, 0, limit)
+	for rows.Next() {
+		value, scanErr := scanAlertPolicy(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out = append(out, value)
+	}
+	return out, rows.Err()
+}
+
 func (p *PostgreSQLAlertStore) GetAlertPolicy(ctx context.Context, key string) (AlertPolicy, error) {
 	v, err := scanAlertPolicy(p.DB.QueryRowContext(ctx, `SELECT `+alertPolicyColumns+` FROM operational_alert_policies WHERE id=$1::uuid`, key))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -190,7 +216,11 @@ func (p *PostgreSQLAlertStore) ActivateAlertPolicy(ctx context.Context, v AlertP
 	return p.updatePolicy(ctx, v, e, ev, true)
 }
 func (p *PostgreSQLAlertStore) ListAlertPolicyEvents(ctx context.Context, key string, limit int) ([]AlertPolicyEvent, error) {
-	rows, err := p.DB.QueryContext(ctx, `SELECT id::text,alert_policy_id::text,event_type,version,actor_id::text,reason,evidence,occurred_at FROM operational_alert_policy_events WHERE alert_policy_id=$1::uuid ORDER BY occurred_at DESC,id DESC LIMIT $2`, key, limit)
+	return p.ListAlertPolicyEventPage(ctx, key, limit, nil, "")
+}
+
+func (p *PostgreSQLAlertStore) ListAlertPolicyEventPage(ctx context.Context, key string, limit int, before *time.Time, beforeID string) ([]AlertPolicyEvent, error) {
+	rows, err := p.DB.QueryContext(ctx, `SELECT id::text,alert_policy_id::text,event_type,version,actor_id::text,reason,evidence,occurred_at FROM operational_alert_policy_events WHERE alert_policy_id=$1::uuid AND ($3::timestamptz IS NULL OR occurred_at<$3 OR (occurred_at=$3 AND id<NULLIF($4,'')::uuid)) ORDER BY occurred_at DESC,id DESC LIMIT $2`, key, limit, before, beforeID)
 	if err != nil {
 		return nil, err
 	}
@@ -440,6 +470,32 @@ func (p *PostgreSQLAlertStore) ListAlertEvents(ctx context.Context, key string, 
 	}
 	return out, rows.Err()
 }
+func (p *PostgreSQLAlertStore) ListAlertEventPage(ctx context.Context, key string, limit int, after *time.Time, afterID string) ([]AlertEvent, error) {
+	rows, err := p.DB.QueryContext(ctx, `SELECT id::text,alert_id::text,event_type,coalesce(actor_id::text,''),observed_value,detail,evidence,occurred_at FROM operational_alert_events WHERE alert_id=$1::uuid AND ($3::timestamptz IS NULL OR occurred_at>$3 OR (occurred_at=$3 AND id>NULLIF($4,'')::uuid)) ORDER BY occurred_at ASC,id ASC LIMIT $2`, key, limit, after, afterID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []AlertEvent{}
+	for rows.Next() {
+		var v AlertEvent
+		var value sql.NullFloat64
+		var raw []byte
+		if err = rows.Scan(&v.ID, &v.AlertID, &v.EventType, &v.ActorID, &value, &v.Detail, &raw, &v.OccurredAt); err != nil {
+			return nil, err
+		}
+		if value.Valid {
+			x := value.Float64
+			v.ObservedValue = &x
+		}
+		if err = json.Unmarshal(raw, &v.Evidence); err != nil {
+			return nil, err
+		}
+		out = append(out, v)
+	}
+	return out, rows.Err()
+}
+
 func (p *PostgreSQLAlertStore) ClaimEscalations(ctx context.Context, worker string, now time.Time, lease time.Duration, limit int) ([]Alert, error) {
 	tx, err := p.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -629,3 +685,59 @@ func (p *PostgreSQLAlertStore) ListNotifications(ctx context.Context, status str
 	return out, rows.Err()
 }
 func (p *PostgreSQLAlertStore) String() string { return fmt.Sprintf("PostgreSQLAlertStore(%p)", p.DB) }
+
+func (p *PostgreSQLAlertStore) ListAlertPage(ctx context.Context, status AlertStatus, severity Severity, limit int, before *time.Time, beforeID string) ([]Alert, error) {
+	if limit <= 0 || limit > 501 {
+		limit = 100
+	}
+	rows, err := p.DB.QueryContext(ctx, `SELECT `+alertColumns+` FROM operational_alerts
+WHERE ($1='' OR status=$1) AND ($2='' OR severity=$2)
+  AND ($4::timestamptz IS NULL OR last_observed_at<$4 OR (last_observed_at=$4 AND id<NULLIF($5,'')::uuid))
+ORDER BY last_observed_at DESC,id DESC LIMIT $3`, status, severity, limit, before, beforeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]Alert, 0, limit)
+	for rows.Next() {
+		value, scanErr := scanAlert(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		items = append(items, value)
+	}
+	return items, rows.Err()
+}
+
+func (p *PostgreSQLAlertStore) ListNotificationPage(ctx context.Context, status string, limit int, before *time.Time, beforeID string) ([]Notification, error) {
+	if limit <= 0 || limit > 501 {
+		limit = 100
+	}
+	rows, err := p.DB.QueryContext(ctx, `SELECT id::text,coalesce(alert_id::text,''),coalesce(incident_id::text,''),channel,target,status,payload,attempt_count,delivered_at,coalesce(last_error_code,''),created_at,updated_at
+FROM operational_notifications
+WHERE ($1='' OR status=$1)
+  AND ($3::timestamptz IS NULL OR created_at<$3 OR (created_at=$3 AND id<NULLIF($4,'')::uuid))
+ORDER BY created_at DESC,id DESC LIMIT $2`, status, limit, before, beforeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]Notification, 0, limit)
+	for rows.Next() {
+		var value Notification
+		var raw []byte
+		var delivered sql.NullTime
+		if err := rows.Scan(&value.ID, &value.AlertID, &value.IncidentID, &value.Channel, &value.Target, &value.Status, &raw, &value.AttemptCount, &delivered, &value.LastErrorCode, &value.CreatedAt, &value.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if delivered.Valid {
+			t := delivered.Time.UTC()
+			value.DeliveredAt = &t
+		}
+		if err := json.Unmarshal(raw, &value.Payload); err != nil {
+			return nil, err
+		}
+		items = append(items, value)
+	}
+	return items, rows.Err()
+}

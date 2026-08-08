@@ -66,6 +66,31 @@ func (r *MemoryMaterialisationRepository) ListByCampaign(_ context.Context, camp
 	return items, nil
 }
 
+func (r *MemoryMaterialisationRepository) ListByCampaignPage(_ context.Context, campaignID string, limit int, before *time.Time, beforeID string) ([]MaterialisationJob, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	items := []MaterialisationJob{}
+	for _, job := range r.jobs {
+		if job.CampaignID != campaignID {
+			continue
+		}
+		if before != nil && (job.RequestedAt.After(*before) || (job.RequestedAt.Equal(*before) && job.ID >= beforeID)) {
+			continue
+		}
+		items = append(items, job)
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].RequestedAt.Equal(items[j].RequestedAt) {
+			return items[i].ID > items[j].ID
+		}
+		return items[i].RequestedAt.After(items[j].RequestedAt)
+	})
+	if len(items) > limit {
+		items = items[:limit]
+	}
+	return items, nil
+}
+
 func (r *MemoryMaterialisationRepository) Claim(_ context.Context, owner string, limit int, lease time.Duration, now time.Time) ([]MaterialisationJob, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

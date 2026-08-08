@@ -14,6 +14,7 @@ import (
 	"campaign-platform/internal/observability"
 	"campaign-platform/internal/operations"
 	"campaign-platform/internal/persistence/database"
+	"campaign-platform/internal/platformpolicy"
 	"campaign-platform/internal/retention"
 	"campaign-platform/internal/storage"
 	workerconfig "campaign-platform/internal/worker/config"
@@ -64,7 +65,9 @@ func main() {
 		WorkerID: cfg.WorkerID, Lease: cfg.RetentionLease, Batch: cfg.RetentionBatch,
 		PollInterval: cfg.RetentionPollInterval,
 	}
-	operationsRepo := &operations.PostgreSQLRepository{DB: db}
+	platformPolicyStore := &platformpolicy.PostgreSQLStore{DB: db}
+	configurations := &platformpolicy.ConfigurationAdministration{Store: platformPolicyStore}
+	operationsRepo := &operations.PostgreSQLRepository{DB: db, RuntimeHealth: &operations.PlatformGatewayRuntimeHealthResolver{Configurations: configurations, FallbackStaleAfter: cfg.GatewayStaleAfter}, FallbackGatewayStaleAfter: cfg.GatewayStaleAfter}
 	operationsService := &operations.Service{Repo: operationsRepo}
 	alertStore := &operations.PostgreSQLAlertStore{DB: db}
 	alertEvaluator := &operations.AlertEvaluator{

@@ -471,3 +471,22 @@ func (r *MemoryRepository) ListMaterialChanges(_ context.Context, campaignID str
 	items := append([]MaterialChangeEvent(nil), r.events[campaignID]...)
 	return items, nil
 }
+
+func (r *MemoryRepository) ListMaterialChangePage(_ context.Context, campaignID string, limit int, afterSequence int64) ([]MaterialChangeEvent, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if _, ok := r.items[campaignID]; !ok {
+		return nil, ErrNotFound
+	}
+	out := make([]MaterialChangeEvent, 0, limit)
+	for _, event := range r.events[campaignID] {
+		if event.Sequence <= afterSequence {
+			continue
+		}
+		out = append(out, event)
+		if len(out) == limit {
+			break
+		}
+	}
+	return out, nil
+}

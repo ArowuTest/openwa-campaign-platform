@@ -129,12 +129,16 @@ func (s *Server) listConsentEvents(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_LIMIT", "The page limit must be between 1 and 500.", nil)
 		return
 	}
-	events, err := s.deps.ConsentLedger.Events(r.Context(), strings.TrimSpace(r.URL.Query().Get("contactId")), limit)
+	page, err := s.deps.ConsentLedger.EventsPage(r.Context(), strings.TrimSpace(r.URL.Query().Get("contactId")), limit, strings.TrimSpace(r.URL.Query().Get("cursor")))
 	if err != nil {
+		if errors.Is(err, consent.ErrInvalidConsentEventCursor) {
+			httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The consent-event page cursor is invalid.", nil)
+			return
+		}
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, http.StatusOK, events)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 func (s *Server) writeConsentLedgerError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {

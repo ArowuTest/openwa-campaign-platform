@@ -218,3 +218,25 @@ func (r *PostgreSQLRepository) ReencryptContent(ctx context.Context, limit int) 
 	}
 	return count, nil
 }
+
+func (r *PostgreSQLRepository) ListReplyPage(ctx context.Context, limit int, before *time.Time, beforeID string) ([]Reply, error) {
+	if limit <= 0 || limit > 501 {
+		limit = 100
+	}
+	rows, err := r.DB.QueryContext(ctx, selectReply+`
+WHERE ($2::timestamptz IS NULL OR created_at<$2 OR (created_at=$2 AND id<NULLIF($3,'')::uuid))
+ORDER BY created_at DESC,id DESC LIMIT $1`, limit, before, beforeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := make([]Reply, 0, limit)
+	for rows.Next() {
+		value, scanErr := r.scan(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		items = append(items, value)
+	}
+	return items, rows.Err()
+}

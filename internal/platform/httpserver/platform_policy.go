@@ -89,9 +89,9 @@ func (s *Server) listPlatformConfigurations(w http.ResponseWriter, r *http.Reque
 	if !ok {
 		return
 	}
-	limit, err := parseOptionalPositiveInt(r.URL.Query().Get("limit"), 100, 500)
+	request, err := httpx.ParsePage(r, 100, 500)
 	if err != nil {
-		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_LIMIT", "The configuration page limit is invalid.", nil)
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE", "The configuration page request is invalid.", nil)
 		return
 	}
 	scope := platformpolicy.ScopeType(strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("scopeType"))))
@@ -100,12 +100,16 @@ func (s *Server) listPlatformConfigurations(w http.ResponseWriter, r *http.Reque
 		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_FILTER", "The configuration scope or status filter is invalid.", nil)
 		return
 	}
-	items, err := admin.List(r.Context(), platformpolicy.ConfigurationQuery{Key: strings.TrimSpace(r.URL.Query().Get("key")), ScopeType: scope, ScopeID: strings.TrimSpace(r.URL.Query().Get("scopeId")), Status: status, Limit: limit})
+	page, err := admin.ListPage(r.Context(), platformpolicy.ConfigurationQuery{Key: strings.TrimSpace(r.URL.Query().Get("key")), ScopeType: scope, ScopeID: strings.TrimSpace(r.URL.Query().Get("scopeId")), Status: status, Limit: request.Limit}, request.Cursor)
+	if errors.Is(err, platformpolicy.ErrInvalidListCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The configuration page cursor is invalid.", nil)
+		return
+	}
 	if err != nil {
 		s.writePlatformPolicyError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, http.StatusOK, items)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 
 func (s *Server) createPlatformConfiguration(w http.ResponseWriter, r *http.Request) {
@@ -211,12 +215,21 @@ func (s *Server) listPlatformConfigurationEvents(w http.ResponseWriter, r *http.
 	if !ok {
 		return
 	}
-	items, err := admin.Events(r.Context(), r.PathValue("id"), 500)
+	request, err := httpx.ParsePage(r, 100, 500)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE", "The configuration-event page request is invalid.", nil)
+		return
+	}
+	page, err := admin.EventsPage(r.Context(), r.PathValue("id"), request.Limit, request.Cursor)
+	if errors.Is(err, platformpolicy.ErrInvalidEventCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The configuration-event page cursor is invalid.", nil)
+		return
+	}
 	if err != nil {
 		s.writePlatformPolicyError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, http.StatusOK, items)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 
 type maintenanceRequest struct {
@@ -250,17 +263,21 @@ func (s *Server) listMaintenanceWindows(w http.ResponseWriter, r *http.Request) 
 		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_STATUS", "The maintenance status is invalid.", nil)
 		return
 	}
-	limit, err := parseOptionalPositiveInt(r.URL.Query().Get("limit"), 100, 500)
+	request, err := httpx.ParsePage(r, 100, 500)
 	if err != nil {
-		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_LIMIT", "The maintenance page limit is invalid.", nil)
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE", "The maintenance page request is invalid.", nil)
 		return
 	}
-	items, err := admin.List(r.Context(), status, limit)
+	page, err := admin.ListPage(r.Context(), status, request.Limit, request.Cursor)
+	if errors.Is(err, platformpolicy.ErrInvalidListCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The maintenance page cursor is invalid.", nil)
+		return
+	}
 	if err != nil {
 		s.writePlatformPolicyError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, http.StatusOK, items)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 
 func validPlatformScope(v platformpolicy.ScopeType) bool {
@@ -378,12 +395,21 @@ func (s *Server) listMaintenanceEvents(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	items, err := admin.Events(r.Context(), r.PathValue("id"), 500)
+	request, err := httpx.ParsePage(r, 100, 500)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE", "The maintenance-event page request is invalid.", nil)
+		return
+	}
+	page, err := admin.EventsPage(r.Context(), r.PathValue("id"), request.Limit, request.Cursor)
+	if errors.Is(err, platformpolicy.ErrInvalidEventCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The maintenance-event page cursor is invalid.", nil)
+		return
+	}
 	if err != nil {
 		s.writePlatformPolicyError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, http.StatusOK, items)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 
 func (s *Server) writePlatformPolicyError(w http.ResponseWriter, r *http.Request, err error) {

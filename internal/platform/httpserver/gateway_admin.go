@@ -36,12 +36,21 @@ func (s *Server) listGatewayPools(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	items, err := admin.List(r.Context())
+	request, err := httpx.ParsePage(r, 100, 500)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE", "The gateway-pool page request is invalid.", nil)
+		return
+	}
+	page, err := admin.ListPage(r.Context(), request.Limit, request.Cursor)
+	if errors.Is(err, sender.ErrInvalidInventoryCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The gateway-pool page cursor is invalid.", nil)
+		return
+	}
 	if err != nil {
 		s.writeSenderError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, http.StatusOK, items)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 func (s *Server) getGatewayPool(w http.ResponseWriter, r *http.Request) {
 	admin, ok := s.requireGatewayPools(w, r)
@@ -132,12 +141,21 @@ func (s *Server) listGatewayPoolEvents(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	items, err := admin.Events(r.Context(), r.PathValue("id"), 500)
+	request, err := httpx.ParsePage(r, 100, 500)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE", "The gateway-pool event page request is invalid.", nil)
+		return
+	}
+	page, err := admin.EventsPage(r.Context(), r.PathValue("id"), request.Limit, request.Cursor)
+	if errors.Is(err, sender.ErrInvalidPaginationCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The gateway-pool event page cursor is invalid.", nil)
+		return
+	}
 	if err != nil {
 		s.writeSenderError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, http.StatusOK, items)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 
 func (s *Server) getGatewayNode(w http.ResponseWriter, r *http.Request) {
@@ -190,12 +208,21 @@ func (s *Server) listGatewayRuntimeEvents(w http.ResponseWriter, r *http.Request
 		httpx.WriteError(w, r, http.StatusServiceUnavailable, "GATEWAY_RUNTIME_UNAVAILABLE", "Gateway runtime registration is unavailable.", nil)
 		return
 	}
-	items, err := s.deps.GatewayRuntime.Events(r.Context(), r.PathValue("id"), 500)
+	request, err := httpx.ParsePage(r, 100, 500)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE", "The gateway runtime-event page request is invalid.", nil)
+		return
+	}
+	page, err := s.deps.GatewayRuntime.EventsPage(r.Context(), r.PathValue("id"), request.Limit, request.Cursor)
+	if errors.Is(err, sender.ErrInvalidPaginationCursor) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The gateway runtime-event page cursor is invalid.", nil)
+		return
+	}
 	if err != nil {
 		s.writeSenderError(w, r, err)
 		return
 	}
-	httpx.WriteListAuto(w, http.StatusOK, items)
+	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 func (s *Server) registerGatewayRuntime(w http.ResponseWriter, r *http.Request) {
 	if s.deps.GatewayRuntime == nil {

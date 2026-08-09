@@ -786,3 +786,9 @@ Production/live gates remain deliberately separate: genuine WWebJS/Baileys authe
 Security reminder: the active development PostgreSQL credential previously exposed in tool-visible output must still be treated as compromised until a fresh manual re-rotation and post-rotation health/integration proof are observed. Do not infer that rotation from these Task 5 tests.
 
 **Next engineering task after the Task 5 checkpoint commit: Task 6 — adversarial backend release-readiness review and fixes.** Do not start Railway+Hostinger integration or frontend implementation until Task 6 and Task 7 backend closure are complete.
+
+## Post-commit Task 5 record
+
+Task 5 checkpoint commit: `1ad6376d9850f7c603ce2a0269fe6452bfb41fcc` — `feat: complete Task 5 requirements reconciliation`.
+
+The Task 5 commit completed with a clean worktree. The next engineering activity is **Task 6 — adversarial backend release-readiness review and fixes**. Any Task 6 findings/fixes must be kept separate from the Task 5 checkpoint and must follow the same evidence-before-assertion/TDD/debugging rules.

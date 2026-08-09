@@ -262,6 +262,23 @@ func (b ImportBatch) Approve(actorID string, expectedVersion int64, consentEvide
 	return b, nil
 }
 
+func (b ImportBatch) Cancel(actorID, reason string, expectedVersion int64, now time.Time) (ImportBatch, error) {
+	if b.Version != expectedVersion {
+		return ImportBatch{}, ErrImportConflict
+	}
+	if b.Status != ImportPreviewReady {
+		return ImportBatch{}, ErrImportTransition
+	}
+	actorID, reason = strings.TrimSpace(actorID), strings.TrimSpace(reason)
+	if actorID == "" || len(reason) < 8 {
+		return ImportBatch{}, ErrImportTransition
+	}
+	b.Status, b.FailureReason = ImportCancelled, reason
+	b.Version++
+	b.UpdatedAt = now.UTC()
+	return b, nil
+}
+
 func isExactScanReplay(current ImportBatch, status MalwareStatus, signatureValid bool, reason string, expectedVersion int64) bool {
 	if current.Version != expectedVersion+1 || current.MalwareStatus != status || current.ContentSignatureValid != signatureValid {
 		return false
@@ -281,6 +298,7 @@ func isExactApprovalReplay(current ImportBatch, actorID string, expectedVersion 
 }
 
 func (b ImportBatch) RequestFingerprint() string {
+	mapping := canonicalImportJSON(b.Mapping)
 	payload, _ := json.Marshal(struct {
 		OrganisationID, ConsentReviewID, PurposeID, Channel, WordingVersion      string
 		SourceName, SourceSystem, ObjectKey, OriginalFilename, DetectedMediaType string
@@ -289,9 +307,21 @@ func (b ImportBatch) RequestFingerprint() string {
 		Mapping                                                                  json.RawMessage
 		UpdatePolicy                                                             UpdatePolicy
 		UploadedBy                                                               string
-	}{b.OrganisationID, b.ConsentReviewID, b.PurposeID, b.Channel, b.WordingVersion, b.SourceName, b.SourceSystem, b.ObjectKey, b.OriginalFilename, b.DetectedMediaType, b.FileSHA256, b.TemplateVersion, b.MappingDefinitionID, b.ByteSize, b.Mapping, b.UpdatePolicy, b.UploadedBy})
+	}{b.OrganisationID, b.ConsentReviewID, b.PurposeID, b.Channel, b.WordingVersion, b.SourceName, b.SourceSystem, b.ObjectKey, b.OriginalFilename, b.DetectedMediaType, b.FileSHA256, b.TemplateVersion, b.MappingDefinitionID, b.ByteSize, mapping, b.UpdatePolicy, b.UploadedBy})
 	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])
+}
+
+func canonicalImportJSON(raw json.RawMessage) json.RawMessage {
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return raw
+	}
+	normalized, err := json.Marshal(value)
+	if err != nil {
+		return raw
+	}
+	return normalized
 }
 
 func sameImportRequest(left, right ImportBatch) bool {
@@ -376,6 +406,23 @@ func (s *ImportService) Approve(ctx context.Context, identifier, actorID string,
 	return s.Repository.Approve(ctx, identifier, actorID, expectedVersion, now)
 }
 
+func (s *ImportService) Cancel(ctx context.Context, identifier, actorID, reason string, expectedVersion int64) (ImportBatch, error) {
+	if s == nil || s.Repository == nil {
+		return ImportBatch{}, errors.New("import repository is required")
+	}
+	repo, ok := s.Repository.(interface {
+		Cancel(context.Context, string, string, string, int64, time.Time) (ImportBatch, error)
+	})
+	if !ok {
+		return ImportBatch{}, errors.New("import cancellation is unavailable")
+	}
+	now := time.Now().UTC()
+	if s.Clock != nil {
+		now = s.Clock().UTC()
+	}
+	return repo.Cancel(ctx, identifier, actorID, reason, expectedVersion, now)
+}
+
 type MemoryImportRepository struct {
 	mu              sync.Mutex
 	items           map[string]ImportBatch
@@ -450,6 +497,20 @@ func (r *MemoryImportRepository) Approve(_ context.Context, identifier, actorID 
 	}
 	eligible := r.consentEligible[current.ConsentReviewID]
 	next, err := current.Approve(actorID, expectedVersion, eligible, now)
+	if err != nil {
+		return ImportBatch{}, err
+	}
+	r.items[identifier] = cloneImport(next)
+	return cloneImport(next), nil
+}
+func (r *MemoryImportRepository) Cancel(_ context.Context, identifier, actorID, reason string, expectedVersion int64, now time.Time) (ImportBatch, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	current, ok := r.items[identifier]
+	if !ok {
+		return ImportBatch{}, ErrImportNotFound
+	}
+	next, err := current.Cancel(actorID, reason, expectedVersion, now)
 	if err != nil {
 		return ImportBatch{}, err
 	}

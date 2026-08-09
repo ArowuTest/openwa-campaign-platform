@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	pgretry "campaign-platform/internal/persistence/postgres"
 )
@@ -63,10 +64,10 @@ func (r *PostgreSQLRepository) Append(ctx context.Context, event Event, expected
 		}
 		var before, after any
 		if len(event.Before) > 0 {
-			before = []byte(event.Before)
+			before = string(event.Before)
 		}
 		if len(event.After) > 0 {
-			after = []byte(event.After)
+			after = string(event.After)
 		}
 		const insert = `INSERT INTO audit_events(id,actor_id,actor_type,action,entity_type,entity_id,organisation_id,outcome,sensitivity,request_id,source_ip,user_agent,before_state,after_state,created_at,sequence,previous_hash,event_hash,reason_code,reason,correlation_id) VALUES($1,NULLIF($2,'')::uuid,$3,$4,$5,$6,NULLIF($7,'')::uuid,NULLIF($8,''),NULLIF($9,''),$10,NULLIF($11,'')::inet,NULLIF($12,''),$13,$14,$15,$16,$17,$18,NULLIF($19,''),NULLIF($20,''),$21)`
 		_, err = tx.ExecContext(ctx, insert, event.ID, event.ActorID, event.ActorType, event.Action, event.ObjectType, event.ObjectID, event.OrganisationID, event.Outcome, event.Sensitivity, event.CorrelationID, event.IPAddress, event.Device, before, after, event.OccurredAt, event.Sequence, event.PreviousHash, event.Hash, event.ReasonCode, event.Reason, event.CorrelationID)
@@ -91,22 +92,31 @@ func (r *PostgreSQLRepository) Append(ctx context.Context, event Event, expected
 	})
 }
 
-const auditEventSelect = `SELECT id,sequence,actor_type,coalesce(actor_id::text,''),action,entity_type,coalesce(entity_id,''),coalesce(organisation_id::text,''),coalesce(outcome,''),coalesce(sensitivity,''),coalesce(before_state,'null'::jsonb)::text,coalesce(after_state,'null'::jsonb)::text,coalesce(reason_code,''),coalesce(reason,''),coalesce(source_ip::text,''),coalesce(user_agent,''),coalesce(correlation_id,request_id,''),created_at,coalesce(previous_hash,''),coalesce(event_hash,'') FROM audit_events`
+const auditEventSelect = `SELECT id,sequence,actor_type,coalesce(actor_id::text,''),action,entity_type,coalesce(entity_id,''),coalesce(organisation_id::text,''),coalesce(outcome,''),coalesce(sensitivity,''),coalesce(before_state,'null'::jsonb)::text,coalesce(after_state,'null'::jsonb)::text,coalesce(reason_code,''),coalesce(reason,''),coalesce(host(source_ip),''),coalesce(user_agent,''),coalesce(correlation_id,request_id,''),created_at,coalesce(previous_hash,''),coalesce(event_hash,'') FROM audit_events`
 
 type auditScanner interface{ Scan(...any) error }
 
 func scanAuditEvent(row auditScanner) (Event, error) {
 	var event Event
 	var before, afterJSON string
+	var err error
 	if err := row.Scan(&event.ID, &event.Sequence, &event.ActorType, &event.ActorID, &event.Action, &event.ObjectType, &event.ObjectID, &event.OrganisationID, &event.Outcome, &event.Sensitivity, &before, &afterJSON, &event.ReasonCode, &event.Reason, &event.IPAddress, &event.Device, &event.CorrelationID, &event.OccurredAt, &event.PreviousHash, &event.Hash); err != nil {
 		return Event{}, err
 	}
 	if before != "null" {
-		event.Before = json.RawMessage(before)
+		event.Before, err = canonicalAuditJSON(json.RawMessage(before))
+		if err != nil {
+			return Event{}, err
+		}
 	}
 	if afterJSON != "null" {
-		event.After = json.RawMessage(afterJSON)
+		event.After, err = canonicalAuditJSON(json.RawMessage(afterJSON))
+		if err != nil {
+			return Event{}, err
+		}
 	}
+	event.IPAddress = canonicalAuditIP(event.IPAddress)
+	event.OccurredAt = event.OccurredAt.UTC().Round(time.Microsecond)
 	return event, nil
 }
 

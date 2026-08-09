@@ -1,12 +1,14 @@
 package audit
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -83,6 +85,7 @@ func New(input Input) (Event, error) {
 	if occurred.IsZero() {
 		occurred = time.Now().UTC()
 	}
+	occurred = occurred.UTC().Round(time.Microsecond)
 	before, err := marshalSummary(input.Before)
 	if err != nil {
 		return Event{}, fmt.Errorf("marshal before summary: %w", err)
@@ -96,7 +99,7 @@ func New(input Input) (Event, error) {
 		Action: clean(input.Action), ObjectType: clean(input.ObjectType), ObjectID: clean(input.ObjectID),
 		OrganisationID: clean(input.OrganisationID), Outcome: clean(input.Outcome), Sensitivity: clean(input.Sensitivity),
 		Before: before, After: after, ReasonCode: clean(input.ReasonCode), Reason: clean(input.Reason),
-		IPAddress: clean(input.IPAddress), Device: clean(input.Device), CorrelationID: clean(input.CorrelationID),
+		IPAddress: canonicalAuditIP(input.IPAddress), Device: clean(input.Device), CorrelationID: clean(input.CorrelationID),
 		OccurredAt: occurred,
 	}, nil
 }
@@ -117,7 +120,46 @@ func marshalSummary(value any) (json.RawMessage, error) {
 
 func clean(value string) string { return strings.TrimSpace(value) }
 
+func canonicalAuditIP(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if prefix, err := netip.ParsePrefix(value); err == nil {
+		return prefix.Addr().String()
+	}
+	if address, err := netip.ParseAddr(value); err == nil {
+		return address.String()
+	}
+	return value
+}
+
+func canonicalAuditJSON(raw json.RawMessage) (json.RawMessage, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	return json.Marshal(value)
+}
+
 func calculateHash(event Event) (string, error) {
+	before, err := canonicalAuditJSON(event.Before)
+	if err != nil {
+		return "", err
+	}
+	after, err := canonicalAuditJSON(event.After)
+	if err != nil {
+		return "", err
+	}
+	event.Before = before
+	event.After = after
+	event.IPAddress = canonicalAuditIP(event.IPAddress)
+	event.OccurredAt = event.OccurredAt.UTC().Round(time.Microsecond)
 	canonical := struct {
 		ID             string          `json:"id"`
 		Sequence       uint64          `json:"sequence"`

@@ -255,7 +255,7 @@ func (r *IdentityRepository) RecordFailedLogin(ctx context.Context, userID strin
 	}
 	res, err := r.DB.ExecContext(ctx, `UPDATE internal_user_credentials
 SET failed_login_count=failed_login_count+1,
-    locked_until=CASE WHEN failed_login_count+1 >= $3 THEN $2 + $4::interval ELSE locked_until END,
+    locked_until=CASE WHEN failed_login_count+1 >= $3 THEN $2::timestamptz + $4::interval ELSE locked_until END,
     updated_at=$2
 WHERE user_id=$1::uuid`, userID, now.UTC(), threshold, intervalLiteral(lockDuration))
 	if err != nil {

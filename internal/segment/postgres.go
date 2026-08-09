@@ -62,7 +62,7 @@ func (s *PostgreSQLStore) ensureWithMembersOnce(ctx context.Context, snapshot Sn
 INSERT INTO audience_snapshots(id,campaign_id,segment_id,segment_definition,definition_version,consent_policy_version,configuration_version,snapshot_hash,eligible_count,created_by,created_at)
 VALUES($1::uuid,$2::uuid,NULLIF($3,'')::uuid,$4::jsonb,$5,$6,$7,$8,$9,NULLIF($10,'')::uuid,$11)
 ON CONFLICT(campaign_id,snapshot_hash) DO NOTHING
-RETURNING id::text`, snapshot.ID, snapshot.CampaignID, snapshot.SegmentID, definition, snapshot.DefinitionVersion, snapshot.ConsentPolicyVersion, snapshot.ConfigurationVersion, snapshot.SnapshotHash, snapshot.EligibleCount, snapshot.CreatedBy, snapshot.CreatedAt).Scan(&insertedID)
+RETURNING id::text`, snapshot.ID, snapshot.CampaignID, snapshot.SegmentID, string(definition), snapshot.DefinitionVersion, snapshot.ConsentPolicyVersion, snapshot.ConfigurationVersion, snapshot.SnapshotHash, snapshot.EligibleCount, snapshot.CreatedBy, snapshot.CreatedAt).Scan(&insertedID)
 	if errors.Is(err, sql.ErrNoRows) {
 		existing, loadErr := getSnapshotTx(ctx, tx, snapshot.CampaignID, snapshot.SnapshotHash)
 		if loadErr != nil {

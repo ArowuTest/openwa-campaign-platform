@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -39,7 +40,7 @@ func TestPostgresAdversarialConcurrency(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `CREATE EXTENSION IF NOT EXISTS btree_gist`); err != nil {
 		t.Fatalf("create btree_gist: %v", err)
 	}
-	if _, err := db.ExecContext(ctx, fmt.Sprintf(`
+	setupSQL := fmt.Sprintf(`
 CREATE SCHEMA %s;
 CREATE TABLE %s.release_targets(id uuid PRIMARY KEY DEFAULT gen_random_uuid(), status text NOT NULL, version bigint NOT NULL);
 CREATE TABLE %s.jobs(id bigint PRIMARY KEY, status text NOT NULL, owner text);
@@ -53,8 +54,15 @@ INSERT INTO %s.jobs(id,status) VALUES(1,'QUEUED'),(2,'QUEUED');
 INSERT INTO %s.fences(fence_version,state) VALUES(7,'READY');`,
 		quotedSchema, quotedSchema, quotedSchema, quotedSchema, quotedSchema, quotedSchema,
 		quotedSchema, quotedSchema, quotedSchema, quotedSchema, quotedSchema, quotedSchema,
-	)); err != nil {
-		t.Fatalf("create adversarial schema: %v", err)
+	)
+	for _, statement := range strings.Split(setupSQL, ";") {
+		statement = strings.TrimSpace(statement)
+		if statement == "" {
+			continue
+		}
+		if _, err := db.ExecContext(ctx, statement); err != nil {
+			t.Fatalf("create adversarial schema: %v", err)
+		}
 	}
 	defer func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 20*time.Second)

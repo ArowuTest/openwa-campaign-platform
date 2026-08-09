@@ -224,8 +224,8 @@ WHERE id=$1::uuid AND version=$2 AND status='APPROVED'`,
 INSERT INTO consent_review_events(
   consent_review_id,event_type,actor_id,reason,review_version,evidence
 ) VALUES
-  ($1::uuid,'SUPERSEDED',$2::uuid,$3,$4,jsonb_build_object('replacementId',$5)),
-  ($5::uuid,'CREATED',$2::uuid,$6,$7,jsonb_build_object('parentId',$1))`,
+  ($1::uuid,'SUPERSEDED',$2::uuid,$3,$4,jsonb_build_object('replacementId',$5::text)),
+  ($5::uuid,'CREATED',$2::uuid,$6,$7,jsonb_build_object('parentId',$1::text))`,
 		previous.ID, replacement.CreatedBy, previous.LastTransitionReason, previous.Version,
 		replacement.ID, replacement.LastTransitionReason, replacement.Version,
 	)

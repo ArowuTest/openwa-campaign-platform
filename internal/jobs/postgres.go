@@ -24,7 +24,7 @@ INSERT INTO durable_jobs (
  max_attempts, available_at, created_at, updated_at
 ) VALUES ($1,$2,$3,$4,'PENDING',$5,0,$6,$7,$8,$8)
 ON CONFLICT (deduplication_key) DO NOTHING`
-	result, err := r.DB.ExecContext(ctx, query, job.ID, job.Type, job.DedupKey, []byte(job.Payload), job.Priority, job.MaxAttempts, job.AvailableAt, job.CreatedAt)
+	result, err := r.DB.ExecContext(ctx, query, job.ID, job.Type, job.DedupKey, string(job.Payload), job.Priority, job.MaxAttempts, job.AvailableAt, job.CreatedAt)
 	if err != nil {
 		return Job{}, false, fmt.Errorf("insert durable job: %w", err)
 	}

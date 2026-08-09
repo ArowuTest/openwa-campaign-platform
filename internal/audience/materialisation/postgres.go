@@ -40,7 +40,7 @@ INSERT INTO audience_materialisation_jobs(
  expected_count,rolling_hash,attempt_count,next_attempt_at,version,requested_at,updated_at)
 VALUES($1::uuid,$2::uuid,NULLIF($3,'')::uuid,$4::jsonb,$5,$6::jsonb,$7,$8,$9::uuid,$10,$11,0,$12,$13,0,$14,1,$15,$15)
 ON CONFLICT(campaign_id,request_fingerprint) DO NOTHING
-RETURNING id::text`, job.ID, job.CampaignID, job.SegmentID, definition, job.DefinitionVersion, eligibility,
+RETURNING id::text`, job.ID, job.CampaignID, job.SegmentID, string(definition), job.DefinitionVersion, string(eligibility),
 		job.ConsentPolicyVersion, job.ConfigurationVersion, job.RequestedBy, job.RequestFingerprint, job.Status,
 		job.ExpectedCount, job.RollingHash, job.NextAttemptAt, job.RequestedAt).Scan(&createdID)
 	if err == nil {
@@ -209,7 +209,7 @@ ON CONFLICT(job_id,contact_id) DO NOTHING`, identifier, string(payload), now)
 	}
 	result, err = tx.ExecContext(ctx, `
 UPDATE audience_materialisation_jobs
-SET processed_count=$4,last_contact_id=$3::uuid,rolling_hash=$5,
+SET status='PENDING',processed_count=$4,last_contact_id=$3::uuid,rolling_hash=$5,
     lease_expires_at=NULL,lease_owner=NULL,version=version+1,updated_at=$6
 WHERE id=$1::uuid AND lease_token=$2 AND status='RUNNING' AND expected_count >= $4`,
 		identifier, token, lastContactID, processedCount, rollingHash, now)
@@ -355,7 +355,7 @@ func (r *PostgreSQLRepository) CommitSnapshot(ctx context.Context, identifier st
 INSERT INTO audience_snapshots(id,campaign_id,segment_id,segment_definition,definition_version,consent_policy_version,configuration_version,snapshot_hash,eligible_count,created_by,created_at)
 VALUES($1::uuid,$2::uuid,NULLIF($3,'')::uuid,$4::jsonb,$5,$6,$7,$8,$9,$10::uuid,$11)
 ON CONFLICT(campaign_id,snapshot_hash) DO NOTHING
-RETURNING id::text`, snapshot.ID, snapshot.CampaignID, snapshot.SegmentID, definition, snapshot.DefinitionVersion, snapshot.ConsentPolicyVersion, snapshot.ConfigurationVersion, snapshot.SnapshotHash, snapshot.EligibleCount, snapshot.CreatedBy, snapshot.CreatedAt).Scan(&snapshotID)
+RETURNING id::text`, snapshot.ID, snapshot.CampaignID, snapshot.SegmentID, string(definition), snapshot.DefinitionVersion, snapshot.ConsentPolicyVersion, snapshot.ConfigurationVersion, snapshot.SnapshotHash, snapshot.EligibleCount, snapshot.CreatedBy, snapshot.CreatedAt).Scan(&snapshotID)
 	created := true
 	if errors.Is(err, sql.ErrNoRows) {
 		created = false

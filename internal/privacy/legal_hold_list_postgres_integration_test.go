@@ -32,6 +32,10 @@ func TestPostgreSQLLegalHoldPaginationContinuesWithoutSkipping(t *testing.T) {
 		t.Fatal(err)
 	}
 	lookup := protector.LookupHMAC("+2348012345678")
+	if _, err := db.ExecContext(ctx, `DELETE FROM privacy_legal_holds WHERE subject_lookup_hmac=$1`, lookup); err != nil {
+		t.Fatal(err)
+	}
+	defer db.ExecContext(context.Background(), `DELETE FROM privacy_legal_holds WHERE subject_lookup_hmac=$1`, lookup)
 	var actor string
 	if err := db.QueryRowContext(ctx, `SELECT gen_random_uuid()::text`).Scan(&actor); err != nil {
 		t.Fatal(err)

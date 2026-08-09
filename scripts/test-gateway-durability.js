@@ -93,11 +93,15 @@ async function testObservabilitySanitisation() {
   }
 
   const observability = new GatewayObservabilityService();
+  const rawMsisdn = '+2348012345678';
+  observability.observeHttp('POST', '/v1/messages', 202, 0.01);
   observability.increment('gateway_test_total', { 'bad-key': 'first', 'bad key': 'discarded', '9code': 'value' });
   observability.gauge('gateway_runtime_last_success_seconds', 123, { node: 'node-1' });
   observability.observe('gateway_runtime_duration_seconds', 0.25, { node: 'node-1' });
   observability.observe('gateway_runtime_duration_seconds', 0.75, { node: 'node-1' });
   const metrics = observability.prometheus();
+  assert.equal(metrics.includes(rawMsisdn), false, 'Prometheus output leaked recipient MSISDN');
+  assert.equal(metrics.includes('/v1/messages'), true, 'static send route missing from HTTP metrics');
   assert.equal(metrics.includes('bad-key='), false);
   assert.equal(metrics.includes('bad key='), false);
   assert.equal((metrics.match(/bad_key=/g) ?? []).length, 1);
@@ -133,6 +137,11 @@ async function testIdempotencyDurability() {
   const replay = await restarted.execute(request, async () => { throw new Error('provider must not be called'); });
   assert.equal(replay.duplicate, true);
   assert.equal(replay.providerMessageId, 'provider-1');
+
+  const persisted = (await Promise.all((await fs.readdir(directory)).map(name => fs.readFile(path.join(directory, name), 'utf8')))).join('\n');
+  for (const forbidden of [request.recipientMsisdn, request.body, request.routeReference, request.clientReference]) {
+    assert.equal(persisted.includes(forbidden), false, `durable gateway idempotency storage leaked send payload field: ${forbidden}`);
+  }
 
   const unknownRequest = sendRequest('idem-key-0000000000000002');
   await assert.rejects(() => service.execute(unknownRequest, async () => { throw new Error('ambiguous provider failure'); }), /ambiguous provider failure/);

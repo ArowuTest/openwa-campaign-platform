@@ -18,7 +18,7 @@ func (s *PostgreSQLStore) RecordAdmission(ctx context.Context, e CapacityEvidenc
 	if err != nil {
 		return err
 	}
-	_, err = s.DB.ExecContext(ctx, `INSERT INTO campaign_capacity_assessments(campaign_id,capacity_reference_id,evidence_version,remaining_recipients,available_messages_per_minute,available_daily_capacity,safety_margin_percent,required_messages_per_minute,effective_messages_per_minute,forecast_completion_at,deadline_at,decision,reasons,evaluated_at) VALUES($1::uuid,$2::uuid,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`, e.CampaignID, e.PoolID, e.EvidenceVersion, e.RemainingRecipients, e.AvailableMessagesPerMinute, e.AvailableDailyCapacity, e.SafetyMarginPercent, e.RequiredMessagesPerMinute, e.EffectiveMessagesPerMinute, e.ForecastCompletionAt, e.DeadlineAt, e.Decision, reasons, e.EvaluatedAt)
+	_, err = s.DB.ExecContext(ctx, `INSERT INTO campaign_capacity_assessments(campaign_id,capacity_reference_id,evidence_version,remaining_recipients,available_messages_per_minute,available_daily_capacity,safety_margin_percent,required_messages_per_minute,effective_messages_per_minute,forecast_completion_at,deadline_at,decision,reasons,evaluated_at) VALUES($1::uuid,$2::uuid,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`, e.CampaignID, e.PoolID, e.EvidenceVersion, e.RemainingRecipients, e.AvailableMessagesPerMinute, e.AvailableDailyCapacity, e.SafetyMarginPercent, e.RequiredMessagesPerMinute, e.EffectiveMessagesPerMinute, e.ForecastCompletionAt, e.DeadlineAt, e.Decision, string(reasons), e.EvaluatedAt)
 	return err
 }
 func (s *PostgreSQLStore) Metrics(ctx context.Context, id string) (Metrics, error) {

@@ -102,7 +102,8 @@ func (r *PostgreSQLMergeRepository) mergeOnce(ctx context.Context, importID stri
 	}
 
 	result := MergeResult{}
-	if _, err := tx.ExecContext(ctx, captureExistingImportMutationsSQL, importID, now.UTC()); err != nil {
+	var existingMutations int
+	if err := tx.QueryRowContext(ctx, captureExistingImportMutationsSQL, importID, now.UTC()).Scan(&existingMutations); err != nil {
 		return MergeResult{}, fmt.Errorf("capture existing contact state: %w", err)
 	}
 	upsertSQL := upsertContactsNewestSQL
@@ -120,12 +121,16 @@ func (r *PostgreSQLMergeRepository) mergeOnce(ctx context.Context, importID stri
 			return MergeResult{}, fmt.Errorf("capture profile conflicts: %w", err)
 		}
 	}
-	if err := tx.QueryRowContext(ctx, upsertSQL, importID, now.UTC()).Scan(&result.InsertedContacts, &result.UpdatedContacts); err != nil {
+	var ignoredInserted, ignoredUpdated int
+	if err := tx.QueryRowContext(ctx, upsertSQL, importID, now.UTC()).Scan(&ignoredInserted, &ignoredUpdated); err != nil {
 		return MergeResult{}, fmt.Errorf("merge canonical contacts: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, captureInsertedImportMutationsSQL, importID, now.UTC()); err != nil {
+	var insertedMutations int
+	if err := tx.QueryRowContext(ctx, captureInsertedImportMutationsSQL, importID, now.UTC()).Scan(&insertedMutations); err != nil {
 		return MergeResult{}, fmt.Errorf("capture inserted contact state: %w", err)
 	}
+	result.InsertedContacts = insertedMutations
+	result.UpdatedContacts = existingMutations
 	if err := tx.QueryRowContext(ctx, insertContactSourcesSQL, importID, now.UTC()).Scan(&result.SourceLinks); err != nil {
 		return MergeResult{}, fmt.Errorf("merge contact sources: %w", err)
 	}
@@ -320,7 +325,7 @@ WITH candidates AS MATERIALIZED (
  JOIN contacts ct ON ct.msisdn_lookup_hmac=s.msisdn_lookup_hmac
  WHERE s.audience_import_id=$1::uuid
 ), existing AS MATERIALIZED (
- SELECT cs.id
+ SELECT cs.contact_id,cs.organisation_id,cs.source_record_hash
  FROM contact_sources cs
  JOIN candidates c ON c.contact_id=cs.contact_id
    AND c.organisation_id=cs.organisation_id
@@ -337,10 +342,10 @@ WITH candidates AS MATERIALIZED (
      source_system=c.source_system,
      source_record_id=c.source_record_id,
      last_seen_at=GREATEST(cs.last_seen_at,c.observed_at)
- FROM candidates c,existing e
- WHERE cs.id=e.id AND cs.contact_id=c.contact_id
-   AND cs.organisation_id=c.organisation_id
-   AND cs.source_record_hash=c.source_record_hash
+ FROM candidates c JOIN existing e
+   ON e.contact_id=c.contact_id AND e.organisation_id=c.organisation_id AND e.source_record_hash=c.source_record_hash
+ WHERE cs.contact_id=e.contact_id AND cs.organisation_id=e.organisation_id
+   AND cs.source_record_hash=e.source_record_hash
  RETURNING 1
 )
 SELECT count(*) FROM inserted`
@@ -356,15 +361,30 @@ inserted AS (
 SELECT count(*) FROM inserted`
 
 const insertConsentGrantsSQL = `
-WITH inserted AS (
- INSERT INTO consent_grants(contact_id,organisation_id,purpose_id,channel,wording_version,source_type,source_reference,granted_at,expires_at,status,reviewed_by,reviewed_at,source_import_id,created_at,updated_at)
- SELECT ct.id,ai.organisation_id,ai.purpose_id,upper(ai.channel),ai.wording_version,'AUDIENCE_IMPORT',ai.id::text,
-        coalesce(ai.granted_at,ai.approved_at,ai.created_at),ai.expires_at,'ACTIVE',ai.approved_by,ai.approved_at,ai.id,$2,$2
+WITH candidates AS MATERIALIZED (
+ SELECT ct.id AS contact_id,ai.organisation_id,ai.purpose_id::text AS purpose_id,upper(ai.channel) AS channel,
+        ai.consent_review_id,ai.wording_version,ai.id AS source_import_id,ai.id::text AS source_reference,
+        ai.object_key AS evidence_object_key,lower(ai.file_sha256) AS evidence_checksum,
+        coalesce(ai.granted_at,ai.approved_at,ai.created_at) AS granted_at,ai.expires_at,ai.approved_by AS created_by,
+        'audience-import:'||ai.id::text||':'||ct.id::text AS client_request_id,
+        encode(digest(concat_ws(chr(31),ct.id::text,ai.organisation_id::text,ai.purpose_id::text,upper(ai.channel),
+          ai.consent_review_id::text,ai.wording_version,'AUDIENCE_IMPORT',ai.id::text,ai.object_key,lower(ai.file_sha256),
+          coalesce(ai.expires_at::text,''),'ACTIVE',ai.approved_by::text),'sha256'),'hex') AS request_fingerprint
  FROM audience_import_staging s
  JOIN audience_imports ai ON ai.id=s.audience_import_id
  JOIN contacts ct ON ct.msisdn_lookup_hmac=s.msisdn_lookup_hmac
- WHERE s.audience_import_id=$1::uuid
+ WHERE s.audience_import_id=$1::uuid AND ai.approved_by IS NOT NULL AND ai.consent_review_id IS NOT NULL
+), inserted AS (
+ INSERT INTO consent_grants(contact_id,organisation_id,purpose_id,channel,consent_review_id,wording_version,source_type,source_reference,evidence_object_key,evidence_checksum,effective_from,granted_at,expires_at,status,reviewed_by,reviewed_at,source_import_id,created_by,client_request_id,request_fingerprint,created_at,updated_at)
+ SELECT contact_id,organisation_id,purpose_id,channel,consent_review_id,wording_version,'AUDIENCE_IMPORT',source_reference,
+        evidence_object_key,evidence_checksum,granted_at,granted_at,expires_at,'ACTIVE',created_by,granted_at,source_import_id,
+        created_by,client_request_id,request_fingerprint,$2,$2
+ FROM candidates
  ON CONFLICT(contact_id,purpose_id,channel,source_import_id) WHERE source_import_id IS NOT NULL DO NOTHING
+ RETURNING id,contact_id,source_reference,created_by,created_at
+), events AS (
+ INSERT INTO consent_events(id,contact_id,grant_id,event_type,actor_id,source_reference,occurred_at)
+ SELECT gen_random_uuid(),contact_id,id,'GRANT_CREATED',created_by,source_reference,created_at FROM inserted
  RETURNING 1
 )
 SELECT count(*) FROM inserted`

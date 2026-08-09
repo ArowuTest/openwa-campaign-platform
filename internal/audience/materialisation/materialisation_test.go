@@ -52,7 +52,7 @@ func TestWorkerMaterialisesInRestartSafePages(t *testing.T) {
 		t.Fatal(err)
 	}
 	first, _ := jobs.Get(ctx, job.ID)
-	if first.ProcessedCount != 2 || first.Status != MaterialisationRunning {
+	if first.ProcessedCount != 2 || first.Status != MaterialisationPending || first.LeaseOwner != "" || first.LeaseExpiresAt != nil {
 		t.Fatalf("first=%#v", first)
 	}
 	if err := worker.runOnce(ctx); err != nil {

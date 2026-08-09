@@ -355,6 +355,17 @@ FROM authority`
 		return err
 	}
 	if rows != 1 {
+		const rejectQuery = `
+INSERT INTO gateway_session_authority_events(
+  session_id,owner_node_id,session_lease_version,session_configuration_version,gateway_node_version,
+  authority_expires_at,route_reference,event_type,evidence,occurred_at
+) VALUES(
+  $1::uuid,$2::uuid,$3,$4,$5,$6,$7,'REJECTED',
+  jsonb_build_object('source','DISPATCH','reason','STALE_OR_CONFLICTING_AUTHORITY','rejectedAt',$8::timestamptz),$8::timestamptz
+)`
+		if _, auditErr := l.DB.ExecContext(ctx, rejectQuery, sessionID, route.GatewayNodeID, route.SessionLeaseVersion, route.SessionConfigurationVersion, route.GatewayNodeVersion, route.AuthorityExpiresAt, routeReference, now); auditErr != nil {
+			return fmt.Errorf("record rejected gateway authority: %w", auditErr)
+		}
 		return errors.New("gateway authority was rejected as stale or conflicting")
 	}
 	return nil
@@ -512,7 +523,7 @@ WITH basis AS (
   FROM consent_grants cg, basis b
   WHERE cg.contact_id=b.contact_id
     AND cg.organisation_id=b.organisation_id
-    AND cg.purpose_id=b.purpose_id
+    AND cg.purpose_id=b.purpose_id::text
     AND upper(cg.channel)='WHATSAPP'
     AND cg.effective_from <= $2
   ORDER BY cg.effective_from DESC, cg.created_at DESC, cg.id DESC
@@ -541,11 +552,11 @@ SELECT CASE
       AND (sp.expires_at IS NULL OR sp.expires_at>$2)
       AND (sp.scope='GLOBAL'
         OR (sp.scope='ORGANISATION' AND sp.organisation_id=b.organisation_id)
-        OR (sp.scope='PURPOSE' AND sp.purpose_id=b.purpose_id)
+        OR (sp.scope='PURPOSE' AND sp.purpose_id=b.purpose_id::text)
         OR (sp.scope='CHANNEL' AND upper(sp.channel)='WHATSAPP')
         OR (sp.scope='TEMPORARY'
            AND (sp.organisation_id IS NULL OR sp.organisation_id=b.organisation_id)
-           AND (sp.purpose_id IS NULL OR sp.purpose_id=b.purpose_id)
+           AND (sp.purpose_id IS NULL OR sp.purpose_id=b.purpose_id::text)
            AND (sp.channel IS NULL OR upper(sp.channel)='WHATSAPP')))
   ) THEN 'SUPPRESSED'
   WHEN EXISTS (
@@ -557,7 +568,7 @@ SELECT CASE
       AND op.status='ACTIVE'
       AND op.effective_from<=$2
       AND (op.effective_to IS NULL OR op.effective_to>$2)
-      AND (coalesce(fc."purposeId", '')='' OR fc."purposeId"=b.purpose_id)
+      AND (coalesce(fc."purposeId", '')='' OR fc."purposeId"=b.purpose_id::text)
       AND upper(fc."channel")='WHATSAPP'
       AND (
         SELECT count(*)

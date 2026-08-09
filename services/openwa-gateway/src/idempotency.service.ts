@@ -27,7 +27,7 @@ export class IdempotencyService implements OnModuleInit {
 
   async onModuleInit() {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
-    await this.cleanup(Date.now());
+    await this.cleanup(Date.now(), true);
   }
 
   async execute(request: SendRequest, operation: () => Promise<SendResult>): Promise<SendResult> {
@@ -103,7 +103,7 @@ export class IdempotencyService implements OnModuleInit {
     return entries.filter(name => /^[A-Za-z0-9_-]+\.json$/.test(name)).length;
   }
 
-  private async cleanup(nowMilliseconds: number): Promise<void> {
+  private async cleanup(nowMilliseconds: number, recoverPendingAfterRestart = false): Promise<void> {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     const completedBefore = nowMilliseconds - this.completedRetentionDays * 86_400_000;
     const pendingBefore = nowMilliseconds - this.pendingMaximumMinutes * 60_000;
@@ -122,7 +122,7 @@ export class IdempotencyService implements OnModuleInit {
       if (stored.state === 'COMPLETED' && Number.isFinite(completed) && completed <= completedBefore) {
         await rm(path, { force: true });
         await syncDirectory(this.directory);
-      } else if (stored.state === 'PENDING' && Number.isFinite(created) && created <= pendingBefore) {
+      } else if (stored.state === 'PENDING' && Number.isFinite(created) && (recoverPendingAfterRestart || created <= pendingBefore)) {
         await replacePath(path, { ...stored, state: 'UNKNOWN', completedAt: new Date(nowMilliseconds).toISOString() });
       }
       // UNKNOWN is never deleted automatically; only governed reconciliation can close it.

@@ -38,3 +38,26 @@ func TestCommercialTotalMustMatch(t *testing.T) {
 		t.Fatal("expected invalid total")
 	}
 }
+
+func TestCommercialEntitlementCannotBeReusedByAnotherCampaign(t *testing.T) {
+	s := &Service{Store: NewMemoryStore(), Clock: func() time.Time { return time.Date(2026, 8, 8, 15, 0, 0, 0, time.UTC) }}
+	paid := time.Date(2026, 8, 8, 14, 0, 0, 0, time.UTC)
+	r, err := s.CreateDraft(context.Background(), Record{CampaignID: "campaign-a", OrganisationID: "org", QuotationReference: "Q-A", InvoiceReference: "I-A", Currency: "NGN", ApprovedRecipients: 100, UnitPriceMinor: 50, TotalAmountMinor: 5000, PaymentReference: "PAY-A", PaymentReceivedAt: &paid}, "maker", "campaign a entitlement")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err = s.Submit(context.Background(), r.ID, r.Version, "maker", "submit entitlement")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err = s.Decide(context.Background(), r.ID, r.Version, true, "checker", "approve entitlement")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ValidateCampaignApproval(context.Background(), "campaign-b", "org", 100); err == nil {
+		t.Fatal("campaign B reused campaign A entitlement")
+	}
+	if id, err := s.ValidateCampaignApproval(context.Background(), "campaign-a", "org", 100); err != nil || id != r.ID {
+		t.Fatalf("campaign A entitlement invalid: id=%q err=%v", id, err)
+	}
+}

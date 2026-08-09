@@ -33,3 +33,9 @@ func TestRejectsAlphabeticCharactersInsteadOfSilentlyRemovingThem(t *testing.T) 
 		t.Fatal("expected unsupported character error")
 	}
 }
+
+func TestRejectsNationalNumberWithoutExplicitCountry(t *testing.T) {
+	if _, err := NormalizeMSISDN("08012345678", ""); err == nil {
+		t.Fatal("national number without an explicit country was guessed")
+	}
+}

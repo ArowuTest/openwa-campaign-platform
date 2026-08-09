@@ -90,18 +90,18 @@ WHERE id=$1::uuid AND status='VALIDATING' AND validation_lease_owner=$2
 }
 
 type stagedJSON struct {
-	RowNumber         int    `json:"rowNumber"`
-	EncryptedHex      string `json:"encryptedHex"`
-	LookupHMACHex     string `json:"lookupHmacHex"`
-	MaskedMSISDN      string `json:"maskedMsisdn"`
-	CountryISO2       string `json:"countryIso2"`
-	StateName         string `json:"stateName,omitempty"`
-	LGAName           string `json:"lgaName,omitempty"`
-	ReportedAge       *int   `json:"reportedAge,omitempty"`
-	AgeRecordedDate   string `json:"ageRecordedDate,omitempty"`
-	ProfileRecordedAt string `json:"profileRecordedAt"`
-	GenderCode        string `json:"genderCode,omitempty"`
-	SourceHash        string `json:"sourceHash"`
+	RowNumber         int    `json:"row_number"`
+	EncryptedHex      string `json:"encrypted_hex"`
+	LookupHMACHex     string `json:"lookup_hmac_hex"`
+	MaskedMSISDN      string `json:"masked_msisdn"`
+	CountryISO2       string `json:"country_iso2"`
+	StateName         string `json:"state_name,omitempty"`
+	LGAName           string `json:"lga_name,omitempty"`
+	ReportedAge       *int   `json:"reported_age,omitempty"`
+	AgeRecordedDate   string `json:"age_recorded_date,omitempty"`
+	ProfileRecordedAt string `json:"profile_recorded_at"`
+	GenderCode        string `json:"gender_code,omitempty"`
+	SourceHash        string `json:"source_hash"`
 }
 
 func (r *PostgreSQLStagingRepository) StageBatch(ctx context.Context, importID string, lease ValidationLease, candidates []ContactCandidate) (StageBatchResult, error) {
@@ -219,7 +219,7 @@ SELECT (SELECT count(*) FROM inserted),
        (SELECT count(*) FROM existing_by_row WHERE incoming_lookup=stored_lookup),
        (SELECT count(*) FROM existing_by_row WHERE incoming_lookup<>stored_lookup)`
 		var value stageOutcome
-		if err := tx.QueryRowContext(ctx, query, importID, encoded, now).Scan(&value.result.Inserted, &value.result.SourceDuplicates, &value.result.Replayed, &value.mismatches); err != nil {
+		if err := tx.QueryRowContext(ctx, query, importID, string(encoded), now).Scan(&value.result.Inserted, &value.result.SourceDuplicates, &value.result.Replayed, &value.mismatches); err != nil {
 			return stageOutcome{}, fmt.Errorf("stage import batch: %w", err)
 		}
 		if value.mismatches != 0 {

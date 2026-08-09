@@ -68,7 +68,7 @@ func (r *CampaignWorkspaceRepository) SetTags(ctx context.Context, id string, ta
 		return campaignworkspace.Workspace{}, err
 	}
 	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `UPDATE campaign_workspaces SET tags=$2,version=version+1,updated_at=$3 WHERE campaign_id=$1 AND version=$4`, id, b, now, expected)
+	res, err := tx.ExecContext(ctx, `UPDATE campaign_workspaces SET tags=$2,version=version+1,updated_at=$3 WHERE campaign_id=$1 AND version=$4`, id, string(b), now, expected)
 	if err != nil {
 		return campaignworkspace.Workspace{}, err
 	}
@@ -100,7 +100,7 @@ func (r *CampaignWorkspaceRepository) Archive(ctx context.Context, id string, ar
 		return campaignworkspace.Workspace{}, err
 	}
 	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `UPDATE campaign_workspaces SET archived=$2,archived_by=CASE WHEN $2 THEN $3::uuid ELSE NULL END,archived_at=CASE WHEN $2 THEN $4 ELSE NULL END,archive_reason=$5,version=version+1,updated_at=$4 WHERE campaign_id=$1 AND version=$6`, id, archived, actor, now, reason, expected)
+	res, err := tx.ExecContext(ctx, `UPDATE campaign_workspaces SET archived=$2,archived_by=CASE WHEN $2 THEN $3::uuid ELSE NULL END,archived_at=CASE WHEN $2 THEN $4::timestamptz ELSE NULL END,archive_reason=$5,version=version+1,updated_at=$4 WHERE campaign_id=$1 AND version=$6`, id, archived, actor, now, reason, expected)
 	if err != nil {
 		return campaignworkspace.Workspace{}, err
 	}

@@ -228,6 +228,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/audience-imports", s.require("audience.write", s.intakeAudienceImport))
 	mux.Handle("GET /api/v1/audience-imports/{id}", s.require("audience.read", s.getAudienceImport))
 	mux.Handle("POST /api/v1/audience-imports/{id}/approve", s.require("audience.approve", s.approveAudienceImport))
+	mux.Handle("POST /api/v1/audience-imports/{id}/cancel", s.require("audience.write", s.cancelAudienceImport))
 	mux.Handle("POST /api/v1/audience-imports/{id}/rollback", s.require("audience.import.rollback", s.rollbackAudienceImport))
 	mux.Handle("GET /api/v1/audience-imports/{id}/issues.csv", s.require("audience.read", s.downloadAudienceImportIssues))
 	mux.Handle("GET /api/v1/contacts/{id}/lifecycle", s.require("audience.read", s.getContactLifecycle))
@@ -2058,6 +2059,35 @@ func (s *Server) approveAudienceImport(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+type cancelAudienceImportRequest struct {
+	ExpectedVersion int64  `json:"expectedVersion"`
+	Reason          string `json:"reason"`
+}
+
+func (s *Server) cancelAudienceImport(w http.ResponseWriter, r *http.Request) {
+	if s.deps.AudienceImports == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "AUDIENCE_IMPORTS_UNAVAILABLE", "Audience-import records are not configured.", nil)
+		return
+	}
+	var input cancelAudienceImportRequest
+	if err := httpx.DecodeJSON(w, r, 64<<10, &input); err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The import cancellation request is invalid.", map[string]any{"detail": err.Error()})
+		return
+	}
+	principal, _ := identity.PrincipalFromContext(r.Context())
+	batch, err := s.deps.AudienceImports.Cancel(r.Context(), r.PathValue("id"), principal.User.ID, input.Reason, input.ExpectedVersion)
+	switch {
+	case errors.Is(err, importer.ErrImportNotFound):
+		httpx.WriteError(w, r, http.StatusNotFound, "AUDIENCE_IMPORT_NOT_FOUND", "The audience import was not found.", nil)
+	case errors.Is(err, importer.ErrImportConflict):
+		httpx.WriteError(w, r, http.StatusConflict, "AUDIENCE_IMPORT_VERSION_CONFLICT", "The audience import changed; reload before cancelling.", nil)
+	case err != nil:
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "AUDIENCE_IMPORT_CANCELLATION_REJECTED", "The audience import cancellation was rejected.", map[string]any{"detail": err.Error()})
+	default:
+		httpx.WriteJSON(w, http.StatusOK, batch)
+	}
+}
+
 func (s *Server) previewAudienceImport(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_MULTIPART", "The import request must be multipart form data.", map[string]any{"detail": err.Error()})
@@ -2529,7 +2559,7 @@ func (s *Server) approveMessageVersion(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) createAudienceSnapshot(w http.ResponseWriter, r *http.Request) {
-	if s.deps.Snapshots == nil {
+	if s.deps.Snapshots == nil || s.deps.Cohorts == nil {
 		httpx.WriteError(w, r, http.StatusServiceUnavailable, "SNAPSHOT_SERVICE_UNAVAILABLE", "Audience snapshots are unavailable.", nil)
 		return
 	}
@@ -2558,6 +2588,26 @@ func (s *Server) createAudienceSnapshot(w http.ResponseWriter, r *http.Request) 
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "SEGMENT_INVALID", "The snapshot definition is invalid.", map[string]any{"detail": err.Error()})
 		return
 	}
+	limit := int(campaignEntity.MaximumUniqueRecipients)
+	if limit <= 0 || limit > 100_000 {
+		limit = 100_000
+	}
+	members, err := s.deps.Cohorts.Materialise(r.Context(), input.Definition, cohort.EligibilityContext{
+		OrganisationID: campaignEntity.OrganisationID, PurposeID: campaignEntity.PurposeID, Channel: "WHATSAPP", AsOf: time.Now().UTC(),
+	}, principal.User.HasPermission, limit)
+	if errors.Is(err, cohort.ErrCohortTooLarge) {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "COHORT_TOO_LARGE", "The eligible cohort exceeds the synchronous snapshot limit.", nil)
+		return
+	}
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "COHORT_MATERIALISATION_FAILED", "The cohort could not be materialised.", map[string]any{"detail": err.Error()})
+		return
+	}
+	if len(members) == 0 {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "COHORT_EMPTY", "The governed cohort contains no eligible contacts.", nil)
+		return
+	}
+	input.Members = members
 	created, err := s.deps.Snapshots.Create(r.Context(), input)
 	if err != nil {
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "SNAPSHOT_FAILED", "The audience snapshot could not be materialised.", map[string]any{"detail": err.Error()})

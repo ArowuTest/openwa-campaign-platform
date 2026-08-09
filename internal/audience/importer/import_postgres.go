@@ -19,8 +19,9 @@ func (r *PostgreSQLImportRepository) Create(ctx context.Context, batch ImportBat
 		return ImportBatch{}, false, errors.New("database is required")
 	}
 	type result struct {
-		Batch   ImportBatch
-		Created bool
+		Batch       ImportBatch
+		Created     bool
+		BusinessErr error
 	}
 	value, err := pgretry.RetryValue(ctx, pgretry.DefaultRetryPolicy(), func() (result, error) {
 		tx, err := r.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
@@ -46,7 +47,7 @@ func (r *PostgreSQLImportRepository) Create(ctx context.Context, batch ImportBat
 			if err := tx.Commit(); err != nil {
 				return result{}, err
 			}
-			return result{Batch: existing}, ErrDuplicateImportFile
+			return result{Batch: existing, BusinessErr: ErrDuplicateImportFile}, nil
 		}
 		if !errors.Is(err, sql.ErrNoRows) {
 			return result{}, err
@@ -58,7 +59,7 @@ INSERT INTO audience_imports(
  malware_scan_status,content_signature_valid,client_request_id,uploaded_by,source_expires_at,version,created_at,updated_at
 ) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,$6,$7,NULLIF($8,''),NULLIF($9,'')::char(2),$10,$11,$12,$13,$14,$15,NULLIF($16,'')::uuid,$17::jsonb,$18,$19,$20,$21,$22,NULLIF($23,'')::uuid,$24,$25,$26,$26)`,
 			batch.ID, batch.OrganisationID, batch.ConsentReviewID, batch.PurposeID, batch.Channel, batch.WordingVersion, batch.SourceName, batch.SourceSystem, batch.DefaultCountryISO2,
-			batch.ObjectKey, batch.OriginalFilename, batch.DetectedMediaType, batch.FileSHA256, batch.ByteSize, batch.TemplateVersion, batch.MappingDefinitionID, []byte(batch.Mapping), batch.UpdatePolicy, batch.Status,
+			batch.ObjectKey, batch.OriginalFilename, batch.DetectedMediaType, batch.FileSHA256, batch.ByteSize, batch.TemplateVersion, batch.MappingDefinitionID, string(batch.Mapping), batch.UpdatePolicy, batch.Status,
 			batch.MalwareStatus, batch.ContentSignatureValid, batch.ClientRequestID, batch.UploadedBy, batch.SourceExpiresAt, batch.Version, batch.CreatedAt)
 		if err != nil {
 			return result{}, fmt.Errorf("insert audience import: %w", err)
@@ -70,6 +71,9 @@ INSERT INTO audience_imports(
 	})
 	if err != nil {
 		return value.Batch, value.Created, err
+	}
+	if value.BusinessErr != nil {
+		return value.Batch, value.Created, value.BusinessErr
 	}
 	return value.Batch, value.Created, nil
 }
@@ -169,6 +173,45 @@ func (r *PostgreSQLImportRepository) Approve(ctx context.Context, identifier, ac
 			return ImportBatch{}, err
 		}
 		res, err := tx.ExecContext(ctx, `UPDATE audience_imports SET status='APPROVED',approved_by=NULLIF($2,'')::uuid,approved_at=$3,version=$4,updated_at=$3 WHERE id=$1::uuid AND version=$5 AND status='PREVIEW_READY'`, identifier, actorID, next.ApprovedAt, next.Version, expectedVersion)
+		if err != nil {
+			return ImportBatch{}, err
+		}
+		rows, err := res.RowsAffected()
+		if err != nil {
+			return ImportBatch{}, err
+		}
+		if rows != 1 {
+			return ImportBatch{}, ErrImportConflict
+		}
+		if err := tx.Commit(); err != nil {
+			return ImportBatch{}, err
+		}
+		return next, nil
+	})
+}
+
+func (r *PostgreSQLImportRepository) Cancel(ctx context.Context, identifier, actorID, reason string, expectedVersion int64, now time.Time) (ImportBatch, error) {
+	if r == nil || r.DB == nil {
+		return ImportBatch{}, errors.New("database is required")
+	}
+	return pgretry.RetryValue(ctx, pgretry.DefaultRetryPolicy(), func() (ImportBatch, error) {
+		tx, err := r.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+		if err != nil {
+			return ImportBatch{}, err
+		}
+		defer tx.Rollback()
+		current, err := scanImport(tx.QueryRowContext(ctx, importSelect+` WHERE id=$1::uuid FOR UPDATE`, identifier))
+		if errors.Is(err, sql.ErrNoRows) {
+			return ImportBatch{}, ErrImportNotFound
+		}
+		if err != nil {
+			return ImportBatch{}, err
+		}
+		next, err := current.Cancel(actorID, reason, expectedVersion, now)
+		if err != nil {
+			return ImportBatch{}, err
+		}
+		res, err := tx.ExecContext(ctx, `UPDATE audience_imports SET status='CANCELLED',failure_reason=$2,validation_lease_owner=NULL,validation_lease_expires_at=NULL,updated_at=$3,version=$4 WHERE id=$1::uuid AND version=$5 AND status='PREVIEW_READY'`, identifier, next.FailureReason, next.UpdatedAt, next.Version, expectedVersion)
 		if err != nil {
 			return ImportBatch{}, err
 		}

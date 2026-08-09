@@ -338,7 +338,13 @@ func randomToken() (string, [32]byte, error) {
 	return token, sha256.Sum256([]byte(token)), nil
 }
 
-func newSessionID(digest [32]byte) string { return base64.RawURLEncoding.EncodeToString(digest[:16]) }
+func newSessionID(digest [32]byte) string {
+	// Session IDs are persisted as PostgreSQL uuid values. Derive a stable UUID
+	// from the already-random token digest without exposing any token material.
+	digest[6] = (digest[6] & 0x0f) | 0x40
+	digest[8] = (digest[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", digest[0:4], digest[4:6], digest[6:8], digest[8:10], digest[10:16])
+}
 
 // MemorySessionRepository is the development/test implementation of the same
 // contract used by PostgreSQL. It deliberately stores only token and CSRF hashes.

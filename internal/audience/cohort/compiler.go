@@ -130,7 +130,7 @@ WHERE c.status = 'ACTIVE'
         JOIN campaigns recent_campaign ON recent_campaign.id = recent.campaign_id
         WHERE recent.contact_id = c.id
           AND recent_campaign.organisation_id = ` + organisationPlaceholder + `::uuid
-          AND recent_campaign.purpose_id = ` + purposePlaceholder + `
+          AND recent_campaign.purpose_id::text = ` + purposePlaceholder + `
           AND recent.status NOT IN ('CANCELLED','SUPPRESSED_BEFORE_SEND')
           AND recent.authorised_at > ` + asOfPlaceholder + ` - make_interval(hours => fc."windowHours")
       ) >= fc."maxMessages"

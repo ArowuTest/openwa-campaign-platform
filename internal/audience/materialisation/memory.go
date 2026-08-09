@@ -155,6 +155,7 @@ func (r *MemoryMaterialisationRepository) AppendMembers(_ context.Context, ident
 		existing = append(existing, member)
 	}
 	r.members[identifier] = existing
+	job.Status = MaterialisationPending
 	job.ProcessedCount = processedCount
 	job.LastContactID = lastContactID
 	job.RollingHash = rollingHash

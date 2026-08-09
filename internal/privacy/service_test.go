@@ -70,7 +70,10 @@ func approveCase(t *testing.T, service *Service, caseType CaseType, changes any)
 
 func TestAccessPackageIsEncryptedAndIntegrityChecked(t *testing.T) {
 	service, repo, _ := testService(t)
-	seedSubject(t, service, repo, "+2348012345678")
+	lookup := seedSubject(t, service, repo, "+2348012345678")
+	subject := repo.subjects[stringKey(lookup)]
+	subject.Suppressions = []map[string]any{{"scope": "GLOBAL", "reason": "STOP", "active": true}}
+	repo.SeedSubject(lookup, subject)
 	approved := approveCase(t, service, CaseAccess, map[string]any{})
 
 	completed, err := service.Execute(context.Background(), approved.ID, "produce controlled access package", "executor", "corr-5", approved.Version)
@@ -104,6 +107,18 @@ func TestAccessPackageIsEncryptedAndIntegrityChecked(t *testing.T) {
 	}
 	if decoded["msisdn"] != "+2348012345678" {
 		t.Fatalf("unexpected package msisdn: %v", decoded["msisdn"])
+	}
+	subjectPayload, ok := decoded["subject"].(map[string]any)
+	if !ok {
+		t.Fatalf("subject package missing from export: %#v", decoded["subject"])
+	}
+	consents, ok := subjectPayload["consents"].([]any)
+	if !ok || len(consents) != 1 {
+		t.Fatalf("consent evidence missing from export: %#v", subjectPayload["consents"])
+	}
+	suppressions, ok := subjectPayload["suppressions"].([]any)
+	if !ok || len(suppressions) != 1 {
+		t.Fatalf("suppression evidence missing from export: %#v", subjectPayload["suppressions"])
 	}
 }
 

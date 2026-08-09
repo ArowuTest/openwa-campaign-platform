@@ -78,7 +78,7 @@ SELECT CASE
         JOIN campaigns recent_campaign ON recent_campaign.id = recent.campaign_id
         WHERE recent.contact_id = c.id
           AND recent_campaign.organisation_id = $2::uuid
-          AND recent_campaign.purpose_id = $3
+          AND recent_campaign.purpose_id::text = $3
           AND recent.status NOT IN ('CANCELLED','SUPPRESSED_BEFORE_SEND')
           AND recent.authorised_at > $5 - make_interval(hours => fc."windowHours")
       ) >= fc."maxMessages"
@@ -286,7 +286,7 @@ ON CONFLICT (campaign_id,contact_id,message_version_id) DO NOTHING`, item.Recipi
 INSERT INTO transactional_outbox(
  id,deduplication_key,aggregate_type,aggregate_id,event_type,payload,status,available_at,created_at
 ) VALUES($1::uuid,$2,'CAMPAIGN_RECIPIENT',$3::uuid,'CAMPAIGN_RECIPIENT_AUTHORISED',$4::jsonb,'PENDING',$5,$5)
-ON CONFLICT (deduplication_key) DO NOTHING`, outboxID, "dispatch:"+item.Key, item.RecipientID, payload, now)
+ON CONFLICT (deduplication_key) DO NOTHING`, outboxID, "dispatch:"+item.Key, item.RecipientID, string(payload), now)
 		if err != nil {
 			return Result{}, fmt.Errorf("insert transactional outbox: %w", err)
 		}

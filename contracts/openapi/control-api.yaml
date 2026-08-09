@@ -1689,6 +1689,20 @@ paths:
         '400': { description: Invalid request }
         '401': { description: Authentication required }
         '403': { description: Permission denied }
+  /audience-imports/{id}/cancel:
+    post:
+      operationId: cancelAudienceImport
+      summary: Cancel a preview-ready audience import before canonical contact mutation
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200': { description: Preview-ready import cancelled }
+        '400': { description: Invalid cancellation request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+        '404': { description: Audience import not found }
+        '409': { description: Audience import version conflict }
+        '422': { description: Import is not cancellable from its current state }
   /audience-imports/{id}/conflicts:
     get:
       operationId: listAudienceImportConflicts
@@ -1901,14 +1915,16 @@ paths:
   /campaigns/{id}/audience-snapshots:
     post:
       operationId: createAudienceSnapshot
-      summary: createAudienceSnapshot
+      summary: Materialise an immutable campaign audience snapshot from server-side governed cohort eligibility
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
       responses:
-        '200': { description: Request completed }
-        '400': { description: Invalid request }
+        '201': { description: Governed audience snapshot materialised }
         '401': { description: Authentication required }
         '403': { description: Permission denied }
+        '404': { description: Campaign not found }
+        '409': { description: Campaign is not building an audience }
+        '422': { description: Cohort invalid, empty, too large or otherwise ineligible }
   /campaigns/{id}/message-versions:
     get:
       operationId: listMessageVersions

@@ -120,7 +120,8 @@ func (r *IdentityAdministrationRepository) CompareAndSwapAccount(ctx context.Con
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtext('identity-super-admin'))`); err != nil {
+	var lockResult any
+	if err = tx.QueryRowContext(ctx, `SELECT pg_advisory_xact_lock(hashtext('identity-super-admin'))`).Scan(&lockResult); err != nil {
 		return err
 	}
 	current, err := getAccountTx(ctx, tx, a.ID)
@@ -245,7 +246,13 @@ func (r *IdentityAdministrationRepository) UnlockAccount(ctx context.Context, id
 }
 
 func getAccountTx(ctx context.Context, tx *sql.Tx, id string) (identity.Account, error) {
-	a, err := scanAccount(tx.QueryRowContext(ctx, accountSelect+` WHERE u.id=$1::uuid GROUP BY u.id FOR UPDATE OF u`, id))
+	var lockedID string
+	if err := tx.QueryRowContext(ctx, `SELECT id::text FROM internal_users WHERE id=$1::uuid FOR UPDATE`, id).Scan(&lockedID); errors.Is(err, sql.ErrNoRows) {
+		return identity.Account{}, identity.ErrAccountNotFound
+	} else if err != nil {
+		return identity.Account{}, err
+	}
+	a, err := scanAccount(tx.QueryRowContext(ctx, accountSelect+` WHERE u.id=$1::uuid GROUP BY u.id`, lockedID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return identity.Account{}, identity.ErrAccountNotFound
 	}

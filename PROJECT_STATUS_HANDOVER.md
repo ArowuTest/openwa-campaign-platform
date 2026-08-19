@@ -1,10 +1,10 @@
 # OpenWA Campaign Platform — Project Status & Handover
 
-**Last updated:** 2026-08-08 22:42 (Europe/London)
+**Last updated:** 2026-08-10 10:05 (Europe/London)
 **Repository:** `C:\Users\sanus\OpenWA\campaign-platform-active\repo`
 **Branch:** `work/backend-production-engineering`
-**Committed HEAD:** `c728cfa8bd8ff6ff0a95068602ef575982eb9a8e`
-**HEAD subject:** `feat: close Task 4 pagination and gateway telemetry`
+**Committed HEAD:** `786451d5616f5e179903fd9b61c5e26f6de76f77`
+**HEAD subject:** `docs: record Task 5 checkpoint`
 
 ## Purpose of this document
 
@@ -792,3 +792,413 @@ Security reminder: the active development PostgreSQL credential previously expos
 Task 5 checkpoint commit: `1ad6376d9850f7c603ce2a0269fe6452bfb41fcc` — `feat: complete Task 5 requirements reconciliation`.
 
 The Task 5 commit completed with a clean worktree. The next engineering activity is **Task 6 — adversarial backend release-readiness review and fixes**. Any Task 6 findings/fixes must be kept separate from the Task 5 checkpoint and must follow the same evidence-before-assertion/TDD/debugging rules.
+
+## Task 6 adversarial backend review — in progress (2026-08-09)
+
+Task 6 began from clean post-Task-5 HEAD `786451d5616f5e179903fd9b61c5e26f6de76f77`. The review is intentionally defect-seeking and uses focused PostgreSQL RED→GREEN acceptance tests before production edits.
+
+Confirmed/fixed PostgreSQL defects so far:
+- reporting-privacy activation used `ExecContext` for row-returning `pg_advisory_xact_lock`; fixed with `QueryRowContext(...).Scan(...)` and direct activation regression evidence;
+- provider-capability activation had the same advisory-lock/libpq defect; fixed and directly proven;
+- saved segment definition create/update/version-history failed on raw `[]byte` JSONB bindings; fixed by text binding;
+- the segment update also reused one prepared parameter for integer `definition_version` and bigint optimistic `version`; parameters are now separate and create→read→update→immutable-history is green;
+- audience-import reconciliation evidence JSONB used raw bytes; fixed with durable readback, exact replay and conflicting-evidence rejection proven;
+- campaign metric-reconciliation canonical/stored JSONB used raw bytes; fixed with lease release and persisted evidence proven;
+- governed test-message `variable_values` JSONB used raw bytes; fixed with durable readback and idempotent replay proven;
+- message-version destination links/template variables used raw bytes; direct PostgreSQL draft/read/idempotent-replay test reproduced RED and is now green after text binding.
+
+Current Task 6 worktree is intentionally dirty only with these production fixes and their focused PostgreSQL regression tests. No Task 6 commit has been created yet.
+
+Immediate next action: continue the adversarial persistence audit across campaign/consent/retention/release-critical JSONB and transaction boundaries, then expand into security/RBAC/idempotency/fencing/cancellation/recovery review. Update this handover again at the next material Task 6 checkpoint before any commit.
+
+## Task 6 checkpoint — Docker resource audit and campaign completion flood fix (2026-08-09)
+
+OpenWA-only Docker audit was performed read-only before any cleanup. No non-OpenWA Docker resource was modified, and no pre-existing OpenWA container/image/volume/database was deleted.
+
+Resource evidence at audit time:
+- `openwa0828active`: authoritative development stack; 13 services when fully healthy; about 1.84 GiB resident RAM in the sampled run.
+- `openwa0828smoke`: older validation/smoke stack from the 0.8.28 validation tree; about 1.42 GiB resident RAM. It is not the authoritative Task 6 runtime and does not need to remain running outside smoke validation.
+- Active ClamAV is required: control-api points `CLAMAV_ADDRESS` to `clamav:3310` for import malware scanning. Do not remove the active ClamAV merely because the smoke stack has another instance.
+- Exited OpenWA Task 5 verification containers hold about 4.86 GiB of writable layers and are runtime-disposable after evidence/log requirements are satisfied.
+- Docker build cache reported 25.1 GiB total / 388 entries / 0 active at the initial sample, but only 13.96 GiB was marked reclaimable. Global builder pruning is not safe under the OpenWA-only cleanup constraint because the Docker host is shared with other projects.
+- OpenWA named volumes are comparatively small except active PostgreSQL (~1.20 GiB) and reusable Go caches. Task 4/5/6 disposable databases are mostly ~16–19 MiB each and are not the source of the large footprint.
+- The active `campaign` database was ~703 MiB. `campaign_execution_events` alone was ~684 MiB (437 MiB heap + 247 MiB indexes).
+- The historical 1M-MSISDN test data is not resident in contacts/recipient tables; those are tiny. The large table contained 2,288,187 duplicate `COMPLETION_ASSESSMENT_FAILED` events plus six terminal `READY` completion events.
+
+A live scheduler defect was discovered during the Docker audit. The active campaign worker was appending ~12.6 duplicate completion-failure events/second across six synthetic dispatching campaigns.
+
+T6-011 root cause/fix:
+- `internal/execution/postgres.go::Metrics` was anchored on `campaign_metrics`, so an existing campaign without a metrics row returned `sql.ErrNoRows`.
+- Focused PostgreSQL regression `internal/execution/postgres_metrics_integration_test.go` reproduced RED, then GREEN after anchoring the query on `campaigns` with an optional metrics left join.
+- Full `internal/execution` package passed against fresh 72-migration DB `campaign_task6_metrics_2214a`.
+T6-012 root cause/fix:
+- After T6-011, the same legacy fixtures exposed a second defect: campaign reads coalesced nullable transport fields to empty Go strings, while CAS/material-update SQL wrote those strings back without `NULLIF`, violating `campaigns_transport_engine_check` on status-only transitions.
+- `TestPostgreSQLCampaignCompareAndSwapPreservesNullTransportFields` reproduced RED with SQLSTATE 23514, then passed unchanged after nullable update bindings were corrected.
+- Existing Task 6 campaign transport/material-evidence regression also remained GREEN.
+
+Live proof:
+- campaign worker was temporarily stopped as reversible containment while fixes were built; no data was removed.
+- corrected `openwa0828active-campaign-worker` image was rebuilt/recreated with documented env order: shared validation env -> active DB override -> active identity override.
+- worker returned healthy.
+- six previously looping synthetic campaigns transitioned from `DISPATCHING` to `COMPLETED`, version 2.
+- `campaign_execution_events` count remained exactly flat over a 20-second post-fix sample (`2,288,193 -> 2,288,193`).
+
+The duplicate event rows have NOT been deleted or vacuumed. Any cleanup of those 2.288m duplicate test/failure events should be a separate deliberate operation after preserving the evidence needed for Task 6/Task 7.
+
+## OpenWA Docker cleanup checkpoint — 2026-08-10
+
+User-authorised cleanup was restricted to OpenWA resources only. No other Docker project was touched.
+
+- Stopped all 13 running `openwa0828smoke-*` services; the smoke containers were preserved rather than removed.
+- Preserved all six `openwa0828smoke_*` named volumes, including PostgreSQL, Redis, ClamAV, gateway/session and object-data state.
+- Removed 20 exited OpenWA verification containers only: Task 5 verification artifacts, three temporary Task 6 regression containers, and `openwa-crv-vet`.
+- Docker container disk usage fell from about 5.48 GB to 260.8 MB, recovering about 5.2 GB of container writable-layer disk.
+- No global Docker image/build-cache/volume prune was run. Build cache remains intentionally available for Task 6/7 work.
+- `openwa0828active` remains 13/13 healthy after cleanup.
+- Post-cleanup active service memory sample total is about 1.57 GiB; active ClamAV and PostgreSQL remain required/retained.
+- Campaign execution-event flood remains closed: count stayed 2,288,193 -> 2,288,193 over a fresh 15-second sample.
+- The 2.288M historical duplicate execution events were not deleted or vacuumed; preserve until evidence/cleanup decision is explicitly made.
+
+## Task 6 checkpoint — sender heartbeat authority + signed machine-auth work (2026-08-10)
+
+Current branch/HEAD remain `work/backend-production-engineering` / `786451d5616f5e179903fd9b61c5e26f6de76f77`. Task 6 remains intentionally dirty/uncommitted; do not reset or clean the worktree.
+
+T6-013 sender heartbeat trust/authority remains OPEN, but the store-level authority portion is now proven/fixed:
+- `internal/sender/heartbeat_integrity_test.go` first reproduced heartbeat overwriting governed capacity (`25/500/2` -> `999/9999/99`).
+- `internal/sender/memory_governance.go` now preserves configured `SafeMessagesPerMinute`, `SafeDailyCapacity` and `InFlightLimit`.
+- same-day `SentToday` can only advance; a focused RED proved naive monotonic logic would never reset, then UTC-day rollover semantics were added and GREEN.
+- memory heartbeat now uses canonical `AllowedSessionTransition`, closing a RED where `READY` could incorrectly jump back to `PAIRING`.
+- `internal/sender/heartbeat_postgres_integration_test.go` reproduced the same governed-capacity overwrite on fresh PostgreSQL DB `campaign_task6_heartbeat_0151` and is now GREEN with equivalent same-day/day-rollover semantics.
+- focused sender regressions remain GREEN for governed capacity/conflict, quarantine cannot be bypassed by heartbeat, memory heartbeat integrity, and PostgreSQL heartbeat integrity.
+
+Signed machine-auth portion is in progress:
+- legacy design issue originated in this repository baseline; do NOT attribute it to ECC. This is our own implementation using the MIT OpenWA project as reference/transport foundation.
+- intended node direction remains to retire duplicate human-authenticated `POST /api/v1/internal/sender-nodes/{id}/heartbeat`; signed `/api/v1/internal/gateway-nodes/{id}/runtime` is the authoritative node runtime path.
+- `internal/sender/session_heartbeat_test.go` was written first and RED-proven because no signed session-heartbeat service existed.
+- `internal/sender/session_heartbeat.go` is now implemented using the existing runtime HMAC current/previous-secret verification, timestamp skew, durable runtime nonce/replay store, strict JSON, path/body session binding, node/session ownership binding and stale/out-of-order telemetry rejection.
+- a test-file syntax typo introduced during a PowerShell replacement was corrected. The signed-service GREEN rerun has NOT yet been observed; Desktop Commander disconnected immediately before that rerun, so do not claim this service verified yet.
+
+Exact next action: rerun `TestSessionHeartbeatRequiresSignedNodeBoundReplaySafeTelemetry` unchanged. Only after GREEN should HTTP routing be changed: remove the legacy node heartbeat route, switch session heartbeat from human `sender.operate` auth to the signed machine handler, add HTTP regressions, update OpenAPI, then continue Task 6 review.
+
+## Task 6 checkpoint — T6-013 heartbeat trust boundary closed (2026-08-10)
+
+Task 6 remains in progress on branch `work/backend-production-engineering` at uncommitted HEAD `786451d5616f5e179903fd9b61c5e26f6de76f77`. Do not reset, clean or split the intentionally dirty Task 6 worktree.
+
+T6-013 is now FIXED at the code boundary:
+- memory and PostgreSQL heartbeat mutations preserve governed `SafeMessagesPerMinute`, `SafeDailyCapacity` and `InFlightLimit`;
+- same-UTC-day `SentToday` is monotonic and a new UTC day permits the new observed value;
+- memory heartbeat uses the canonical session transition guard, matching PostgreSQL behavior;
+- the obsolete human-authenticated `POST /api/v1/internal/sender-nodes/{id}/heartbeat` route and OpenAPI operation are removed;
+- signed `POST /api/v1/internal/sender-sessions/{id}/heartbeat` is outside human bearer middleware and requires the existing gateway runtime HMAC timestamp, nonce and signature headers;
+- the signed service enforces exact-body verification, strict JSON, path/body session identity, governed node/session ownership, durable nonce replay protection and stale/out-of-order rejection;
+- the control-api memory and PostgreSQL runtime constructors both wire `SessionHeartbeatService` using the existing runtime current/previous secrets, skew and nonce store; no second service secret was introduced.
+
+Fresh RED/GREEN evidence:
+- the legacy node-route HTTP regression failed with the route still exposed (503 through identity middleware), then passed with 404 after removal;
+- the signed service regression initially exposed a time-dependent test fixture: its fixed timestamp had fallen behind the memory nonce store's wall clock, so the nonce expired before replay. The fixture now uses current UTC time without changing any security expectation;
+- `TestSessionHeartbeatRequiresSignedNodeBoundReplaySafeTelemetry` is GREEN for signed acceptance, governed-capacity preservation, nonce replay rejection, node/session mismatch, stale telemetry, stale signatures, unsigned rejection and path/body mismatch;
+- HTTP regression is GREEN for ordinary bearer-without-machine-signature rejection, valid signed acceptance and nonce replay conflict;
+- PostgreSQL governed-capacity/usage/day-rollover regression is GREEN against `campaign_task6_heartbeat_0151`.
+
+Fresh verification:
+- full `internal/sender`, `internal/platform/httpserver` and `cmd/control-api` tests passed;
+- affected `go vet` and control-api build exited 0;
+- race tests passed for sender and HTTP server (`internal/platform/httpserver` completed in 145.853s);
+- OpenAPI YAML parsed and route parity now reports 281/281 implemented `/api/v1` pairs, reduced from 282 solely because the obsolete node heartbeat was removed;
+- candidate-worktree high-confidence secret scan passed;
+- `git diff --check` passed before this documentation update.
+
+The active gateway source currently emits the signed aggregate gateway-node runtime report but no per-session heartbeat emitter was found. This does not reopen the removed authentication bypass; it remains an explicit runtime-integration point to assess during the remaining gateway/control-plane failure review and later Railway/Hostinger proof.
+
+Exact next action: continue Task 6 adversarial review after T6-013. Re-run `git diff --check` and inspect the complete tracked/untracked Task 6 candidate, then audit the next release-critical authorization/idempotency/lease-recovery boundary. Do not start Task 7, Railway/Hostinger deployment or frontend work yet.
+
+## Task 6 checkpoint — gateway fencing and outbox integrity (2026-08-10)
+
+Task 6 remains in progress on branch `work/backend-production-engineering` at uncommitted HEAD `786451d5616f5e179903fd9b61c5e26f6de76f77`. The worktree remains intentionally dirty with the cumulative Task 6 fixes and direct regressions; do not reset, clean, stash or split it casually.
+
+T6-014 is FIXED at the gateway session-authority boundary:
+- `SessionAuthorityService.validate()` performed an unsynchronised read→validate→write sequence. Two concurrently accepted authorities for the same session could replace the durable record out of order, leaving lease fence 2 after lease fence 3 had already been accepted.
+- `scripts/test-gateway-session-authority.js` deterministically delayed the lease-2 replace until after lease 3. RED retained fence 2 instead of 3.
+- A per-session promise queue now serialises validation and durable replacement while preserving concurrency between different sessions. The unchanged regression is GREEN and retains the highest accepted fence.
+
+T6-015 is FIXED at both durable gateway event outboxes:
+- provider-event and inbound-message outboxes wrote a temporary record then used POSIX `rename(temp, final)`, expecting `EEXIST` to protect an existing event identifier. On Linux, rename replaces the destination, so conflicting evidence could silently overwrite the original durable record.
+- `scripts/test-gateway-outbox-integrity.js` reproduced RED for both outboxes: same event ID plus different evidence did not reject.
+- Both outboxes now create the final record exclusively with `open(..., 'wx', 0o600)`, sync file and directory durability, accept byte-identical idempotent replay, reject conflicting evidence, and retain the original record. Both regressions are GREEN.
+
+Fresh verification after T6-014/T6-015:
+- combined focused Node run passed all three new subtests;
+- complete first-party Go `go test -count=1 ./...` passed across all packages;
+- isolated current-source gateway verification synced all 56 retained OpenWA files, passed strict `tsc --noEmit`, passed emitted build with `tsc --incremental false`, passed the embedded engine test, and passed all three new gateway regressions;
+- the production gateway image intentionally prunes developer type packages, so the verifier supplied only the two exact declared type packages (`@types/express@5.0.3` and `@types/qrcode@1.5.6`) in its disposable filesystem. The earlier type errors without them were an environment artefact, not a source fix;
+- `git diff --check` was clean before this documentation update.
+
+Exploratory hypotheses that were disproved were not converted into production changes: alerting and retention JSONB already use text bindings; the privacy raw-message path passed its existing PostgreSQL rectification test; and the proposed campaign lease race is prevented by `FOR UPDATE SKIP LOCKED`. Its temporary exploratory test/database were removed.
+
+Exact next action: remove only the exited disposable `openwa-task6-gateway-verify` container after its successful logs have been preserved, rerun `git diff --check`, then continue the remaining Task 6 transaction/RBAC/idempotency/fencing/cancellation/retention/audit/configuration/gateway failure-mode review. Task 7, infrastructure deployment and frontend work have not started.
+
+## Task 6 checkpoint — campaign execution trust boundary (2026-08-10)
+
+T6-016 is FIXED. The authenticated generic `POST /api/v1/campaigns/{id}/transition` route accepted `START_DISPATCH`, `PAUSE`, `RESUME`, `CANCEL` and `COMPLETE` and called `Campaigns.Transition` directly. That bypassed the dedicated execution coordinator responsible for admission/capacity assessment, maintenance and dispatch-window enforcement, routing-reservation activation/release, completion reconciliation and execution-event recording.
+
+Focused HTTP RED proved a generic `CANCEL` returned 200, changed a DRAFT campaign to CANCELLED and incremented its version without passing through `Execution.Cancel`. The minimal route fix rejects all five execution lifecycle actions with `CAMPAIGN_EXECUTION_ROUTE_REQUIRED` before campaign mutation; the unchanged regression is GREEN and proves status/version remain unchanged.
+
+The OpenAPI `CampaignTransition` schema was independently RED-proven to advertise the same bypass and an invalid request shape: it required client-supplied `actorId` even though strict JSON decoding treats actor identity as server-derived, omitted required `expectedVersion`, and exposed server-derived/execution-only fields. The contract now lists approval/build actions only, requires `expectedVersion`, exposes only accepted client fields, documents the governed execution endpoint and declares the 409 boundary response.
+
+Fresh verification: both focused trust-boundary tests passed, the complete `internal/platform/httpserver` package passed in 18.283s, the disposable verifier exited 0 and was removed, and `git diff --check` passed before this documentation update. Task 6 remains in progress and uncommitted.
+
+Exact next action: continue the separate campaign reservation/state atomicity and recovery audit, then remaining RBAC/idempotency/fencing/UNKNOWN/cancellation/retention/audit/configuration/gateway failure modes. Do not begin Task 7, deployment or frontend work.
+
+## Task 6 checkpoint — safe gateway session teardown (2026-08-10)
+
+T6-017 is FIXED. `GatewayMessagingService.stopSession`, `logoutSession` and `deleteSession` previously called synchronous `SessionPipelineService.drain()` and immediately invoked provider teardown. Drain rejected queued work but did not wait for active provider sends, so a lifecycle command could interrupt a submission already admitted to the per-session pipeline and create an avoidable ambiguous/UNKNOWN outcome.
+
+A deterministic Node regression held one admitted send open and exercised stop, logout and delete independently. RED proved all three provider teardown calls occurred while the send was still active. The pipeline now has a teardown-specific drain barrier: it marks the session draining, rejects queued work, prevents resume/concurrent teardown, waits for active count to reach zero, then permits the provider lifecycle call. Teardown state is cleared in `finally`; the session remains drained until explicitly resumed. All three unchanged regressions are GREEN.
+
+Fresh gateway verification copied current source into an isolated disposable production-image filesystem, supplied only the two exact declared type packages absent from the pruned runtime image, and passed strict `tsc --noEmit`. The consolidated gateway safety run passed six subtests covering both outbox evidence boundaries, concurrent lease-fence preservation and all three teardown operations; the embedded OpenWA engine test also passed. The verifier exited 0, was removed, and `git diff --check` passed before this documentation update.
+
+Task 6 remains in progress and uncommitted. Exact next action: continue campaign reservation/state recovery plus remaining RBAC/idempotency/fencing/replay/UNKNOWN/retention/audit/configuration/gateway review, then run the final full verification matrix.
+
+## Task 6 checkpoint — failed-start capacity recovery (2026-08-10)
+
+T6-018 is FIXED. `Coordinator.Start` activates governed multi-pool reservations before attempting the optimistic campaign transition to DISPATCHING. If that transition failed while the campaign remained non-dispatching, the baseline returned immediately and left all reservations ACTIVE indefinitely, reducing available capacity and potentially blocking unrelated campaigns.
+
+A focused regression used the real memory routing administration with governed provider/gateway evidence and two reservations. RED proved a simulated failed campaign transition left the first reservation ACTIVE. Start now records the activated plan, re-reads durable campaign state after a transition error, and releases reservations only when the campaign is not DISPATCHING. If the durable state cannot be read, it fails closed without an unsafe release and joins the recovery error; a previously/redundantly released plan is treated idempotently.
+
+A second concurrency guard simulates another start winning the campaign CAS. It proves the losing request observes DISPATCHING and retains the winner's ACTIVE reservations rather than compensating them away. Both focused tests and the complete `internal/execution` package passed; the disposable verifier exited 0 and was removed. `git diff --check` passed before this documentation update.
+
+Task 6 remains in progress and uncommitted. Exact next action: continue event-recording/recovery atomicity, RBAC/idempotency/fencing/replay/UNKNOWN/retention/audit/configuration and gateway/control-plane failure review before the final full verification matrix.
+
+## Task 6 checkpoint — active reservation release guard + open atomicity finding (2026-08-10)
+
+T6-019 is FIXED. The step-up-protected operator routing-plan release endpoint still allowed ACTIVE reservations to be released while the owning campaign was DISPATCHING or PAUSED/resumable. That could make committed capacity appear available for a second campaign while the first continued or resumed sending.
+
+Service-level RED proved a DISPATCHING campaign's ACTIVE reservation was released without error. `RoutingAdministration.Release` now resolves the plan/campaign and rejects DISPATCHING or PAUSED with `ErrRoutingPlanConflict`; HTTP maps this to 409 `ROUTING_RESERVATIONS_IN_USE`. PostgreSQL repeats the same status predicate inside the reservation `UPDATE`, closing the service-check/update race, and treats already terminally released reservations as idempotent success.
+
+Fresh PostgreSQL proof used disposable database `campaign_task6_release_0958`, migrated cleanly through all 72 migrations. The regression proved: DISPATCHING release returns the conflict and preserves ACTIVE/fence 2; after the campaign becomes CANCELLED release succeeds; exact retry succeeds without moving fence beyond 3. The focused test, complete execution package and complete HTTP-server package passed. The database and both verifier containers were removed; `git diff --check` passed before this documentation update.
+
+T6-020 is OPEN and must not be hidden: campaign status CAS, routing release and execution-event insertion are separate transactions. A status transition may commit while event evidence or terminal release fails, after which ordinary action retry is rejected by the new state/version. No existing transactional execution outbox or recovery reconciler closes this. This requires a deliberate transactional orchestration design rather than superficial retry loops.
+
+Task 6 remains in progress and uncommitted. Exact next action: design/implement T6-020 safely or explicitly carry it as a release blocker, while continuing RBAC/idempotency/fencing/replay/UNKNOWN/retention/audit/configuration and gateway/control-plane review before the final verification matrix.
+
+## Task 6 checkpoint - T6-020 campaign lifecycle atomicity (2026-08-10)
+
+Task 6 remains in progress on branch `work/backend-production-engineering` at uncommitted HEAD `786451d5616f5e179903fd9b61c5e26f6de76f77`. The worktree remains intentionally dirty with cumulative Task 6 changes. Do not reset, clean, stash, split, commit or push it without deliberate review and separate authorization.
+
+T6-020 is FIXED. Start, pause, resume, cancel and complete no longer persist campaign state, mutate routing reservations and write lifecycle evidence through separate transactions.
+
+Implemented boundary:
+- `campaign.Service.PrepareTransition` reuses all existing validation/domain transition logic and returns the candidate without persistence; the original `Transition` path remains for non-execution approval/build actions.
+- `execution.Coordinator` now builds one validated `LifecycleCommit` and fails closed when no atomic committer is configured.
+- `execution.PostgreSQLLifecycleCommitter` applies campaign optimistic CAS, required reservation activation/release and version-linked lifecycle event insertion in one serializable PostgreSQL transaction.
+- Retries are bounded and restricted to PostgreSQL serialization failure `40001` and deadlock `40P01`; domain conflicts and constraints are not retried.
+- External gateway/network calls remain outside the database transaction.
+Migration `0073_campaign_execution_lifecycle_atomicity.sql` adds nullable `campaign_execution_events.campaign_version`, a positive-version constraint and a partial unique index on `(campaign_id,campaign_version)`. Lifecycle evidence records the resulting campaign version. Existing runner diagnostic events retain NULL version compatibility.
+
+Reservation transaction helpers lock and verify plan ownership/state. HELD activation and ACTIVE/HELD terminal release advance the fence only when state changes. All-ACTIVE activation and all-RELEASED release are idempotent without another fence increment. Mixed, expired, missing or wrong-campaign reservation sets fail closed. The T6-019 DISPATCHING/PAUSED operator-release guard remains intact.
+
+Both production processes now inject the same PostgreSQL atomic committer:
+- `cmd/control-api/runtime.go`
+- `cmd/campaign-worker/main.go`
+
+The control API schema readiness query now requires the migration-0073 column and unique index. Development/test memory runtime remains intentionally non-atomic and therefore execution actions fail closed unless a committer is explicitly supplied.
+
+A planned committer placement under `internal/persistence/postgres` created a real Go import cycle because execution lease code already imports that package. The implementation was moved to `internal/execution/lifecycle_postgres.go`, which preserves the design while using the exported transaction-aware campaign CAS seam. The design plan was corrected to reflect this package boundary.
+
+Adversarial PostgreSQL proof:
+- injected lifecycle-event insertion failure rolls back campaign CAS, reservation release and event;
+- expired reservation mutation failure after campaign CAS rolls back campaign and event;
+- start, pause, resume, cancel and complete all persist the expected state/version, reservation state/fence and version-linked event;
+- pre-activated and pre-released reservation sets are idempotent;
+- two concurrent starts yield exactly one success and one `campaign.ErrConflict`, one version increment, one fence increment and one event;
+- legacy diagnostic event insertion remains valid with NULL campaign version, while a duplicate non-NULL campaign/version lifecycle event is rejected;
+- route-level regression returns controlled 409 with no campaign preparation/mutation when the committer is missing, then calls a configured committer exactly once.
+
+Fresh database verification used exact disposable databases only. The repository migration validator passed migrations 0001-0073: 73 files, 128 tables, 453 indexes and 2007 constraints. Schema evidence for the new column/index returned `true|true`. Focused PostgreSQL execution and T6-019 release tests passed.
+
+Complete verification after implementation:
+- `go test ./... -count=1` passed across all first-party Go packages;
+- `go vet ./...` passed;
+- `go build ./...` passed;
+- focused `go test -race` passed for `internal/campaign`, `internal/execution` and `internal/persistence/postgres`;
+- `git diff --check` was clean before this documentation update;
+- static audit found no lifecycle `Campaigns.Transition`, standalone reservation activation/release or lifecycle `Store.RecordEvent` calls in `internal/execution/service.go`;
+- all 13 active `openwa0828active` services remained healthy.
+
+Cleanup removed the two disposable databases and cached-library volume created for this verification. Six older idle Task 6 fixture databases referenced by earlier checkpoints were also removed after confirming zero active connections; the final `campaign_task6_%` database count is zero. These deleted fixtures are not recoverable, but their evidence remains in this handover and no application database was touched.
+
+Task 6 is still not the final release gate. Exact next action: continue the remaining RBAC/maker-checker, idempotency/replay, lease/fencing, UNKNOWN/no-resend, cancellation/crash recovery, retention/legal-hold, audit/configuration and gateway/control-plane adversarial review. Do not begin Task 7, deployment or frontend work yet.
+
+## Task 6 checkpoint - Neon parity restored for T6-020 (2026-08-10)
+
+The missing Neon validation gate for T6-020 is now complete. A disposable branch `openwa-task6-remaining-20260810` with opaque ID `br-misty-sun-ayo0fzqu` was created under project `lucky-credit-36128290` from the default branch. All SQL and tests targeted that branch explicitly; the production branch was not mutated.
+
+The disposable branch schema was reset, then the repository validator applied migrations 0001-0073 on Neon PostgreSQL 18.4. Evidence matched the Docker PostgreSQL gate: 73 migration files, 128 public tables, 453 indexes and 2,007 constraints. The `campaign_execution_events.campaign_version` column and `uq_campaign_execution_event_lifecycle_version` index were both present.
+The affected PostgreSQL integration suite passed against Neon:
+- injected lifecycle-event rollback;
+- mixed/expired reservation rollback;
+- all lifecycle action and idempotent reservation cases;
+- concurrent single-winner start;
+- duplicate version-linked evidence rejection and NULL-version diagnostic compatibility;
+- T6-019 active reservation release guard.
+
+The temporary Neon branch was deleted after verification. No connection string or credential was printed or persisted. T6-020 now has both Docker PostgreSQL 17 and disposable Neon PostgreSQL 18 evidence.
+
+Task 6 remains in progress. The active execution plan is `docs/superpowers/plans/2026-08-10-remaining-task6-backend-adversarial-review.md`; next is the authorization, recent-MFA and maker-checker closure pass.
+
+## Task 6 checkpoint - T6-021 authorization and maker-checker closure (2026-08-10)
+
+Task 2 of the remaining Task 6 plan is complete. A mechanical inventory found 161 authenticated unsafe-method route registrations in `Server.Handler`; the high-risk executable matrix covers 40 campaign, routing, sender, export, privacy, retention, configuration, provider, pacing and commercial routes. Each denies no principal and the wrong permission. Twenty-nine privileged actions also prove stale MFA is rejected before domain mutation.
+
+T6-021 is FIXED. Six governed decision services blocked the submitter but not the original creator: organisation policy, commercial record, provider capability, consent opt-out policy, inbound-retention policy and sender-pacing policy. A second actor could submit the creator's draft and the creator could then approve it.
+
+The retained RED regressions use three actors and proved the creator could activate all six records. The minimal domain fix rejects both `CreatedBy` and `SubmittedBy`; the same regressions are GREEN and assert the record remains PENDING after denial. Domain placement protects HTTP, worker and future callers.
+
+Existing independent-actor protection was re-exercised for consent review, message-version approval, reporting-privacy policy and platform configuration. A static scan of production approval guards now shows every `SubmittedBy` comparison paired with `CreatedBy`.
+
+Verification ran in `campaign-task2-go-builder:latest`:
+- focused six-package three-actor regressions passed;
+- `TestTask6HighRiskRoutesRejectMissingAndWrongAuthority` passed;
+- `TestTask6PrivilegedMutationsRequireRecentMFABeforeDomainWork` passed;
+- full affected commercial, organisation, provider, consent, inbound, sender, message, operations, platformpolicy and HTTP-server package suites passed.
+
+No migration, SQL or persistence query changed in T6-021, so no database branch was needed for this domain-only guard. The complete disposable-Docker and disposable-Neon gates remain mandatory in Task 7. The active stack was not rebuilt or modified.
+
+Exact next action: Task 3 idempotency, replay, durable lease and fencing closure. Task 6 remains uncommitted and in progress.
+
+## Task 6 checkpoint — replay/fencing plus UNKNOWN/cancellation/crash recovery closed (2026-08-11)
+
+Task 6 remains intentionally dirty/uncommitted on `work/backend-production-engineering` at HEAD `786451d5616f5e179903fd9b61c5e26f6de76f77`. Do not reset, clean, stash, split, commit or push the cumulative Task 6 worktree.
+
+T6-022 is FIXED and its database parity gap is closed. Campaign execution claims exclude every unexpired lease, return a monotonic fence, release requires owner+fence, and lifecycle commits validate the same unexpired fence inside the serializable campaign transaction. Docker PostgreSQL/race tests are GREEN. Focused changed-SQL parity was also GREEN on disposable Neon PostgreSQL 18.4 branch `br-withered-snow-ayoowi5z`; the branch was deleted after proof.
+
+Task 4 of `docs/superpowers/plans/2026-08-10-remaining-task6-backend-adversarial-review.md` is now complete and produced three additional High findings:
+
+- T6-023 FIXED: a recipient already persisted as `UNKNOWN` could still reach the gateway on replay because the reducer ignored lower-stage progress but the handler continued. `UNKNOWN` is now a handler-level no-send state; direct replay calls the gateway zero times.
+- T6-024 FIXED: cancellation could commit after final eligibility but before `SUBMITTING`, while the delivery transaction locked only the recipient. `EventSubmitting` now locks/validates the campaign in the same PostgreSQL transaction; explicit `CAMPAIGN_CANCELLED` classification records canonical recipient cancellation and prevents the gateway call when cancellation wins.
+- T6-025 FIXED: a reclaimed job whose recipient was already `SUBMITTING` could auto-resubmit after worker death. Recovery now converts stale `SUBMITTING` to durable `UNKNOWN` without a gateway call, and newly established UNKNOWN outcomes set `reconciliation_required=true`.
+
+Additional no-resend/cancellation evidence is GREEN: worker cancellation before SUBMITTING remains retryable with zero gateway calls; queued/claimed cancellation suppresses new sends; `GATEWAY_ACCEPTED` and `UNKNOWN` evidence are preserved; queue repair reconstructs zero jobs for UNKNOWN and one when the same authoritative row is explicitly `FAILED_RETRYABLE`; expired durable-job reclaim advances lease version, rejects stale completion and increments attempt count monotonically.
+Docker evidence for Task 4 used `campaign-task2-go-builder:latest` and a fresh PostgreSQL 17 container migrated through all 73 repository migrations. Focused PostgreSQL tests, complete affected dispatch/delivery/jobs/execution suites, and race-enabled verification are GREEN. The HTTP gateway characterization proves a timeout after the request reaches the gateway path is `OUTCOME_UNKNOWN`, never safe-to-retry.
+
+Current-source gateway durability verification used a disposable TypeScript 5.9.2 verifier only; `scripts/test-gateway-durability.js` passed and a real SIGKILL during provider execution passed `scripts/test-gateway-crash-unknown.js`, recovering as UNKNOWN after restart with zero resubmissions.
+
+Task-4 Neon parity used disposable branch `openwa-task6-task4-neon-20260811`, opaque ID `br-jolly-glitter-aydmzuxs`, PostgreSQL 18.4. Focused database semantics proved cancellation is blocked at the submission boundary, explicit cancellation classification returns `CAMPAIGN_CANCELLED`, UNKNOWN queue repair produces 0 jobs, and FAILED_RETRYABLE produces 1. The branch was deleted. The complete 73-migration Neon rerun remains deliberately reserved for the final Task-6 gate.
+
+Disposable Task-6 PostgreSQL containers/networks `openwa-task6-cancel-*` and completed prior-slice `openwa-task6-lease-*` were removed after verification. `git diff --check` was clean before this documentation update.
+
+Exact next action: **Task 5 of the remaining Task-6 plan — retention, legal holds, audit and configuration closure.** Begin with held/unheld retention at the same cutoff and legal-hold creation/release/expiry races, then audit atomicity/attribution and concurrent configuration activation. Do not begin Task 7, Railway+Hostinger deployment or frontend work yet.
+
+## Task 6 checkpoint — Task 5 retention/audit/configuration closure (2026-08-11)
+
+Task 5 of `docs/superpowers/plans/2026-08-10-remaining-task6-backend-adversarial-review.md` is complete. Task 6 remains intentionally dirty/uncommitted on `work/backend-production-engineering` at HEAD `786451d5616f5e179903fd9b61c5e26f6de76f77`.
+
+Five additional High findings are FIXED:
+- T6-026: legal-hold activation/release and erasure now share a subject-scoped PostgreSQL transaction advisory lock; the reproduced in-flight hold/erasure race is GREEN.
+- T6-027: sensitive incident, export, download and delivery-reconciliation mutations now persist exact prepared audit evidence in the same PostgreSQL transaction; outbox replay enters the append-only audit hash chain idempotently, including JSONB canonicalization.
+- T6-028: retention query arguments now bind six parameters for inbound/import/export families and append cutoff only for families that reference `$7`.
+- T6-029: migration `0074_inbound_reply_encrypted_and_redacted_content.sql` permits empty legacy plaintext only for encrypted or retention-redacted inbound content and rejects unsafe empty content.
+- T6-030: export REVOKED state, unused download-grant revocation and audit-outbox evidence now commit/roll back atomically.
+
+Task-5 characterization is GREEN for held/unheld retention, active/released/expired legal holds, post-claim hold recheck, audit contention/idempotent replay/conflicting replay/tamper/attribution, concurrent configuration activation, download authorization/consumption audit failure, delivery-reconciliation audit failure and export-revocation failure injection.
+
+Fresh Docker PostgreSQL 17 verification replayed all 74 migrations. The focused privacy/retention/audit/platformpolicy/outbox/delivery/operations suites and campaign-worker compile passed. A fresh second 74-migration database then passed `go test -race -p=1` across all seven changed packages. Focused `go vet`, campaign-worker build to `/tmp`, and `git diff --check` passed.
+
+Neon parity was run only on newly named disposable branches and both were deleted. `br-dark-meadow-ay05lxut` (PostgreSQL 18.4) proved migration-0074 constraints, six/seven-parameter retention scheduling, hold recheck and transaction/audit rollback. After T6-027/T6-030 was extended, `br-wispy-king-ayjyrenp` (PostgreSQL 18.4) proved download authorization, download consumption, delivery-reconciliation closure and export revocation commit all effects together on success and roll all effects back on injected failure.
+
+Exact next action: **Task 6 — gateway, Compose and control-plane security closure.** Run current-source strict TypeScript/build and gateway scripts, validate production Compose hardening/interpolation, scan tracked plus untracked candidate files for secrets/PII logging, and audit gateway body limits/replay windows/nonce durability/authority expiry/teardown/outbox durability/graceful shutdown. Real WhatsApp pairing/send/ack/reconnect/endurance remains an external live gate. Do not begin Task 7, deployment or frontend work yet.
+
+## Task 6 checkpoint — gateway, Compose and security closure (2026-08-11)
+
+Task 6 remains intentionally dirty/uncommitted on `work/backend-production-engineering` at HEAD `786451d5616f5e179903fd9b61c5e26f6de76f77`. Do not reset, clean, stash, split, commit or push the cumulative Task 6 worktree.
+
+Task 6 plan item 6 is complete. Seven additional gateway/security findings were reproduced and fixed:
+- T6-031 High: signed provider callbacks and runtime heartbeats could follow redirects while carrying HMAC trust headers; both now use `redirect: manual`.
+- T6-032 Medium: callback failures buffered the complete error body with `response.text()` before slicing; a shared reader now consumes at most 300 bytes and cancels the remainder.
+- T6-033 High: accepted session-authority fences were renamed without file/directory fsync; durable replacement now fsyncs the file and containing directory before success.
+- T6-034 Medium: gateway `/tmp` was writable/executable; packaged Chromium was proven compatible with `/tmp:size=512m,noexec,nosuid`, and production Compose now uses that mount.
+- T6-035 Medium: the previous callback-signing secret was unnecessarily mounted into the gateway; it remains only on the control API where previous-key verification occurs.
+- T6-036 Medium: `PROFILING_TOKEN` and `MEDIA_DOWNLOAD_SECRET` had no gateway runtime consumer and were removed from gateway bootstrap/mounts while legitimate control-api/worker consumers remain.
+- T6-037 Medium: structured `email` fields bypassed the shared Go logger redaction policy; shared logging now redacts email keys.
+
+RED→GREEN evidence includes `scripts/test-gateway-control-plane-security.js`, `scripts/test-gateway-session-authority.js`, `scripts/test-gateway-outbox-integrity.js` and `internal/observability/observability_test.go`. Characterization also proves stale/future gateway commands are rejected before nonce persistence, expired/excessive authority writes nothing, and unsuccessful shutdown flushes preserve both provider and inbound outbox evidence for restart.
+
+Final current-source gateway verification used the disposable Node 22 verifier and passed strict `tsc --noEmit`, emitted Nest build, retained-source sync of 56 pinned OpenWA files, embedded engine tests, three session-authority tests, four outbox-integrity/shutdown tests, three drain/teardown tests, durability/idempotency/observability tests, real SIGKILL→UNKNOWN recovery, six control-plane security tests and secret-file tests.
+
+The actual production Dockerfile rebuilt successfully as image `openwa-task6-gateway-final:verify`, image ID `sha256:bb649a829063962d1391723c2c4ea96042a60c3e72958f5cd4d376cf4cd2e19e`. Runtime proof on that image returned `uid=1000(node)`, confirmed a read-only root filesystem with writable `noexec` `/tmp`, Chrome headless exit 0, `/healthz` 200, an ~80 KB JSON request reaching controller validation with 400, and an ~150 KB request rejected by the parser with 413.
+
+Fresh production Compose interpolation used synthetic secrets only. All 8 resolved services are read-only, drop `ALL` capabilities, use `no-new-privileges`, have healthchecks, publish no host ports and use digest-pinned images. The private network is internal; only `openwa-gateway` joins egress. The gateway now mounts exactly four secrets: active/previous command signing, active callback signing and active runtime signing.
+
+Security/contract evidence is GREEN: tracked+untracked high-confidence secret scan passed; additional URI classification found zero high-entropy or unclassified connection strings; strict Node security passed with no production exceptions; OpenAPI parity remains 281/281; and `git diff --check` was clean before this documentation update. The shared PII-log scan found no MSISDN value logging and the only structured email path is now redacted by the shared logger.
+
+Real WhatsApp pairing/authentication, genuine text/media sends, provider ACKs, reconnect/endurance and genuine ambiguous provider outcomes remain external live gates. Railway+Hostinger deployment/network proof, independent security assurance, backup/restore/DR and operational-owner approval also remain external/release gates.
+
+Exact next action: Task 7 of `docs/superpowers/plans/2026-08-10-remaining-task6-backend-adversarial-review.md` — run the final full Docker Go/PostgreSQL regression, fresh migration validator through 0074, focused race suites, disposable Neon PostgreSQL 18 parity, final gateway/OpenAPI rerun, cleanup and handover reconciliation. Do not call Task 6 complete until every Task-7 local gate is green.
+
+## Task 6 final checkpoint — internal Task 7 Docker + Neon closure (2026-08-11)
+
+Overall Backend Task 6 is locally complete after the final verification gate. The cumulative worktree remains intentionally dirty/uncommitted on `work/backend-production-engineering` at committed HEAD `786451d5616f5e179903fd9b61c5e26f6de76f77`; no reset, clean, stash, commit, push, deployment or frontend work was performed.
+
+T6-038 High is FIXED. Under sufficient audit-chain contention, `PostgreSQLRepository.Append` could exhaust its inner SQLSTATE 40001/40P01 transaction retries and return the raw PostgreSQL error. `Recorder.RecordPrepared` refreshes the chain head only on `ErrChainConflict`, so a valid governed audit append could fail rather than retry against the new head. Exhausted retryable PostgreSQL transaction errors are now normalized to `ErrChainConflict`. The deterministic RED regression `internal/audit/postgres_retry_test.go` failed with the raw forced 40001 before the fix and is GREEN afterward; the real 12-writer PostgreSQL contention regression also passed 20 consecutive runs.
+
+Final Docker Go evidence is GREEN:
+- `/usr/local/go/bin/go test ./... -count=1` passed all first-party packages, exit 0;
+- `/usr/local/go/bin/go vet ./...` and `/usr/local/go/bin/go build ./...` passed in the named Docker verifier;
+- the complete PostgreSQL opt-in inventory discovered 36 `POSTGRES_*_DATABASE_URL` variables;
+- a fresh PostgreSQL 17 database passed repository migrations 0001-0074 with 74 files, 128 public tables, 453 indexes and 2,007 constraints;
+- the complete `go test -p=1 -count=1 ./...` run with all 36 PostgreSQL opt-ins enabled passed after three shared-fixture isolation defects were corrected in tests only;
+- focused `go test -race -p=1 -count=1` passed across 23 affected packages, including `internal/platform/httpserver` in 394.559s, with marker `TASK7_FOCUSED_RACE_GREEN`.
+
+The three initial full-suite PostgreSQL failures were proven to be test isolation rather than production defects: outbox claim could see unrelated pending rows, test-message persistence used fixed provider/gateway fixture identities, and pagination assumed global recipient-table emptiness. Each failed test passed alone on a clean 74-migration database before fixture-only isolation changes. The same tests then passed against the already-contaminated database and in the final fresh full suite.
+Final Neon PostgreSQL 18 evidence is GREEN. A first disposable branch `openwa-task6-final-neon-20260811` (`br-crimson-brook-ay838ipc`) re-proved migration-0074 semantics, execution lease fencing, audit transaction/CAS behavior and PostgreSQL 18 serialization SQLSTATE behavior, then was deleted.
+
+The literal final migration-validator gate then used a second disposable branch `openwa-task6-final-fullchain-20260811` (`br-flat-moon-aypoqh2v`). A branch-only `task7_validator` login was created with a synthetic one-time credential and least-privilege database/schema creation grants. The remote verifier received only a temporary bundle containing `scripts/validate-postgres-migrations.py` plus the 74 migration SQL files; no repository source, Git metadata, env files or real Neon credential was exposed. The repository migration validator passed 0001-0074 on Neon PostgreSQL 18.4 in 10.237s with 128 public tables, 453 indexes and 2,007 constraints.
+
+Actual compiled Go test binaries were then run against that fully migrated Neon branch without mounting the source tree. GREEN evidence:
+- `TestTask6AuditContentionReplayTamperAndAttribution` — 17.66s;
+- `TestPostgreSQLAppendNormalisesRetryExhaustionToChainConflict` — 0.16s;
+- `TestPostgreSQLExecutionLeaseHasOneWinnerAndCannotBeReclaimedBeforeExpiry` — 4.87s;
+- `TestTask6RetentionExecutesOnlyUnheldContentAndRechecksHoldAfterClaim` — 5.27s.
+The connector independently confirmed PostgreSQL `180004`, 128 tables, 453 indexes, 2,007 constraints, required `campaign_recipients`, `gateway_runtime_nonces` and `retention_jobs` relations, and exactly one `inbound_replies_message_text_check` constraint. `br-flat-moon-aypoqh2v` was deleted and no longer appears in Neon search.
+
+Final gateway/control-plane evidence is GREEN on a current-source isolated Node verifier: strict `tsc --noEmit`, emitted Nest build, embedded retained OpenWA engine, session-authority fencing/fsync/expiry, provider and inbound outbox integrity/shutdown, drain/teardown, gateway durability, real SIGKILL-to-UNKNOWN recovery, six control-plane security tests and secret-file tests all passed with exit 0 and marker `TASK7_GATEWAY_NODE_GREEN`. Final static security also passed committed-secret scanning, production Compose security validation, strict Node security and OpenAPI parity at 281/281 implemented `/api/v1` method/path pairs.
+
+Cleanup is complete: 10 Task-6/Task-7 disposable Docker containers and one Task-7 network were removed; zero Task-6/Task-7 containers, networks, named volumes or temp files remain. Both final Neon branches were deleted. The untouched active stack has exactly 13 `openwa0828active-*` containers and all 13 report healthy.
+Local Task 6 completion does not close external/live release evidence. Still external: genuine WWebJS/Baileys authentication and pairing; real text/media sends; inbound/STOP provider traffic; delivery/read ACKs; reconnect/watchdog/endurance; genuine ambiguous provider outcomes; sustained target-volume endurance; real sender-session RAM/CPU; independent security/penetration review; Railway+Hostinger deployment/network proof; backup/restore/DR/RPO/RTO; monitoring/on-call/runbooks and operational-owner approval; and production frontend/UAT/accessibility.
+
+Task 6 findings T6-001 through T6-038 are recorded FIXED in `docs/program/BACKEND_ADVERSARIAL_FINDINGS.md`. The internal Task-7 checklist in `docs/superpowers/plans/2026-08-10-remaining-task6-backend-adversarial-review.md` is complete.
+
+Exact next authorized action: preserve the current cumulative worktree and obtain separate authorization before creating a checkpoint commit/push or beginning Railway+Hostinger production-infrastructure integration. Do not start the deferred production frontend merely because Backend Task 6 is locally complete.
+
+Final Neon inventory also found an older disposable `openwa-task6-fencing-20260810` branch (`br-nameless-night-ayunric6`). It was confirmed `Default=false`, unprotected, with 0 bytes written and no application schema, then deleted. Final Neon searches return zero `openwa-task6` and zero `openwa-task7` branches.
+
+
+## 17 August 2026 checkpoint — R18 routing-capacity adjudication
+
+R18 blind review passed A/C/D and split on B. Adjudication confirmed sequential same-day daily-capacity double-booking and terminal-campaign HELD-capacity creation; the adjacent-window hourly claim was rejected as over-broad. Both confirmed defects were reproduced RED, minimally fixed, and are GREEN on PostgreSQL 17/18 plus execution unit/race gates. Source changed, so R18 cannot freeze the backend; fresh blind R19 is mandatory.
+
+
+## 17 August 2026 checkpoint — I2 node-addressed OpenWA and split-production remediation
+
+R19 is preserved as historical blind-review evidence, but its source freeze was intentionally reopened after infrastructure I1 review exposed a reachable architecture/runtime mismatch. Frozen routing authority selected a concrete OpenWA gateway node, while campaign/test-message HTTP submission still used one static `OPENWA_GATEWAY_URL`. That was incompatible with the approved Hostinger multi-node gateway fleet and could send to a different node from the one whose ID/version/session lease was authorised.
+
+The coherent remediation now captures `sender_nodes.internal_url` during governed route validation before the SUBMITTING ambiguity boundary, propagates it through campaign dispatch and controlled test sends, and lets `HTTPGateway` submit to that request-specific destination. Static URL remains compatibility fallback only. Campaign-worker transport construction accepts OpenWA signing-secret + governed node addressing without requiring a static URL. No post-SUBMITTING database/routing lookup was added.
+
+Real PostgreSQL validation uncovered three additional pre-existing test-route query defects and closed them: explicit timestamptz typing for the freshness parameter; UUID→text casting for legacy campaign gateway-pool comparison; and optional minimum gateway version semantics. Clean PostgreSQL 17 and 18 databases replayed 0001→0089 and both passed `TestPostgreSQLGovernedRouteCarriesExactNodeURL`. Controlled test-route PostgreSQL proof also passes and returns the exact stored node URL.
+
+Infrastructure I1 was then remediated into the I2 candidate. `compose.production.yaml` is now a seven-service Railway control-plane reference only; OpenWA lives solely in the Hostinger gateway manifest and Meta remains direct. The control-plane reference contains no static OpenWA gateway URL and requires network/trusted-proxy boundaries. The production verifier is tied to `config/deployment-topology.json` and a tamper regression proves it rejects a reintroduced OpenWA service. Hostinger requires explicit private `GATEWAY_INTERNAL_URL`, Railway HTTPS callback/inbound/media URLs and an exact SSRF hostname.
+
+Fresh local gates: 50/50 governance tests; production Compose 7 services/25 secrets; split topology verifier; Docker rendering of the Railway control plane; BAILEYS + WHATSAPP_WEB_JS Hostinger rendering and resolved preflight; affected Go unit and race suites; clean PG17/PG18 node-addressing regressions; OpenAPI 294/294; committed-secret scan; Node-security/release-governance checks; TypeScript syntax + gateway durability; 8/8 gateway control-plane security; 9/9 outbox integrity; 3/3 session authority; 18/18 drain/lifecycle plus serialization; whole-worktree diff check; and full exact-source Go test/vet/build marker `I2_EXACT_GO_GREEN`.
+
+The eight formal release gates remain open or externally blocked exactly as before; local infrastructure configuration does not promote them. No live Railway/Hostinger provisioning, provider pairing/send, credential mutation, DNS/firewall change, commit/push/deployment or frontend work occurred.
+
+I2 pre-review source/config fingerprint (documentation excluded) is `bdaebba1e8d92ac858e642ca4ea9b07410d01d39a20f3bfe9bdaeb8879d63fa1` tracked / `3cfdd21cb240c82a0eff0b663977731d0513495b9cdda82af98b7bf71caa8d8f` untracked (189 files). Exact next action: regenerate/validate conservative traceability, prove this fingerprint is unchanged by documentation-only reconciliation, freeze the complete I2 review packet, run fresh genuinely blind council, adjudicate/reproduce any findings, remediate only confirmed defects, re-gate after any source/config change, then establish the new freeze and immediately continue the next infrastructure slice.
+
+
+## 18 August 2026 checkpoint — I3 pre-review
+
+I2 blind review found four independently adjudicated production-boundary defects, all now remediated in the current I3 candidate: cross-provider media URL reachability/HTTPS, production runtime advertised gateway URL fail-close, removal of static-router fallback after governed node selection, and driver-aware platform-governance S3 startup validation. The approved sibling transports, Railway/Hostinger split, pre-SUBMITTING node-address resolution, sticky UNKNOWN/no-resend, Meta governance and security/fencing invariants remain unchanged.
+
+Fresh I3 local evidence: governance 52/52; production security 7 services/25 secrets; split topology; production Compose render; resolved BAILEYS + WHATSAPP_WEB_JS Hostinger preflight; OpenAPI 294/294; candidate secret scan; strict Node security with zero production exceptions/vulnerabilities; real isolated gateway npm-ci + tsc; Linux gateway control security 9/9, outbox 9/9, session authority 3/3, drain/lifecycle 18/18 plus serialization; clean diff hygiene; and full exact-source Go test/vet/build marker I3_EXACT_GO_GREEN. Windows directory-fsync EPERM was independently reproduced as a host limitation and the unchanged durability suite passed on Linux.
+
+Traceability remains 398 = 168 IMPLEMENTED_TESTED / 181 PARTIAL / 32 NOT_STARTED / 17 BLOCKED_EXTERNAL. All eight release hard gates remain OPEN/BLOCKED_EXTERNAL. Current non-document source/config fingerprint is tracked `3a8f5ab26faccb6ac6b21e0b2e1daea88e536849400a497607f81bad74bdf14b` / untracked `8e7af7541650f946aae0d1a4165e77786596541672a61ee0967c250ca2f18773` across 189 non-document untracked files. I3 is not freeze authority until the fresh blind Grok 4.6 / Qwen 3.8 Max / Gemini 3.7 Flash / GLM 5.2 council on identical current bytes is independently adjudicated. No commit, push, deployment, live provider action or frontend work occurred.

@@ -267,7 +267,7 @@ func (p *PostgreSQLStore) schedulePolicy(ctx context.Context, policy Policy, now
 		  AND rp.effective_from<=$4 AND (rp.effective_to IS NULL OR rp.effective_to>$4)
 	)`
 	var query string
-	args := []any{policy.ID, policy.Action, limit, now, policy.ScopeID, policy.ObjectType, cutoff}
+	args := []any{policy.ID, policy.Action, limit, now, policy.ScopeID, policy.ObjectType}
 	switch policy.ObjectType {
 	case ObjectInboundContent:
 		query = `WITH candidates AS (
@@ -304,6 +304,7 @@ func (p *PostgreSQLStore) schedulePolicy(ctx context.Context, policy Policy, now
 		FROM candidates WHERE ($5<>'' OR org_id IS NULL OR ` + override + `)
 		ORDER BY expires_at,id LIMIT $3 ON CONFLICT DO NOTHING`
 	case ObjectIncident:
+		args = append(args, cutoff)
 		query = `WITH candidates AS (
 			SELECT i.id,i.created_at,c.organisation_id AS org_id
 			FROM operations_incidents i LEFT JOIN campaigns c ON c.id=i.campaign_id
@@ -314,6 +315,7 @@ func (p *PostgreSQLStore) schedulePolicy(ctx context.Context, policy Policy, now
 		FROM candidates WHERE ($5<>'' OR org_id IS NULL OR ` + override + `)
 		ORDER BY created_at,id LIMIT $3 ON CONFLICT DO NOTHING`
 	case ObjectPrivacyCase:
+		args = append(args, cutoff)
 		query = `WITH candidates AS (
 			SELECT pc.id,pc.created_at,pc.organisation_id AS org_id,pc.subject_lookup_hmac
 			FROM privacy_cases pc
@@ -330,6 +332,7 @@ func (p *PostgreSQLStore) schedulePolicy(ctx context.Context, policy Policy, now
 		FROM candidates WHERE ($5<>'' OR org_id IS NULL OR ` + override + `)
 		ORDER BY created_at,id LIMIT $3 ON CONFLICT DO NOTHING`
 	case ObjectDeliveryEvent, ObjectProviderEvent:
+		args = append(args, cutoff)
 		providerFilter := ""
 		if policy.ObjectType == ObjectProviderEvent {
 			providerFilter = " AND de.provider_event_id IS NOT NULL"
@@ -346,6 +349,7 @@ func (p *PostgreSQLStore) schedulePolicy(ctx context.Context, policy Policy, now
 		FROM candidates WHERE ($5<>'' OR ` + override + `)
 		ORDER BY received_at,id LIMIT $3 ON CONFLICT DO NOTHING`
 	case ObjectAuditEvent:
+		args = append(args, cutoff)
 		query = `WITH candidates AS (
 			SELECT ae.id,ae.created_at,ae.organisation_id AS org_id
 			FROM audit_events ae

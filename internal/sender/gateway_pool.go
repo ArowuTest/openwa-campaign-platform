@@ -108,6 +108,9 @@ func (s *GatewayPoolService) RequireCapabilities(ctx context.Context, poolID str
 	if err != nil {
 		return GatewayPool{}, err
 	}
+	if strings.TrimSpace(pool.ID) == "" || pool.Version <= 0 || strings.TrimSpace(pool.AdapterVersion) == "" {
+		return GatewayPool{}, errors.New("active gateway pool evidence is incomplete")
+	}
 	if pool.Status != GatewayPoolActive {
 		return GatewayPool{}, errors.New("gateway pool is not active")
 	}

@@ -15,13 +15,25 @@ type segmentVersionPaginationRepository struct {
 	items []segment.DefinitionVersion
 }
 
-func (*segmentVersionPaginationRepository) Create(context.Context, segment.Definition, string) (segment.Definition, error) { return segment.Definition{}, nil }
-func (*segmentVersionPaginationRepository) Get(context.Context, string) (segment.Definition, error) { return segment.Definition{}, nil }
-func (*segmentVersionPaginationRepository) List(context.Context, string, int) ([]segment.Definition, error) { return nil, nil }
-func (*segmentVersionPaginationRepository) Update(context.Context, segment.Definition, int64, string) (segment.Definition, error) { return segment.Definition{}, nil }
-func (*segmentVersionPaginationRepository) Versions(context.Context, string, int) ([]segment.DefinitionVersion, error) { return nil, nil }
+func (*segmentVersionPaginationRepository) Create(context.Context, segment.Definition, string) (segment.Definition, error) {
+	return segment.Definition{}, nil
+}
+func (*segmentVersionPaginationRepository) Get(context.Context, string) (segment.Definition, error) {
+	return segment.Definition{}, nil
+}
+func (*segmentVersionPaginationRepository) List(context.Context, string, int) ([]segment.Definition, error) {
+	return nil, nil
+}
+func (*segmentVersionPaginationRepository) Update(context.Context, segment.Definition, int64, string) (segment.Definition, error) {
+	return segment.Definition{}, nil
+}
+func (*segmentVersionPaginationRepository) Versions(context.Context, string, int) ([]segment.DefinitionVersion, error) {
+	return nil, nil
+}
 func (r *segmentVersionPaginationRepository) VersionsPage(_ context.Context, _ string, limit int, _ int64) ([]segment.DefinitionVersion, error) {
-	if len(r.items) > limit { return append([]segment.DefinitionVersion(nil), r.items[:limit]...), nil }
+	if len(r.items) > limit {
+		return append([]segment.DefinitionVersion(nil), r.items[:limit]...), nil
+	}
 	return append([]segment.DefinitionVersion(nil), r.items...), nil
 }
 

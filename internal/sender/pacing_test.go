@@ -2,6 +2,7 @@ package sender
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -78,5 +79,25 @@ func TestPacingPolicyRejectsDuplicateMessageOverrides(t *testing.T) {
 	p.Overrides = append(p.Overrides, p.Overrides[0])
 	if err := validatePacing(&p); err == nil {
 		t.Fatal("expected duplicate override rejection")
+	}
+}
+
+func TestPacingPolicyCreatorCannotApproveAfterIndependentSubmission(t *testing.T) {
+	ctx := context.Background()
+	admin := &PacingAdministration{Store: NewMemoryPacingStore()}
+	draft, err := admin.CreateDraft(ctx, basePacing(PacingPlatform, ""), "maker", "maker creates pacing policy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := admin.Submit(ctx, draft.ID, draft.Version, "submitter", "submitter sends for review")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = admin.Decide(ctx, pending.ID, pending.Version, true, "maker", "maker self approves"); !errors.Is(err, ErrPacingInvalid) {
+		t.Fatalf("creator approved own pacing policy after another actor submitted it: %v", err)
+	}
+	stored, err := admin.Store.Get(ctx, pending.ID)
+	if err != nil || stored.Status != PacingPending {
+		t.Fatalf("rejected decision mutated policy: status=%s err=%v", stored.Status, err)
 	}
 }

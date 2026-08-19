@@ -224,7 +224,7 @@ func (s *PolicyAdministration) Decide(ctx context.Context, identifier string, ex
 	if p.Version != expected {
 		return Policy{}, ErrPolicyConflict
 	}
-	if p.Status != PolicyPending || strings.TrimSpace(actor) == "" || actor == p.SubmittedBy || len(strings.TrimSpace(reason)) < 5 {
+	if p.Status != PolicyPending || strings.TrimSpace(actor) == "" || actor == p.CreatedBy || actor == p.SubmittedBy || len(strings.TrimSpace(reason)) < 5 {
 		return Policy{}, ErrPolicyInvalid
 	}
 	if approve {

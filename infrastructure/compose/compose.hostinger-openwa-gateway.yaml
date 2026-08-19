@@ -1,0 +1,80 @@
+name: openwa-hostinger-gateway-node
+
+services:
+  openwa-gateway:
+    image: ${OPENWA_GATEWAY_IMAGE:?OPENWA_GATEWAY_IMAGE must be digest-pinned}
+    restart: unless-stopped
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    shm_size: 1gb
+    tmpfs:
+      - /tmp:size=512m,noexec,nosuid
+    ports:
+      - "${GATEWAY_BIND_ADDRESS:?approved private bind address required}:2785:2785"
+    environment:
+      NODE_ENV: production
+      PORT: 2785
+      GATEWAY_BIND_ADDRESS: ${GATEWAY_BIND_ADDRESS:?approved private bind address required}
+      GATEWAY_PROVIDER_MODE: openwa
+      OPENWA_ENGINE: ${OPENWA_ENGINE:?BAILEYS or WHATSAPP_WEB_JS is required}
+      GATEWAY_POOL_ID: ${GATEWAY_POOL_ID:?required}
+      GATEWAY_POOL_VERSION: ${GATEWAY_POOL_VERSION:?required}
+      GATEWAY_NODE_ID: ${GATEWAY_NODE_ID:?required}
+      GATEWAY_NODE_VERSION: ${GATEWAY_NODE_VERSION:?required}
+      GATEWAY_ADAPTER_VERSION: ${GATEWAY_ADAPTER_VERSION:?required}
+      GATEWAY_CONFIGURATION_VERSION: ${GATEWAY_CONFIGURATION_VERSION:?required}
+      GATEWAY_CAPABILITIES: ${GATEWAY_CAPABILITIES:?required}
+      GATEWAY_INTERNAL_URL: ${GATEWAY_INTERNAL_URL:?approved private gateway command URL is required}
+      CONTROL_API_INTERNAL_URL: ${CONTROL_API_INTERNAL_URL:?approved Railway control URL is required}
+      CONTROL_API_CALLBACK_URL: ${CONTROL_API_CALLBACK_URL:?approved Railway callback URL is required}
+      CONTROL_API_INBOUND_URL: ${CONTROL_API_INBOUND_URL:?approved Railway inbound URL is required}
+      MEDIA_DOWNLOAD_BASE_URL: ${MEDIA_DOWNLOAD_BASE_URL:?approved Railway media URL is required}
+      SSRF_ALLOWED_HOSTS: ${SSRF_ALLOWED_HOSTS:?exact Railway control hostname is required}
+      OPENWA_SESSION_REGISTRY_DIR: /data/openwa-session-registry
+      OPENWA_SESSION_DATA_DIR: /app/session-data
+      OPENWA_MAX_CONCURRENT_SESSIONS: ${OPENWA_MAX_CONCURRENT_SESSIONS:?required}
+      OPENWA_RECONNECT_BASE_DELAY_MS: ${OPENWA_RECONNECT_BASE_DELAY_MS:-}
+      OPENWA_RECONNECT_MAX_ATTEMPTS: ${OPENWA_RECONNECT_MAX_ATTEMPTS:-}
+      OPENWA_RECONNECT_STABILITY_RESET_MS: ${OPENWA_RECONNECT_STABILITY_RESET_MS:-300000}
+      OPENWA_WATCHDOG_INTERVAL_MS: ${OPENWA_WATCHDOG_INTERVAL_MS:-60000}
+      OPENWA_WATCHDOG_PROBE_TIMEOUT_MS: ${OPENWA_WATCHDOG_PROBE_TIMEOUT_MS:-15000}
+      OPENWA_WATCHDOG_FAILURE_THRESHOLD: ${OPENWA_WATCHDOG_FAILURE_THRESHOLD:-2}
+      OPENWA_ENGINE_TEARDOWN_TIMEOUT_MS: ${OPENWA_ENGINE_TEARDOWN_TIMEOUT_MS:-30000}
+      PUPPETEER_HEADLESS: "true"
+      PUPPETEER_EXECUTABLE_PATH: /usr/local/bin/puppeteer-chrome
+      GATEWAY_COMMAND_SECRET_FILE: /run/secrets/gateway_command_secret
+      GATEWAY_COMMAND_SECRET_PREVIOUS_FILE: /run/secrets/gateway_command_secret_previous
+      GATEWAY_CALLBACK_SECRET_FILE: /run/secrets/gateway_callback_secret
+      GATEWAY_RUNTIME_SECRET_FILE: /run/secrets/gateway_runtime_secret
+    secrets:
+      - gateway_command_secret
+      - gateway_command_secret_previous
+      - gateway_callback_secret
+      - gateway_runtime_secret
+    volumes:
+      - openwa-gateway-data:/data
+      - openwa-session-data:/app/session-data
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "require('http').get('http://127.0.0.1:2785/healthz',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 30s
+
+volumes:
+  openwa-gateway-data:
+  openwa-session-data:
+
+secrets:
+  gateway_command_secret: { file: "${GATEWAY_COMMAND_SECRET_FILE:?required}" }
+  gateway_command_secret_previous: { file: "${GATEWAY_COMMAND_SECRET_PREVIOUS_FILE:?required}" }
+  gateway_callback_secret: { file: "${GATEWAY_CALLBACK_SECRET_FILE:?required}" }
+  gateway_runtime_secret: { file: "${GATEWAY_RUNTIME_SECRET_FILE:?required}" }

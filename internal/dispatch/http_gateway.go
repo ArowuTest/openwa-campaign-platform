@@ -31,19 +31,57 @@ type HTTPGateway struct {
 	MaximumResponseBytes int64
 	Clock                func() time.Time
 	Nonce                func() (string, error)
+	RequireNodeURL       bool
 }
 
-func (g *HTTPGateway) Send(ctx context.Context, request GatewayRequest) (GatewayResult, error) {
+func (g *HTTPGateway) Preflight(_ context.Context, request GatewayRequest) error {
 	now := time.Now().UTC()
 	if g.Clock != nil {
 		now = g.Clock().UTC()
 	}
-	if err := validateGatewayRequest(request, now); err != nil {
+	if err := validatePreparedGatewayRequest(request); err != nil {
+		return GatewayError{Code: "GATEWAY_REQUEST_INVALID", Safety: FailurePermanent, Err: err}
+	}
+	if !request.AuthorityExpiresAt.After(now) {
+		return GatewayError{Code: "GATEWAY_AUTHORITY_EXPIRED", Safety: FailureSafeToRetry, Err: errors.New("gateway request authority has expired")}
+	}
+	if g.RequireNodeURL && strings.TrimSpace(request.GatewayNodeURL) == "" {
+		return GatewayError{Code: "GATEWAY_CONFIGURATION_INVALID", Safety: FailurePermanent, Err: errors.New("governed gateway node URL is required")}
+	}
+	_, err := gatewayRequestBaseURL(g.BaseURL, request.GatewayNodeURL)
+	if err != nil {
+		return GatewayError{Code: "GATEWAY_CONFIGURATION_INVALID", Safety: FailurePermanent, Err: errors.New("valid gateway base URL is required")}
+	}
+	secret := strings.TrimSpace(g.CommandSecret)
+	if secret == "" {
+		secret = strings.TrimSpace(g.InternalKey)
+	}
+	if len([]byte(secret)) < 32 {
+		return GatewayError{Code: "GATEWAY_COMMAND_SIGNING_INVALID", Safety: FailurePermanent, Err: errors.New("gateway command secret must contain at least 32 bytes")}
+	}
+	return nil
+}
+
+func (g *HTTPGateway) Send(ctx context.Context, request GatewayRequest) (GatewayResult, error) {
+	if err := g.Preflight(ctx, request); err != nil {
+		return GatewayResult{}, err
+	}
+	return g.SendPrepared(ctx, request)
+}
+func (g *HTTPGateway) SendPrepared(ctx context.Context, request GatewayRequest) (GatewayResult, error) {
+	now := time.Now().UTC()
+	if g.Clock != nil {
+		now = g.Clock().UTC()
+	}
+	if err := validatePreparedGatewayRequest(request); err != nil {
 		return GatewayResult{}, GatewayError{Code: "GATEWAY_REQUEST_INVALID", Safety: FailurePermanent, Err: err}
 	}
-	base, err := url.Parse(strings.TrimSpace(g.BaseURL))
-	if err != nil || base.Scheme == "" || base.Host == "" {
-		return GatewayResult{}, GatewayError{Code: "GATEWAY_CONFIGURATION_INVALID", Safety: FailurePermanent, Err: errors.New("valid gateway base URL is required")}
+	if g.RequireNodeURL && strings.TrimSpace(request.GatewayNodeURL) == "" {
+		return GatewayResult{}, GatewayError{Code: "GATEWAY_CONFIGURATION_INVALID", Safety: FailurePermanent, Err: errors.New("governed gateway node URL is required")}
+	}
+	base, err := gatewayRequestBaseURL(g.BaseURL, request.GatewayNodeURL)
+	if err != nil {
+		return GatewayResult{}, GatewayError{Code: "GATEWAY_CONFIGURATION_INVALID", Safety: FailurePermanent, Err: err}
 	}
 	base.Path = strings.TrimRight(base.Path, "/") + "/v1/messages"
 	payload := map[string]any{
@@ -77,7 +115,7 @@ func (g *HTTPGateway) Send(ctx context.Context, request GatewayRequest) (Gateway
 		nonce, err = g.Nonce()
 	}
 	if err != nil || strings.TrimSpace(nonce) == "" {
-		return GatewayResult{}, GatewayError{Code: "GATEWAY_NONCE_FAILED", Safety: FailurePermanent, Err: err}
+		return GatewayResult{}, GatewayError{Code: "GATEWAY_NONCE_FAILED", Safety: FailureSafeToRetry, Err: err}
 	}
 	timestamp := strconv.FormatInt(now.Unix(), 10)
 	canonical := signedCommandCanonical(http.MethodPost, httpRequest.URL.RequestURI(), timestamp, nonce, encoded)
@@ -90,7 +128,11 @@ func (g *HTTPGateway) Send(ctx context.Context, request GatewayRequest) (Gateway
 	client := g.Client
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
+	} else {
+		clone := *client
+		client = &clone
 	}
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	observability.InjectTrace(httpRequest)
 	response, err := client.Do(httpRequest)
 	if err != nil {
@@ -110,10 +152,7 @@ func (g *HTTPGateway) Send(ctx context.Context, request GatewayRequest) (Gateway
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		safety := FailurePermanent
-		if response.StatusCode == http.StatusTooManyRequests || response.StatusCode == http.StatusServiceUnavailable || response.StatusCode == http.StatusConflict {
-			safety = FailureSafeToRetry
-		}
-		if response.StatusCode >= 500 && response.StatusCode != http.StatusServiceUnavailable {
+		if (response.StatusCode >= 300 && response.StatusCode < 400) || response.StatusCode == http.StatusRequestTimeout || response.StatusCode == http.StatusConflict || response.StatusCode == http.StatusTooManyRequests || response.StatusCode >= 500 {
 			safety = FailureOutcomeUnknown
 		}
 		return GatewayResult{}, GatewayError{Code: fmt.Sprintf("GATEWAY_HTTP_%d", response.StatusCode), Safety: safety, RetryAfter: parseRetryAfter(response.Header.Get("Retry-After"), now), Err: errors.New(redactedGatewayError(body))}
@@ -131,10 +170,35 @@ func (g *HTTPGateway) Send(ctx context.Context, request GatewayRequest) (Gateway
 	if !decoded.Accepted {
 		return GatewayResult{}, GatewayError{Code: nonEmpty(decoded.ErrorCode, "GATEWAY_REJECTED"), Safety: FailurePermanent, Err: errors.New(redactedGatewayError([]byte(decoded.ErrorDetail)))}
 	}
-	return GatewayResult{Accepted: true, ProviderMessageID: decoded.ProviderMessageID, AcceptedAt: decoded.AcceptedAt, RawStatusCode: fmt.Sprintf("HTTP_%d", response.StatusCode)}, nil
+	if strings.TrimSpace(decoded.ProviderMessageID) == "" {
+		return GatewayResult{}, GatewayError{Code: "GATEWAY_ACCEPTANCE_UNKNOWN", Safety: FailureOutcomeUnknown, Err: errors.New("gateway acceptance omitted provider message ID")}
+	}
+	return GatewayResult{Accepted: true, ProviderMessageID: strings.TrimSpace(decoded.ProviderMessageID), AcceptedAt: decoded.AcceptedAt, RawStatusCode: fmt.Sprintf("HTTP_%d", response.StatusCode)}, nil
+}
+
+func gatewayRequestBaseURL(staticURL, nodeURL string) (*url.URL, error) {
+	value := strings.TrimSpace(nodeURL)
+	if value == "" {
+		value = strings.TrimSpace(staticURL)
+	}
+	base, err := url.Parse(value)
+	if err != nil || base.Scheme == "" || base.Host == "" || (base.Scheme != "http" && base.Scheme != "https") {
+		return nil, errors.New("valid gateway base URL is required")
+	}
+	return base, nil
 }
 
 func validateGatewayRequest(request GatewayRequest, now time.Time) error {
+	if err := validatePreparedGatewayRequest(request); err != nil {
+		return err
+	}
+	if !request.AuthorityExpiresAt.After(now) {
+		return errors.New("gateway request authority has expired")
+	}
+	return nil
+}
+
+func validatePreparedGatewayRequest(request GatewayRequest) error {
 	if strings.ToUpper(strings.TrimSpace(request.Provider)) != "OPENWA" {
 		return errors.New("gateway request provider must be OPENWA")
 	}
@@ -144,15 +208,11 @@ func validateGatewayRequest(request GatewayRequest, now time.Time) error {
 	}
 	if strings.TrimSpace(request.GatewayPoolID) == "" || request.GatewayPoolVersion <= 0 || strings.TrimSpace(request.GatewayAdapterVersion) == "" ||
 		strings.TrimSpace(request.GatewayNodeID) == "" || request.GatewayNodeVersion <= 0 || strings.TrimSpace(request.SessionID) == "" ||
-		request.SessionLeaseVersion <= 0 || request.SessionConfigurationVersion <= 0 || strings.TrimSpace(request.RouteReference) == "" {
+		request.SessionLeaseVersion <= 0 || request.SessionConfigurationVersion <= 0 || request.AuthorityExpiresAt.IsZero() || strings.TrimSpace(request.RouteReference) == "" {
 		return errors.New("gateway request authority evidence is incomplete")
-	}
-	if !request.AuthorityExpiresAt.After(now) {
-		return errors.New("gateway request authority has expired")
 	}
 	return nil
 }
-
 func signedCommandCanonical(method, requestURI, timestamp, nonce string, body []byte) string {
 	digest := sha256.Sum256(body)
 	return strings.Join([]string{strings.ToUpper(method), requestURI, timestamp, nonce, hex.EncodeToString(digest[:])}, "\n")
@@ -186,13 +246,6 @@ func emptyAsNil(v string) any {
 	}
 	return strings.TrimSpace(v)
 }
-func redactedGatewayError(body []byte) string {
-	value := strings.TrimSpace(string(body))
-	if value == "" {
-		return "gateway rejected request"
-	}
-	if len(value) > 300 {
-		value = value[:300]
-	}
-	return value
+func redactedGatewayError(_ []byte) string {
+	return "gateway rejected request"
 }

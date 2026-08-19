@@ -7,7 +7,7 @@ import { SanitisedJsonLogger } from './observability.service';
 async function bootstrap() {
   resolveSecretFiles([
     'GATEWAY_COMMAND_SECRET','GATEWAY_COMMAND_SECRET_PREVIOUS','GATEWAY_CALLBACK_SECRET',
-    'GATEWAY_CALLBACK_SECRET_PREVIOUS','GATEWAY_RUNTIME_SECRET','MEDIA_DOWNLOAD_SECRET','PROFILING_TOKEN'
+    'GATEWAY_RUNTIME_SECRET'
   ]);
   const app = await NestFactory.create(AppModule, {
     cors: false,

@@ -75,7 +75,7 @@ func (g *HTTPSessionGateway) Health(ctx context.Context, n Node, s GovernedSessi
 
 func (g *HTTPSessionGateway) request(ctx context.Context, node Node, method, path string, payload any) (SessionGatewayResult, error) {
 	base, err := url.Parse(strings.TrimRight(strings.TrimSpace(node.InternalURL), "/"))
-	if err != nil || base.Scheme == "" || base.Host == "" {
+	if err != nil || base.Scheme == "" || base.Host == "" || (base.Scheme != "http" && base.Scheme != "https") {
 		return SessionGatewayResult{}, errors.New("valid governed gateway node URL is required")
 	}
 	base.Path = strings.TrimRight(base.Path, "/") + path
@@ -105,7 +105,11 @@ func (g *HTTPSessionGateway) request(ctx context.Context, node Node, method, pat
 	client := g.Client
 	if client == nil {
 		client = &http.Client{Timeout: 30 * time.Second}
+	} else {
+		clone := *client
+		client = &clone
 	}
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	observability.InjectTrace(req)
 	resp, err := client.Do(req)
 	if err != nil {
@@ -158,7 +162,15 @@ func (g *HTTPSessionGateway) sign(req *http.Request, body []byte) error {
 	}
 	timestamp := strconv.FormatInt(now.Unix(), 10)
 	digest := sha256.Sum256(body)
-	canonical := strings.Join([]string{strings.ToUpper(req.Method), req.URL.RequestURI(), timestamp, nonce, hex.EncodeToString(digest[:])}, "\n")
+	canonical := strings.Join([]string{
+		strings.ToUpper(req.Method), req.URL.RequestURI(), timestamp, nonce, hex.EncodeToString(digest[:]),
+		strings.TrimSpace(req.Header.Get("X-Gateway-Target-Node-ID")),
+		strings.TrimSpace(req.Header.Get("X-Gateway-Target-Node-Version")),
+		strings.TrimSpace(req.Header.Get("X-Gateway-Target-Pool-ID")),
+		strings.ToUpper(strings.TrimSpace(req.Header.Get("X-Gateway-Target-Provider"))),
+		strings.ToUpper(strings.TrimSpace(req.Header.Get("X-Gateway-Target-Engine"))),
+		strings.TrimSpace(req.Header.Get("X-Gateway-Target-Adapter-Version")),
+	}, "\n")
 	mac := hmac.New(sha256.New, []byte(secret))
 	_, _ = mac.Write([]byte(canonical))
 	req.Header.Set("X-Gateway-Timestamp", timestamp)

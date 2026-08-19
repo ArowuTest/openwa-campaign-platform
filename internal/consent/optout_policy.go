@@ -124,7 +124,7 @@ func (s *OptOutPolicyAdministration) Decide(ctx context.Context, id string, expe
 	if p.Version != expected {
 		return GovernedOptOutPolicy{}, ErrOptOutPolicyConflict
 	}
-	if p.Status != OptOutPolicyPending || strings.TrimSpace(actor) == "" || actor == p.SubmittedBy || len(strings.TrimSpace(reason)) < 5 {
+	if p.Status != OptOutPolicyPending || strings.TrimSpace(actor) == "" || actor == p.CreatedBy || actor == p.SubmittedBy || len(strings.TrimSpace(reason)) < 5 {
 		return GovernedOptOutPolicy{}, ErrOptOutPolicyInvalid
 	}
 	if approve {

@@ -53,6 +53,9 @@ async function testReplayEvidence() {
   const now = Math.floor(Date.now() / 1000);
   await service.claim('nonce-0000000001', 'a'.repeat(64), now, now + 300);
   await assert.rejects(() => service.claim('nonce-0000000001', 'a'.repeat(64), now, now + 300), UnauthorizedException);
+  const validRestart = new CommandReplayService();
+  await validRestart.onModuleInit();
+  await assert.rejects(() => validRestart.claim('nonce-0000000001', 'c'.repeat(64), now, now + 300), UnauthorizedException);
 
   const corruptNonce = 'nonce-0000000002';
   const corruptPath = path.join(directory, `${crypto.createHash('sha256').update(corruptNonce).digest('hex')}.json`);
@@ -137,6 +140,13 @@ async function testIdempotencyDurability() {
   const replay = await restarted.execute(request, async () => { throw new Error('provider must not be called'); });
   assert.equal(replay.duplicate, true);
   assert.equal(replay.providerMessageId, 'provider-1');
+  const differentRequest = { ...request, body: 'different-approved-message' };
+  let differentSubmissions = 0;
+  await assert.rejects(() => restarted.execute(differentRequest, async () => {
+    differentSubmissions += 1;
+    return { accepted: true, providerMessageId: 'must-not-send', acceptedAt: new Date().toISOString() };
+  }), ConflictException);
+  assert.equal(differentSubmissions, 0, 'same idempotency key with different content must not call provider');
 
   const persisted = (await Promise.all((await fs.readdir(directory)).map(name => fs.readFile(path.join(directory, name), 'utf8')))).join('\n');
   for (const forbidden of [request.recipientMsisdn, request.body, request.routeReference, request.clientReference]) {

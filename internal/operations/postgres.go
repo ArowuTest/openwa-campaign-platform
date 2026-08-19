@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"campaign-platform/internal/audit"
 )
 
 type PostgreSQLRepository struct {
@@ -217,6 +219,14 @@ func (r *PostgreSQLRepository) UpdateIncident(ctx context.Context, v Incident, e
 }
 
 func (r *PostgreSQLRepository) CreateIncidentWithEvents(ctx context.Context, v Incident, events []IncidentEvent) (Incident, error) {
+	return r.createIncidentWithEvents(ctx, v, events, nil)
+}
+
+func (r *PostgreSQLRepository) CreateIncidentWithEventsAndAudit(ctx context.Context, v Incident, events []IncidentEvent, input audit.Input) (Incident, error) {
+	return r.createIncidentWithEvents(ctx, v, events, &input)
+}
+
+func (r *PostgreSQLRepository) createIncidentWithEvents(ctx context.Context, v Incident, events []IncidentEvent, auditInput *audit.Input) (Incident, error) {
 	tx, err := r.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return Incident{}, err
@@ -231,6 +241,11 @@ func (r *PostgreSQLRepository) CreateIncidentWithEvents(ctx context.Context, v I
 			return Incident{}, err
 		}
 	}
+	if auditInput != nil {
+		if _, err = audit.EnqueueTx(ctx, tx, *auditInput); err != nil {
+			return Incident{}, err
+		}
+	}
 	if err = tx.Commit(); err != nil {
 		return Incident{}, err
 	}
@@ -238,6 +253,14 @@ func (r *PostgreSQLRepository) CreateIncidentWithEvents(ctx context.Context, v I
 }
 
 func (r *PostgreSQLRepository) UpdateIncidentWithEvents(ctx context.Context, v Incident, expected int64, events []IncidentEvent) (Incident, error) {
+	return r.updateIncidentWithEvents(ctx, v, expected, events, nil)
+}
+
+func (r *PostgreSQLRepository) UpdateIncidentWithEventsAndAudit(ctx context.Context, v Incident, expected int64, events []IncidentEvent, input audit.Input) (Incident, error) {
+	return r.updateIncidentWithEvents(ctx, v, expected, events, &input)
+}
+
+func (r *PostgreSQLRepository) updateIncidentWithEvents(ctx context.Context, v Incident, expected int64, events []IncidentEvent, auditInput *audit.Input) (Incident, error) {
 	tx, err := r.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return Incident{}, err
@@ -261,6 +284,11 @@ func (r *PostgreSQLRepository) UpdateIncidentWithEvents(ctx context.Context, v I
 		}
 		event.Evidence["version"] = v.Version
 		if err = insertIncidentEvent(ctx, tx, event); err != nil {
+			return Incident{}, err
+		}
+	}
+	if auditInput != nil {
+		if _, err = audit.EnqueueTx(ctx, tx, *auditInput); err != nil {
 			return Incident{}, err
 		}
 	}
@@ -641,18 +669,44 @@ const exportSelect = `SELECT
  coalesce(lease_owner,''),lease_expires_at,version
  FROM export_requests`
 
-func (r *PostgreSQLRepository) CreateExport(ctx context.Context, v ExportRequest) (ExportRequest, error) {
-	criteria := []byte(v.Criteria)
-	if len(criteria) == 0 {
-		criteria = []byte(`{}`)
+type exportExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+func insertExport(ctx context.Context, exec exportExecer, v ExportRequest) error {
+	criteria := string(v.Criteria)
+	if strings.TrimSpace(criteria) == "" {
+		criteria = `{}`
 	}
-	_, err := r.DB.ExecContext(ctx, `INSERT INTO export_requests(
+	_, err := exec.ExecContext(ctx, `INSERT INTO export_requests(
  id,kind,object_id,format,status,requested_by,reason,criteria,template_version,watermark_text,
  created_at,updated_at,version
 ) VALUES($1::uuid,$2,NULLIF($3,'')::uuid,$4,$5,$6::uuid,$7,$8::jsonb,$9,NULLIF($10,''),$11,$12,$13)`,
 		v.ID, v.Kind, v.ObjectID, v.Format, v.Status, v.RequestedBy, v.Reason, criteria,
 		v.TemplateVersion, v.WatermarkText, v.CreatedAt, v.UpdatedAt, v.Version)
-	return v, err
+	return err
+}
+
+func (r *PostgreSQLRepository) CreateExport(ctx context.Context, v ExportRequest) (ExportRequest, error) {
+	return v, insertExport(ctx, r.DB, v)
+}
+
+func (r *PostgreSQLRepository) CreateExportWithAudit(ctx context.Context, v ExportRequest, input audit.Input) (ExportRequest, error) {
+	tx, err := r.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return ExportRequest{}, err
+	}
+	defer tx.Rollback()
+	if err := insertExport(ctx, tx, v); err != nil {
+		return ExportRequest{}, err
+	}
+	if _, err := audit.EnqueueTx(ctx, tx, input); err != nil {
+		return ExportRequest{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ExportRequest{}, err
+	}
+	return v, nil
 }
 
 func (r *PostgreSQLRepository) GetExport(ctx context.Context, id string) (ExportRequest, error) {
@@ -720,19 +774,19 @@ func (r *PostgreSQLRepository) ListExports(ctx context.Context, query ExportQuer
 	return page, nil
 }
 
-func (r *PostgreSQLRepository) UpdateExport(ctx context.Context, v ExportRequest, expected int64) (ExportRequest, error) {
+func updateExport(ctx context.Context, exec exportExecer, v ExportRequest, expected int64) (ExportRequest, error) {
 	var frozen any
 	if len(v.FrozenPayload) > 0 {
-		frozen = []byte(v.FrozenPayload)
+		frozen = string(v.FrozenPayload)
 	}
-	res, err := r.DB.ExecContext(ctx, `UPDATE export_requests SET
+	res, err := exec.ExecContext(ctx, `UPDATE export_requests SET
  status=$2,approved_by=NULLIF($3,'')::uuid,rejection_reason=NULLIF($4,''),expires_at=$5,
  criteria=$6::jsonb,template_version=$7,as_of=$8,frozen_payload=$9::jsonb,
  audit_head_sequence=NULLIF($10,0),audit_head_hash=NULLIF($11,''),watermark_text=NULLIF($12,''),
  revoked_at=$13,revoked_by=NULLIF($14,'')::uuid,revocation_reason=NULLIF($15,''),
  updated_at=$16,version=version+1
  WHERE id=$1::uuid AND version=$17`,
-		v.ID, v.Status, v.ApprovedBy, v.RejectionReason, v.ExpiresAt, []byte(v.Criteria),
+		v.ID, v.Status, v.ApprovedBy, v.RejectionReason, v.ExpiresAt, string(v.Criteria),
 		v.TemplateVersion, v.AsOf, frozen, v.AuditHeadSequence, v.AuditHeadHash, v.WatermarkText,
 		v.RevokedAt, v.RevokedBy, v.RevocationReason, v.UpdatedAt, expected)
 	if err != nil {
@@ -749,12 +803,79 @@ func (r *PostgreSQLRepository) UpdateExport(ctx context.Context, v ExportRequest
 	return v, nil
 }
 
-func (r *PostgreSQLRepository) CreateDownloadGrant(ctx context.Context, grant DownloadGrant) (DownloadGrant, error) {
-	_, err := r.DB.ExecContext(ctx, `INSERT INTO export_download_grants(
+func (r *PostgreSQLRepository) UpdateExport(ctx context.Context, v ExportRequest, expected int64) (ExportRequest, error) {
+	return updateExport(ctx, r.DB, v, expected)
+}
+
+func (r *PostgreSQLRepository) UpdateExportWithAudit(ctx context.Context, v ExportRequest, expected int64, input audit.Input) (ExportRequest, error) {
+	tx, err := r.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return ExportRequest{}, err
+	}
+	defer tx.Rollback()
+	updated, err := updateExport(ctx, tx, v, expected)
+	if err != nil {
+		return ExportRequest{}, err
+	}
+	if _, err := audit.EnqueueTx(ctx, tx, input); err != nil {
+		return ExportRequest{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ExportRequest{}, err
+	}
+	return updated, nil
+}
+
+func (r *PostgreSQLRepository) RevokeExportWithAudit(ctx context.Context, v ExportRequest, expected int64, now time.Time, input audit.Input) (ExportRequest, error) {
+	tx, err := r.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		return ExportRequest{}, err
+	}
+	defer tx.Rollback()
+	updated, err := updateExport(ctx, tx, v, expected)
+	if err != nil {
+		return ExportRequest{}, err
+	}
+	if err := revokeDownloadGrants(ctx, tx, v.ID, now); err != nil {
+		return ExportRequest{}, err
+	}
+	if _, err := audit.EnqueueTx(ctx, tx, input); err != nil {
+		return ExportRequest{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ExportRequest{}, err
+	}
+	return updated, nil
+}
+
+func insertDownloadGrant(ctx context.Context, exec exportExecer, grant DownloadGrant) error {
+	_, err := exec.ExecContext(ctx, `INSERT INTO export_download_grants(
  id,export_id,actor_id,token_hash,request_id,expires_at,created_at
 ) VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5,$6,$7)`,
 		grant.ID, grant.ExportID, grant.ActorID, grant.TokenHash, grant.RequestID, grant.ExpiresAt, grant.CreatedAt)
-	return grant, err
+	return err
+}
+
+func (r *PostgreSQLRepository) CreateDownloadGrant(ctx context.Context, grant DownloadGrant) (DownloadGrant, error) {
+	return grant, insertDownloadGrant(ctx, r.DB, grant)
+}
+
+func (r *PostgreSQLRepository) CreateDownloadGrantWithAudit(ctx context.Context, grant DownloadGrant, input audit.Input) (DownloadGrant, error) {
+	tx, err := r.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return DownloadGrant{}, err
+	}
+	defer tx.Rollback()
+	if err := insertDownloadGrant(ctx, tx, grant); err != nil {
+		return DownloadGrant{}, err
+	}
+	if _, err := audit.EnqueueTx(ctx, tx, input); err != nil {
+		return DownloadGrant{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return DownloadGrant{}, err
+	}
+	return grant, nil
 }
 
 func (r *PostgreSQLRepository) ConsumeDownloadGrant(ctx context.Context, exportID, tokenHash, actorID string, now time.Time) (ExportRequest, DownloadGrant, error) {
@@ -816,9 +937,71 @@ func (r *PostgreSQLRepository) ConsumeDownloadGrant(ctx context.Context, exportI
 	return export, grant, nil
 }
 
-func (r *PostgreSQLRepository) RevokeDownloadGrants(ctx context.Context, exportID string, now time.Time) error {
-	_, err := r.DB.ExecContext(ctx, `UPDATE export_download_grants SET revoked_at=$2 WHERE export_id=$1::uuid AND used_at IS NULL AND revoked_at IS NULL`, exportID, now)
+func (r *PostgreSQLRepository) ConsumeDownloadGrantWithAudit(ctx context.Context, exportID, tokenHash, actorID string, now time.Time, input audit.Input) (ExportRequest, DownloadGrant, error) {
+	tx, err := r.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		return ExportRequest{}, DownloadGrant{}, err
+	}
+	defer tx.Rollback()
+	export, err := scanExport(tx.QueryRowContext(ctx, exportSelect+` WHERE id=$1::uuid FOR UPDATE`, exportID))
+	if errors.Is(err, sql.ErrNoRows) {
+		return ExportRequest{}, DownloadGrant{}, ErrNotFound
+	}
+	if err != nil {
+		return ExportRequest{}, DownloadGrant{}, err
+	}
+	if export.Status != ExportReady || export.RevokedAt != nil || export.ExpiresAt == nil || !export.ExpiresAt.After(now) {
+		return ExportRequest{}, DownloadGrant{}, ErrConflict
+	}
+	var grant DownloadGrant
+	var used, revoked sql.NullTime
+	err = tx.QueryRowContext(ctx, `SELECT id::text,export_id::text,actor_id::text,token_hash,request_id,expires_at,used_at,revoked_at,created_at FROM export_download_grants WHERE export_id=$1::uuid AND token_hash=$2 AND actor_id=$3::uuid FOR UPDATE`, exportID, tokenHash, actorID).Scan(&grant.ID, &grant.ExportID, &grant.ActorID, &grant.TokenHash, &grant.RequestID, &grant.ExpiresAt, &used, &revoked, &grant.CreatedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ExportRequest{}, DownloadGrant{}, ErrNotFound
+	}
+	if err != nil {
+		return ExportRequest{}, DownloadGrant{}, err
+	}
+	if used.Valid || revoked.Valid || !grant.ExpiresAt.After(now) {
+		return ExportRequest{}, DownloadGrant{}, ErrConflict
+	}
+	res, err := tx.ExecContext(ctx, `UPDATE export_download_grants SET used_at=$2 WHERE id=$1::uuid AND used_at IS NULL AND revoked_at IS NULL`, grant.ID, now)
+	if err != nil {
+		return ExportRequest{}, DownloadGrant{}, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return ExportRequest{}, DownloadGrant{}, err
+	}
+	if n != 1 {
+		return ExportRequest{}, DownloadGrant{}, ErrConflict
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE export_requests SET download_count=download_count+1,last_downloaded_at=$2,updated_at=$2,version=version+1 WHERE id=$1::uuid`, exportID, now); err != nil {
+		return ExportRequest{}, DownloadGrant{}, err
+	}
+	input.After = map[string]any{"grantId": grant.ID, "sha256": export.SHA256, "sizeBytes": export.SizeBytes}
+	if _, err := audit.EnqueueTx(ctx, tx, input); err != nil {
+		return ExportRequest{}, DownloadGrant{}, err
+	}
+	if err = tx.Commit(); err != nil {
+		return ExportRequest{}, DownloadGrant{}, err
+	}
+	usedAt := now.UTC()
+	grant.UsedAt = &usedAt
+	export.DownloadCount++
+	export.LastDownloadedAt = &usedAt
+	export.UpdatedAt = usedAt
+	export.Version++
+	return export, grant, nil
+}
+
+func revokeDownloadGrants(ctx context.Context, exec exportExecer, exportID string, now time.Time) error {
+	_, err := exec.ExecContext(ctx, `UPDATE export_download_grants SET revoked_at=$2 WHERE export_id=$1::uuid AND used_at IS NULL AND revoked_at IS NULL`, exportID, now)
 	return err
+}
+
+func (r *PostgreSQLRepository) RevokeDownloadGrants(ctx context.Context, exportID string, now time.Time) error {
+	return revokeDownloadGrants(ctx, r.DB, exportID, now)
 }
 
 func (r *PostgreSQLRepository) ListExceptions(ctx context.Context, campaignID string, limit int) ([]DeliveryException, error) {

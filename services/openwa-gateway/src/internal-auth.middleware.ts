@@ -27,8 +27,27 @@ export class InternalAuthMiddleware implements NestMiddleware {
     if (!Number.isInteger(parsedTimestamp) || Math.abs(now - parsedTimestamp) > windowSeconds) throw new UnauthorizedException('gateway command timestamp is outside the replay window');
     if (!/^[A-Za-z0-9_-]{16,128}$/.test(nonce)) throw new UnauthorizedException('gateway command nonce is invalid');
 
+    const contentLength = (request.header('content-length') ?? '').trim();
+    const transferEncoding = (request.header('transfer-encoding') ?? '').trim();
+    const parsedLength = contentLength === '' ? 0 : Number.parseInt(contentLength, 10);
+    const declaredBody = transferEncoding !== '' || (Number.isInteger(parsedLength) && parsedLength > 0);
+    const malformedLength = contentLength !== '' && !/^\d+$/.test(contentLength);
+    if (!Buffer.isBuffer(request.rawBody) && (declaredBody || malformedLength)) {
+      throw new UnauthorizedException('gateway command raw body evidence is unavailable');
+    }
     const bodyHash = createHash('sha256').update(request.rawBody ?? Buffer.alloc(0)).digest('hex');
-    const canonical = [request.method.toUpperCase(), request.originalUrl, timestamp, nonce, bodyHash].join('\n');
+    const canonicalFields = [request.method.toUpperCase(), request.originalUrl, timestamp, nonce, bodyHash];
+    if (request.path.startsWith('/v1/sessions')) {
+      canonicalFields.push(
+        (request.header('x-gateway-target-node-id') ?? '').trim(),
+        (request.header('x-gateway-target-node-version') ?? '').trim(),
+        (request.header('x-gateway-target-pool-id') ?? '').trim(),
+        (request.header('x-gateway-target-provider') ?? '').trim().toUpperCase(),
+        (request.header('x-gateway-target-engine') ?? '').trim().toUpperCase(),
+        (request.header('x-gateway-target-adapter-version') ?? '').trim(),
+      );
+    }
+    const canonical = canonicalFields.join('\n');
     const valid = secrets.some(secret => safeEqual(`sha256=${createHmac('sha256', secret).update(canonical).digest('hex')}`, signature));
     if (!valid) throw new UnauthorizedException('invalid gateway command signature');
     if (request.path.startsWith('/v1/sessions')) this.assertTargetIdentity(request);

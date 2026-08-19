@@ -75,3 +75,25 @@ func TestOrganisationPolicyValidatesFrequencyCaps(t *testing.T) {
 		t.Fatalf("expected invalid cap, got %v", err)
 	}
 }
+
+func TestOrganisationPolicyCreatorCannotApproveAfterIndependentSubmission(t *testing.T) {
+	ctx := context.Background()
+	admin := &PolicyAdministration{Store: NewMemoryPolicyStore()}
+	draft, err := admin.CreateDraft(ctx, Policy{
+		OrganisationID: "org-three-actor", ContactRetentionDays: 30, CampaignRetentionDays: 90,
+	}, "maker", "maker creates policy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := admin.Submit(ctx, draft.ID, draft.Version, "submitter", "submitter sends for review")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = admin.Decide(ctx, pending.ID, pending.Version, true, "maker", "maker self approves"); !errors.Is(err, ErrPolicyInvalid) {
+		t.Fatalf("creator approved own organisation policy after another actor submitted it: %v", err)
+	}
+	stored, err := admin.Store.Get(ctx, pending.ID)
+	if err != nil || stored.Status != PolicyPending {
+		t.Fatalf("rejected decision mutated policy: status=%s err=%v", stored.Status, err)
+	}
+}

@@ -170,3 +170,40 @@ func TestFutureDatedReplacementPreservesCurrentRouteUntilBoundary(t *testing.T) 
 		t.Fatalf("missing supersession evidence: %+v", events)
 	}
 }
+
+func TestProviderDefinitionCreatorCannotApproveAfterIndependentSubmission(t *testing.T) {
+	ctx := context.Background()
+	service := &Service{Store: NewMemoryStore()}
+	draft, err := service.CreateDraft(ctx, Definition{
+		Provider: "OPENWA", Channel: ChannelWhatsApp, Engine: "BAILEYS",
+		AdapterVersion: "three-actor", Capabilities: []Capability{CapabilitySendText},
+	}, "maker", "maker creates provider definition")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := service.Submit(ctx, draft.ID, draft.Version, "submitter", "submitter sends for review")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = service.Decide(ctx, pending.ID, pending.Version, true, "maker", "maker self approves"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("creator approved own provider definition after another actor submitted it: %v", err)
+	}
+	stored, err := service.Store.Get(ctx, pending.ID)
+	if err != nil || stored.Status != StatusPending {
+		t.Fatalf("rejected decision mutated definition: status=%s err=%v", stored.Status, err)
+	}
+}
+
+func TestMetaCloudDefinitionAcceptsSendTemplateCapability(t *testing.T) {
+	svc := &Service{Store: NewMemoryStore()}
+	definition, err := svc.CreateDraft(context.Background(), Definition{
+		Provider: "META", Channel: ChannelWhatsApp, Engine: "CLOUD_API",
+		AdapterVersion: "1.0.0", Capabilities: []Capability{CapabilitySendTemplate, CapabilityDeliveryEvents, CapabilityInbound},
+	}, "maker", "create Meta Cloud definition")
+	if err != nil {
+		t.Fatalf("Meta template capability rejected: %v", err)
+	}
+	if len(definition.Capabilities) != 3 {
+		t.Fatalf("unexpected capabilities: %v", definition.Capabilities)
+	}
+}

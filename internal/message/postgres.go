@@ -84,7 +84,7 @@ INSERT INTO message_versions(
  id,campaign_id,version,message_type,body,media_asset_id,media_object_key,media_sha256,media_type,media_size,media_scan_status,
  destination_links,variables,content_hash,client_request_id,status,created_by,created_at
 ) VALUES($1::uuid,$2::uuid,$3,$4,NULLIF($5,''),NULLIF($6,'')::uuid,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14,$15,'DRAFT',NULLIF($16,'')::uuid,$17)`,
-			value.ID, value.CampaignID, value.Version, value.Type, value.Body, assetID, objectKey, mediaSHA, mediaType, mediaSize, scanStatus, links, variables, value.ContentHash, value.IdempotencyKey, value.CreatedBy, value.CreatedAt)
+			value.ID, value.CampaignID, value.Version, value.Type, value.Body, assetID, objectKey, mediaSHA, mediaType, mediaSize, scanStatus, string(links), string(variables), value.ContentHash, value.IdempotencyKey, value.CreatedBy, value.CreatedAt)
 		if err != nil {
 			return Version{}, fmt.Errorf("insert message version: %w", err)
 		}

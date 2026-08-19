@@ -54,7 +54,11 @@ func TestPostgreSQLFinalEligibilityHoldsQueuedWorkAtEverySafetyBoundary(t *testi
 	if _, err := db.ExecContext(ctx, `UPDATE campaigns SET status='PAUSED' WHERE id=$1::uuid`, f.CampaignID); err != nil {
 		t.Fatal(err)
 	}
-	assertDecision(false, "CAMPAIGN_NOT_DISPATCHABLE")
+	assertDecision(false, "CAMPAIGN_PAUSED")
+	if _, err := db.ExecContext(ctx, `UPDATE campaigns SET status='CANCELLED' WHERE id=$1::uuid`, f.CampaignID); err != nil {
+		t.Fatal(err)
+	}
+	assertDecision(false, "CAMPAIGN_CANCELLED")
 	if _, err := db.ExecContext(ctx, `UPDATE campaigns SET status='DISPATCHING',requested_start_at=$2 WHERE id=$1::uuid`, f.CampaignID, f.AsOf.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}

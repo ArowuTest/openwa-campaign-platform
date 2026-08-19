@@ -2,6 +2,7 @@ import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { createHmac } from 'node:crypto';
 import { InboundMessageOutboxService } from './inbound-message-outbox.service';
 import { GatewayObservabilityService } from './observability.service';
+import { boundedResponseDetail } from './control-plane-response';
 
 export type InboundMessageEvent = {
   schemaVersion: '1.0';
@@ -45,7 +46,7 @@ export class InboundMessagePublisherService {
       signal: AbortSignal.timeout(boundedInteger(process.env.CALLBACK_TIMEOUT_MS, 5_000, 250, 30_000))
     });
     if (!response.ok) {
-      const detail = (await response.text()).replace(/[\r\n\t]+/g, ' ').slice(0, 300);
+      const detail = await boundedResponseDetail(response, 300);
       throw new ServiceUnavailableException(`control-plane inbound callback failed with HTTP ${response.status}: ${detail}`);
     }
   }

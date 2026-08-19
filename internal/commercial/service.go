@@ -138,7 +138,7 @@ func (s *Service) Decide(ctx context.Context, identifier string, expected int64,
 	if r.Version != expected {
 		return Record{}, ErrConflict
 	}
-	if r.Status != StatusPending || strings.TrimSpace(actor) == "" || actor == r.SubmittedBy || len(strings.TrimSpace(reason)) < 5 {
+	if r.Status != StatusPending || strings.TrimSpace(actor) == "" || actor == r.CreatedBy || actor == r.SubmittedBy || len(strings.TrimSpace(reason)) < 5 {
 		return Record{}, ErrMakerChecker
 	}
 	if approve {

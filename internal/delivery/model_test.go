@@ -155,3 +155,75 @@ func TestEventFingerprintSeparatesProviderEventAndMessageIdentity(t *testing.T) 
 		t.Fatal("provider event and message identifiers are not independently bound into the fingerprint")
 	}
 }
+
+func TestUnknownCannotBecomeRetryableOrRestart(t *testing.T) {
+	now := time.Date(2026, 8, 15, 22, 50, 0, 0, time.UTC)
+	recipient := Recipient{Status: StatusSubmitting, UpdatedAt: now}
+	unknown, _, err := Apply(recipient, event("unknown-sticky", EventUnknown, now.Add(time.Second)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterRetryable, _, err := Apply(unknown, event("late-retryable", EventFailedRetryable, now.Add(2*time.Second)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterRetryable.Status != StatusUnknown || !afterRetryable.ReconciliationRequired {
+		t.Fatalf("UNKNOWN was reopened by retryable failure: %+v", afterRetryable)
+	}
+	afterQueued, _, err := Apply(afterRetryable, event("late-requeue", EventQueued, now.Add(3*time.Second)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterQueued.Status != StatusUnknown {
+		t.Fatalf("UNKNOWN restarted pre-send progression: %+v", afterQueued)
+	}
+}
+
+func TestTerminalFailureCannotBecomeRetryable(t *testing.T) {
+	now := time.Date(2026, 8, 15, 22, 51, 0, 0, time.UTC)
+	recipient := Recipient{Status: StatusClaimed, UpdatedAt: now}
+	terminalRecipient, _, err := Apply(recipient, event("permanent", EventFailedPermanent, now.Add(time.Second)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterRetryable, _, err := Apply(terminalRecipient, event("late-retryable-terminal", EventFailedRetryable, now.Add(2*time.Second)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterRetryable.Status != StatusFailedPermanent || afterRetryable.CompletedAt == nil {
+		t.Fatalf("terminal decision was resurrected: %+v", afterRetryable)
+	}
+}
+
+func TestRetryableAfterGatewayAcceptanceCannotReopenSend(t *testing.T) {
+	now := time.Date(2026, 8, 15, 22, 52, 0, 0, time.UTC)
+	recipient := Recipient{Status: StatusSubmitting, UpdatedAt: now}
+	accepted, _, err := Apply(recipient, Event{DeduplicationKey: "gateway-accepted-retry", Type: EventGatewayAccepted, ProviderMessageID: "provider-old", OccurredAt: now.Add(time.Second)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterRetryable, _, err := Apply(accepted, event("retryable-after-gateway-accept", EventFailedRetryable, now.Add(2*time.Second)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterRetryable.Status != StatusGatewayAccepted || afterRetryable.HighestAcknowledgement != StatusGatewayAccepted || afterRetryable.ProviderMessageID != "provider-old" {
+		t.Fatalf("retryable failure reopened an accepted send: %+v", afterRetryable)
+	}
+	if !afterRetryable.ReconciliationRequired {
+		t.Fatalf("contradictory retryable failure was not retained for reconciliation: %+v", afterRetryable)
+	}
+}
+
+func TestLastEventAtDoesNotMoveBackwardsForIgnoredLateEvent(t *testing.T) {
+	now := time.Date(2026, 8, 15, 22, 53, 0, 0, time.UTC)
+	recipient := Recipient{Status: StatusSent, HighestAcknowledgement: StatusSent, UpdatedAt: now}
+	last := now
+	recipient.LastEventAt = &last
+	late, _, err := Apply(recipient, event("late-queued-time", EventQueued, now.Add(-time.Minute)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if late.LastEventAt == nil || !late.LastEventAt.Equal(now) {
+		t.Fatalf("last event occurrence regressed: %+v", late.LastEventAt)
+	}
+}

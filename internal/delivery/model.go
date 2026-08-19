@@ -115,7 +115,9 @@ func Apply(recipient Recipient, event Event) (Recipient, bool, error) {
 	}
 	recipient.AppliedEventKeys[event.DeduplicationKey] = struct{}{}
 	occurred := event.OccurredAt.UTC()
-	recipient.LastEventAt = &occurred
+	if recipient.LastEventAt == nil || occurred.After(*recipient.LastEventAt) {
+		recipient.LastEventAt = &occurred
+	}
 
 	if event.ProviderMessageID != "" {
 		if recipient.ProviderMessageID != "" && recipient.ProviderMessageID != event.ProviderMessageID {
@@ -178,6 +180,24 @@ func Apply(recipient Recipient, event Event) (Recipient, bool, error) {
 		return recipient, true, nil
 	}
 
+	// UNKNOWN is a sticky no-resend state. Only stronger provider acknowledgement
+	// evidence may resolve it; failures or pre-send progress may not reopen dispatch.
+	if recipient.Status == StatusUnknown && nextAck < 0 {
+		recipient.UpdatedAt = maxTime(recipient.UpdatedAt, occurred)
+		return recipient, true, nil
+	}
+
+	// Gateway acceptance is already provider-side evidence. A later retryable failure
+	// cannot turn that accepted attempt back into an automatically resendable state.
+	if next == StatusFailedRetryable && currentAck >= acknowledgementRank(StatusGatewayAccepted) {
+		recipient.ReconciliationRequired = true
+		recipient.ContradictoryEventCount++
+		recipient.LastErrorCode = nonEmpty(event.ErrorCode, "RETRYABLE_AFTER_PROVIDER_ACCEPTANCE")
+		recipient.LastErrorDetail = event.ErrorDetail
+		recipient.UpdatedAt = maxTime(recipient.UpdatedAt, occurred)
+		return recipient, true, nil
+	}
+
 	// A late failure or uncertainty cannot erase evidence that the provider reported sent,
 	// delivered or read. It creates a reconciliation exception instead.
 	if (failureStatus(next) || next == StatusUnknown) && currentAck >= acknowledgementRank(StatusSent) {
@@ -185,6 +205,19 @@ func Apply(recipient Recipient, event Event) (Recipient, bool, error) {
 		recipient.ContradictoryEventCount++
 		recipient.LastErrorCode = nonEmpty(event.ErrorCode, "CONTRADICTORY_LATE_EVENT")
 		recipient.LastErrorDetail = event.ErrorDetail
+		recipient.UpdatedAt = maxTime(recipient.UpdatedAt, occurred)
+		return recipient, true, nil
+	}
+
+	// Non-acknowledgement events cannot resurrect a terminal decision. A conflicting
+	// terminal/failure event is retained as reconciliation evidence without changing state.
+	if nextAck < 0 && terminal(recipient.Status) {
+		if next != recipient.Status {
+			recipient.ReconciliationRequired = true
+			recipient.ContradictoryEventCount++
+			recipient.LastErrorCode = nonEmpty(event.ErrorCode, "CONTRADICTORY_TERMINAL_EVENT")
+			recipient.LastErrorDetail = event.ErrorDetail
+		}
 		recipient.UpdatedAt = maxTime(recipient.UpdatedAt, occurred)
 		return recipient, true, nil
 	}
@@ -208,6 +241,9 @@ func Apply(recipient Recipient, event Event) (Recipient, bool, error) {
 	if failureStatus(next) || next == StatusUnknown {
 		recipient.LastErrorCode = event.ErrorCode
 		recipient.LastErrorDetail = event.ErrorDetail
+	}
+	if next == StatusUnknown {
+		recipient.ReconciliationRequired = true
 	}
 	recipient.Status = next
 	recipient.UpdatedAt = maxTime(recipient.UpdatedAt, occurred)

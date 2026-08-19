@@ -75,7 +75,10 @@ func TestApprovalRequiresSubmissionChecksAndIndependentReviewer(t *testing.T) {
 	}
 	expiry = now.Add(30 * 24 * time.Hour)
 	if _, err = review.Decide(DecisionInput{ReviewerID: "submitter", Decision: StatusApproved, ExpiresAt: &expiry, Reason: "approved evidence", ExpectedVersion: review.Version}, now); err == nil {
-		t.Fatal("expected independent-reviewer enforcement")
+		t.Fatal("expected submitter independence enforcement")
+	}
+	if _, err = review.Decide(DecisionInput{ReviewerID: "maker", Decision: StatusApproved, ExpiresAt: &expiry, Reason: "creator self approval", ExpectedVersion: review.Version}, now); err == nil {
+		t.Fatal("creator approved own consent review after another actor submitted it")
 	}
 	approved, err := review.Decide(DecisionInput{ReviewerID: "checker", Decision: StatusApproved, ExpiresAt: &expiry, Reason: "approved evidence", ExpectedVersion: review.Version}, now)
 	if err != nil {

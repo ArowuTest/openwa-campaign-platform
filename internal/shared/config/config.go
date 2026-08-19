@@ -56,6 +56,9 @@ type Config struct {
 	GatewayCommandPreviousSecret      string
 	GatewayRuntimeSecret              string
 	GatewayRuntimePreviousSecret      string
+	MetaCloudCredentialsJSON          string
+	MetaHealthStaleAfter              time.Duration
+	MetaConversationWindow            time.Duration
 	GatewayStaleAfter                 time.Duration
 	GatewayCallbackMaxSkew            time.Duration
 	MediaDownloadSecret               string
@@ -76,8 +79,12 @@ type Config struct {
 // value is always rejected so deployed services fail closed.
 func Load() (Config, error) {
 	environment := strings.ToLower(strings.TrimSpace(envOrDefault("APP_ENV", "development")))
-	if err := envfile.Resolve(environment, "DATABASE_URL", "BOOTSTRAP_ADMIN_PASSWORD", "BOOTSTRAP_ADMIN_TOTP_SECRET", "MSISDN_ENCRYPTION_KEY_BASE64", "MSISDN_LOOKUP_KEY_BASE64", "IDENTITY_SECRET_KEY_BASE64", "INBOUND_CONTENT_KEY_BASE64", "INBOUND_CONTENT_KEYS_JSON", "PRIVACY_EVIDENCE_KEY_BASE64", "PRIVACY_EVIDENCE_KEYS_JSON", "SENDER_PROXY_KEYS_JSON", "GATEWAY_CALLBACK_SECRET", "GATEWAY_CALLBACK_SECRET_PREVIOUS", "GATEWAY_COMMAND_SECRET", "GATEWAY_COMMAND_SECRET_PREVIOUS", "GATEWAY_RUNTIME_SECRET", "GATEWAY_RUNTIME_SECRET_PREVIOUS", "MEDIA_DOWNLOAD_SECRET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY", "S3_SESSION_TOKEN", "PROFILING_TOKEN"); err != nil {
+	if err := envfile.Resolve(environment, "DATABASE_URL", "BOOTSTRAP_ADMIN_PASSWORD", "BOOTSTRAP_ADMIN_TOTP_SECRET", "MSISDN_ENCRYPTION_KEY_BASE64", "MSISDN_LOOKUP_KEY_BASE64", "IDENTITY_SECRET_KEY_BASE64", "INBOUND_CONTENT_KEY_BASE64", "INBOUND_CONTENT_KEYS_JSON", "PRIVACY_EVIDENCE_KEY_BASE64", "PRIVACY_EVIDENCE_KEYS_JSON", "SENDER_PROXY_KEYS_JSON", "GATEWAY_CALLBACK_SECRET", "GATEWAY_CALLBACK_SECRET_PREVIOUS", "GATEWAY_COMMAND_SECRET", "GATEWAY_COMMAND_SECRET_PREVIOUS", "GATEWAY_RUNTIME_SECRET", "GATEWAY_RUNTIME_SECRET_PREVIOUS", "META_CLOUD_CREDENTIALS_JSON", "MEDIA_DOWNLOAD_SECRET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY", "S3_SESSION_TOKEN", "PROFILING_TOKEN"); err != nil {
 		return Config{}, err
+	}
+	redisDefault := "localhost:6379"
+	if environment == "staging" || environment == "production" {
+		redisDefault = ""
 	}
 	callbackSecret := strings.TrimSpace(os.Getenv("GATEWAY_CALLBACK_SECRET"))
 	callbackPreviousSecret := strings.TrimSpace(os.Getenv("GATEWAY_CALLBACK_SECRET_PREVIOUS"))
@@ -104,6 +111,14 @@ func Load() (Config, error) {
 	}
 
 	maxPreview, err := intEnv("MAX_IMPORT_PREVIEW_ROWS", 100_000)
+	if err != nil {
+		return Config{}, err
+	}
+	metaHealthStaleAfter, err := durationEnv("META_CLOUD_HEALTH_STALE_AFTER", 5*time.Minute)
+	if err != nil {
+		return Config{}, err
+	}
+	metaConversationWindow, err := ParseMetaConversationWindow(os.Getenv("META_CLOUD_CONVERSATION_WINDOW"))
 	if err != nil {
 		return Config{}, err
 	}
@@ -197,7 +212,7 @@ func Load() (Config, error) {
 		DatabaseConnMaxLifetime:           dbLifetime,
 		DatabaseConnMaxIdleTime:           dbIdle,
 		DatabasePingTimeout:               dbPing,
-		RedisAddr:                         strings.TrimSpace(envOrDefault("REDIS_ADDR", "localhost:6379")),
+		RedisAddr:                         strings.TrimSpace(envOrDefault("REDIS_ADDR", redisDefault)),
 		MaxImportPreviewRows:              maxPreview,
 		BootstrapAdminEmail:               strings.TrimSpace(envOrDefault("BOOTSTRAP_ADMIN_EMAIL", "admin@example.test")),
 		BootstrapAdminPassword:            os.Getenv("BOOTSTRAP_ADMIN_PASSWORD"),
@@ -224,6 +239,9 @@ func Load() (Config, error) {
 		GatewayCommandPreviousSecret:      commandPreviousSecret,
 		GatewayRuntimeSecret:              runtimeSecret,
 		GatewayRuntimePreviousSecret:      runtimePreviousSecret,
+		MetaCloudCredentialsJSON:          strings.TrimSpace(os.Getenv("META_CLOUD_CREDENTIALS_JSON")),
+		MetaHealthStaleAfter:              metaHealthStaleAfter,
+		MetaConversationWindow:            metaConversationWindow,
 		GatewayStaleAfter:                 time.Duration(gatewayStaleSeconds) * time.Second,
 		GatewayCallbackMaxSkew:            callbackSkew,
 		MediaDownloadSecret:               mediaDownloadSecret,
@@ -275,7 +293,7 @@ func (c Config) Validate() error {
 		return errors.New("AUDIENCE_IMPORT_SOURCE_RETENTION_DAYS must be between 1 and 3650")
 	}
 	if c.ObjectStoreDriver != "filesystem" && c.ObjectStoreDriver != "s3" && c.ObjectStoreDriver != "minio" {
-		return errors.New("OBJECT_STORE_DRIVER must be filesystem or s3")
+		return errors.New("OBJECT_STORE_DRIVER must be filesystem, s3, or minio")
 	}
 	if strings.TrimSpace(c.DatabaseDriver) == "" {
 		return errors.New("DATABASE_DRIVER is required")
@@ -325,6 +343,34 @@ func (c Config) Validate() error {
 	}
 	if len(c.MediaDownloadSecret) > 0 && len(c.MediaDownloadSecret) < 32 {
 		return errors.New("MEDIA_DOWNLOAD_SECRET must contain at least 32 characters")
+	}
+	if c.MetaHealthStaleAfter <= 0 || c.MetaHealthStaleAfter > time.Hour {
+		return errors.New("META_CLOUD_HEALTH_STALE_AFTER must be positive and no more than 1 hour")
+	}
+	if c.MetaConversationWindow <= 0 || c.MetaConversationWindow > DefaultMetaConversationWindow {
+		return errors.New("META_CLOUD_CONVERSATION_WINDOW must be positive and no more than 24 hours")
+	}
+	if raw := strings.TrimSpace(c.MetaCloudCredentialsJSON); raw != "" {
+		var entries []struct {
+			Key         string `json:"key"`
+			AccessToken string `json:"accessToken"`
+			AppSecret   string `json:"appSecret"`
+			VerifyToken string `json:"verifyToken"`
+		}
+		if err := json.Unmarshal([]byte(raw), &entries); err != nil || len(entries) == 0 {
+			return errors.New("META_CLOUD_CREDENTIALS_JSON must be a non-empty credential array")
+		}
+		seen := make(map[string]struct{}, len(entries))
+		for _, entry := range entries {
+			key := strings.TrimSpace(entry.Key)
+			if key == "" || len(strings.TrimSpace(entry.AccessToken)) < 20 || len(strings.TrimSpace(entry.AppSecret)) < 16 || len(strings.TrimSpace(entry.VerifyToken)) < 12 {
+				return errors.New("META_CLOUD_CREDENTIALS_JSON contains an invalid credential entry")
+			}
+			if _, exists := seen[key]; exists {
+				return errors.New("META_CLOUD_CREDENTIALS_JSON contains a duplicate credential key")
+			}
+			seen[key] = struct{}{}
+		}
 	}
 	if c.GatewayStaleAfter < 30*time.Second || c.GatewayStaleAfter > time.Hour {
 		return errors.New("GATEWAY_STALE_AFTER_SECONDS must be between 30 and 3600")
@@ -392,8 +438,11 @@ func (c Config) Validate() error {
 		if strings.Contains(c.BootstrapAdminPassword, "development-only") || len(c.BootstrapAdminPassword) < 20 {
 			return errors.New("production requires a strong BOOTSTRAP_ADMIN_PASSWORD")
 		}
-		if strings.TrimSpace(c.BootstrapAdminTOTP) == "" || strings.Contains(strings.ToLower(c.BootstrapAdminTOTP), "replace") {
-			return errors.New("production requires BOOTSTRAP_ADMIN_TOTP_SECRET")
+		if strings.TrimSpace(c.BootstrapAdminTOTP) == "" || strings.Contains(strings.ToLower(c.BootstrapAdminTOTP), "replace") || strings.TrimSpace(c.BootstrapAdminTOTP) == "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ" {
+			return errors.New("production requires BOOTSTRAP_ADMIN_TOTP_SECRET distinct from the development default")
+		}
+		if strings.HasSuffix(strings.ToLower(strings.TrimSpace(c.BootstrapAdminEmail)), "@example.test") {
+			return errors.New("production requires BOOTSTRAP_ADMIN_EMAIL distinct from the development default")
 		}
 		if !c.SecureCookies {
 			return errors.New("production requires SECURE_COOKIES=true")
@@ -419,17 +468,41 @@ func (c Config) Validate() error {
 		if c.SenderProxyKeysJSON == "" {
 			return errors.New("production requires a sender proxy encryption keyring")
 		}
-		if len(c.GatewayCallbackSecret) < 32 || strings.Contains(c.GatewayCallbackSecret, "development-") || strings.Contains(strings.ToLower(c.GatewayCallbackSecret), "change-me") {
+		if weakProductionGatewaySecret(c.GatewayCallbackSecret) {
 			return errors.New("production requires a strong GATEWAY_CALLBACK_SECRET")
 		}
-		if len(c.GatewayCommandSecret) < 32 || strings.Contains(c.GatewayCommandSecret, "development-") || strings.Contains(strings.ToLower(c.GatewayCommandSecret), "change-me") {
+		if weakProductionGatewaySecret(c.GatewayCommandSecret) {
 			return errors.New("production requires a strong GATEWAY_COMMAND_SECRET")
 		}
-		if len(c.GatewayRuntimeSecret) < 32 || strings.Contains(c.GatewayRuntimeSecret, "development-") || strings.Contains(strings.ToLower(c.GatewayRuntimeSecret), "change-me") {
+		if weakProductionGatewaySecret(c.GatewayRuntimeSecret) {
 			return errors.New("production requires a strong GATEWAY_RUNTIME_SECRET")
 		}
 		if c.GatewayRuntimeSecret == c.GatewayCallbackSecret || c.GatewayRuntimeSecret == c.GatewayCommandSecret || c.GatewayCallbackSecret == c.GatewayCommandSecret {
 			return errors.New("gateway command, callback, and runtime secrets must be distinct")
+		}
+		previousGatewaySecrets := []struct{ name, value string }{
+			{"GATEWAY_CALLBACK_SECRET_PREVIOUS", c.GatewayCallbackPreviousSecret},
+			{"GATEWAY_COMMAND_SECRET_PREVIOUS", c.GatewayCommandPreviousSecret},
+			{"GATEWAY_RUNTIME_SECRET_PREVIOUS", c.GatewayRuntimePreviousSecret},
+		}
+		for _, item := range previousGatewaySecrets {
+			if item.value != "" && weakProductionGatewaySecret(item.value) {
+				return fmt.Errorf("production requires a strong %s", item.name)
+			}
+		}
+		gatewayTrustSecrets := []string{
+			c.GatewayCallbackSecret, c.GatewayCommandSecret, c.GatewayRuntimeSecret,
+			c.GatewayCallbackPreviousSecret, c.GatewayCommandPreviousSecret, c.GatewayRuntimePreviousSecret,
+		}
+		for i := 0; i < len(gatewayTrustSecrets); i++ {
+			if gatewayTrustSecrets[i] == "" {
+				continue
+			}
+			for j := i + 1; j < len(gatewayTrustSecrets); j++ {
+				if gatewayTrustSecrets[j] != "" && gatewayTrustSecrets[i] == gatewayTrustSecrets[j] {
+					return errors.New("gateway command, callback, and runtime active/previous secrets must be distinct")
+				}
+			}
 		}
 		if len(c.MediaDownloadSecret) < 32 || strings.Contains(c.MediaDownloadSecret, "development-") || strings.Contains(strings.ToLower(c.MediaDownloadSecret), "change-me") {
 			return errors.New("production requires a strong MEDIA_DOWNLOAD_SECRET")
@@ -441,13 +514,18 @@ func (c Config) Validate() error {
 			}
 		case "s3", "minio":
 		default:
-			return errors.New("OBJECT_STORE_DRIVER must be filesystem or s3")
+			return errors.New("OBJECT_STORE_DRIVER must be filesystem, s3, or minio")
 		}
 		if c.ClamAVAddress == "" {
 			return errors.New("production requires CLAMAV_ADDRESS")
 		}
 	}
 	return nil
+}
+
+func weakProductionGatewaySecret(value string) bool {
+	lower := strings.ToLower(value)
+	return len(value) < 32 || strings.Contains(lower, "development-") || strings.Contains(lower, "change-me")
 }
 
 func validateVersionedKeyring(label, envName, value, active string) error {

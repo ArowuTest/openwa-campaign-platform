@@ -40,6 +40,19 @@ type IncidentEvidenceRepository interface {
 	CreateIncidentWithEvents(context.Context, Incident, []IncidentEvent) (Incident, error)
 	UpdateIncidentWithEvents(context.Context, Incident, int64, []IncidentEvent) (Incident, error)
 }
+type IncidentAtomicAuditRepository interface {
+	CreateIncidentWithEventsAndAudit(context.Context, Incident, []IncidentEvent, audit.Input) (Incident, error)
+	UpdateIncidentWithEventsAndAudit(context.Context, Incident, int64, []IncidentEvent, audit.Input) (Incident, error)
+}
+type ExportAtomicAuditRepository interface {
+	CreateExportWithAudit(context.Context, ExportRequest, audit.Input) (ExportRequest, error)
+	UpdateExportWithAudit(context.Context, ExportRequest, int64, audit.Input) (ExportRequest, error)
+	RevokeExportWithAudit(context.Context, ExportRequest, int64, time.Time, audit.Input) (ExportRequest, error)
+}
+type DownloadAtomicAuditRepository interface {
+	CreateDownloadGrantWithAudit(context.Context, DownloadGrant, audit.Input) (DownloadGrant, error)
+	ConsumeDownloadGrantWithAudit(context.Context, string, string, string, time.Time, audit.Input) (ExportRequest, DownloadGrant, error)
+}
 type Service struct {
 	Repo             Repository
 	AuditRepository  audit.Repository
@@ -94,8 +107,13 @@ func (s *Service) CreateIncident(ctx context.Context, in Incident, actor, correl
 	in.UpdatedAt = now
 	in.Version = 1
 	timeline := IncidentEvent{IncidentID: in.ID, EventType: "CREATED", ActorID: actor, Detail: in.Summary, Evidence: map[string]any{"category": in.Category, "severity": in.Severity}, OccurredAt: now}
+	auditInput := audit.Input{ActorType: "USER", ActorID: actor, Action: "OPERATIONS_INCIDENT_CREATED", ObjectType: "OPERATIONS_INCIDENT", ObjectID: in.ID, Outcome: "SUCCESS", Sensitivity: "HIGH", After: map[string]any{"severity": in.Severity, "category": in.Category, "campaignId": in.CampaignID}, CorrelationID: correlation, OccurredAt: now}
 	var out Incident
-	if atomicRepo, ok := s.Repo.(IncidentEvidenceRepository); ok {
+	atomicAudit := false
+	if atomicRepo, ok := s.Repo.(IncidentAtomicAuditRepository); ok {
+		out, err = atomicRepo.CreateIncidentWithEventsAndAudit(ctx, in, []IncidentEvent{timeline}, auditInput)
+		atomicAudit = true
+	} else if atomicRepo, ok := s.Repo.(IncidentEvidenceRepository); ok {
 		out, err = atomicRepo.CreateIncidentWithEvents(ctx, in, []IncidentEvent{timeline})
 	} else {
 		out, err = s.Repo.CreateIncident(ctx, in)
@@ -106,8 +124,8 @@ func (s *Service) CreateIncident(ctx context.Context, in Incident, actor, correl
 	if err != nil {
 		return Incident{}, err
 	}
-	if s.Audit != nil {
-		_, err = s.Audit.Record(ctx, audit.Input{ActorType: "USER", ActorID: actor, Action: "OPERATIONS_INCIDENT_CREATED", ObjectType: "OPERATIONS_INCIDENT", ObjectID: out.ID, After: map[string]any{"severity": out.Severity, "category": out.Category, "campaignId": out.CampaignID}, CorrelationID: correlation, OccurredAt: now})
+	if s.Audit != nil && !atomicAudit {
+		_, err = s.Audit.Record(ctx, auditInput)
 	}
 	return out, err
 }
@@ -153,8 +171,13 @@ func (s *Service) UpdateIncident(ctx context.Context, id string, expected int64,
 	if len(events) == 0 {
 		return Incident{}, ErrInvalid
 	}
+	auditInput := audit.Input{ActorType: "USER", ActorID: actor, Action: "OPERATIONS_INCIDENT_UPDATED", ObjectType: "OPERATIONS_INCIDENT", ObjectID: id, Outcome: "SUCCESS", Sensitivity: "HIGH", After: map[string]any{"status": current.Status, "ownerId": current.OwnerID}, Reason: detail, CorrelationID: correlation, OccurredAt: current.UpdatedAt}
 	var out Incident
-	if atomicRepo, ok := s.Repo.(IncidentEvidenceRepository); ok {
+	atomicAudit := false
+	if atomicRepo, ok := s.Repo.(IncidentAtomicAuditRepository); ok {
+		out, err = atomicRepo.UpdateIncidentWithEventsAndAudit(ctx, current, expected, events, auditInput)
+		atomicAudit = true
+	} else if atomicRepo, ok := s.Repo.(IncidentEvidenceRepository); ok {
 		out, err = atomicRepo.UpdateIncidentWithEvents(ctx, current, expected, events)
 	} else {
 		out, err = s.Repo.UpdateIncident(ctx, current, expected)
@@ -170,8 +193,8 @@ func (s *Service) UpdateIncident(ctx context.Context, id string, expected int64,
 	if err != nil {
 		return Incident{}, err
 	}
-	if s.Audit != nil {
-		_, err = s.Audit.Record(ctx, audit.Input{ActorType: "USER", ActorID: actor, Action: "OPERATIONS_INCIDENT_UPDATED", ObjectType: "OPERATIONS_INCIDENT", ObjectID: id, After: map[string]any{"status": out.Status, "ownerId": out.OwnerID}, Reason: detail, CorrelationID: correlation, OccurredAt: out.UpdatedAt})
+	if s.Audit != nil && !atomicAudit {
+		_, err = s.Audit.Record(ctx, auditInput)
 	}
 	return out, err
 }
@@ -351,9 +374,17 @@ func (s *Service) RequestExportWithOptions(ctx context.Context, kind, objectID, 
 		return ExportRequest{}, errors.New("privacy package payload is required")
 	}
 	in := ExportRequest{ID: identifier, Kind: kind, ObjectID: strings.TrimSpace(objectID), Format: format, Status: ExportPending, RequestedBy: actor, Reason: strings.TrimSpace(reason), Criteria: criteria, TemplateVersion: templateVersion, WatermarkText: strings.TrimSpace(options.WatermarkText), FrozenPayload: frozenPayload, CreatedAt: now, UpdatedAt: now, Version: 1}
-	out, err := s.Repo.CreateExport(ctx, in)
-	if err == nil && s.Audit != nil {
-		_, err = s.Audit.Record(ctx, audit.Input{ActorType: "USER", ActorID: actor, Action: "EXPORT_REQUESTED", ObjectType: "EXPORT_REQUEST", ObjectID: out.ID, After: map[string]any{"kind": kind, "format": format, "objectId": objectID, "templateVersion": templateVersion}, Reason: reason, CorrelationID: correlation, OccurredAt: now})
+	auditInput := audit.Input{ActorType: "USER", ActorID: actor, Action: "EXPORT_REQUESTED", ObjectType: "EXPORT_REQUEST", ObjectID: in.ID, Outcome: "SUCCESS", Sensitivity: "HIGH", After: map[string]any{"kind": kind, "format": format, "objectId": objectID, "templateVersion": templateVersion}, Reason: reason, CorrelationID: correlation, OccurredAt: now}
+	var out ExportRequest
+	atomicAudit := false
+	if atomicRepo, ok := s.Repo.(ExportAtomicAuditRepository); ok {
+		out, err = atomicRepo.CreateExportWithAudit(ctx, in, auditInput)
+		atomicAudit = true
+	} else {
+		out, err = s.Repo.CreateExport(ctx, in)
+	}
+	if err == nil && s.Audit != nil && !atomicAudit {
+		_, err = s.Audit.Record(ctx, auditInput)
 	}
 	return out, err
 }
@@ -422,13 +453,21 @@ func (s *Service) DecideExport(ctx context.Context, identifier string, expected 
 		current.Status = ExportRejected
 		current.RejectionReason = strings.TrimSpace(reason)
 	}
-	out, err := s.Repo.UpdateExport(ctx, current, expected)
-	if err == nil && s.Audit != nil {
-		action := "EXPORT_REJECTED"
-		if approve {
-			action = "EXPORT_APPROVED"
-		}
-		_, err = s.Audit.Record(ctx, audit.Input{ActorType: "USER", ActorID: actor, Action: action, ObjectType: "EXPORT_REQUEST", ObjectID: identifier, After: map[string]any{"status": out.Status, "asOf": out.AsOf, "auditHeadSequence": out.AuditHeadSequence}, Reason: reason, CorrelationID: correlation, OccurredAt: now})
+	action := "EXPORT_REJECTED"
+	if approve {
+		action = "EXPORT_APPROVED"
+	}
+	auditInput := audit.Input{ActorType: "USER", ActorID: actor, Action: action, ObjectType: "EXPORT_REQUEST", ObjectID: identifier, Outcome: "SUCCESS", Sensitivity: "HIGH", After: map[string]any{"status": current.Status, "asOf": current.AsOf, "auditHeadSequence": current.AuditHeadSequence}, Reason: reason, CorrelationID: correlation, OccurredAt: now}
+	var out ExportRequest
+	atomicAudit := false
+	if atomicRepo, ok := s.Repo.(ExportAtomicAuditRepository); ok {
+		out, err = atomicRepo.UpdateExportWithAudit(ctx, current, expected, auditInput)
+		atomicAudit = true
+	} else {
+		out, err = s.Repo.UpdateExport(ctx, current, expected)
+	}
+	if err == nil && s.Audit != nil && !atomicAudit {
+		_, err = s.Audit.Record(ctx, auditInput)
 	}
 	return out, err
 }
@@ -459,12 +498,20 @@ func (s *Service) AuthorizeDownload(ctx context.Context, identifier, actor, requ
 		return DownloadAuthorization{}, err
 	}
 	grant := DownloadGrant{ID: grantID, ExportID: current.ID, ActorID: strings.TrimSpace(actor), TokenHash: hex.EncodeToString(digest[:]), RequestID: strings.TrimSpace(requestID), ExpiresAt: now.Add(ttl), CreatedAt: now}
-	stored, err := s.Repo.CreateDownloadGrant(ctx, grant)
+	auditInput := audit.Input{ActorType: "USER", ActorID: actor, Action: "EXPORT_DOWNLOAD_AUTHORISED", ObjectType: "EXPORT_REQUEST", ObjectID: current.ID, Outcome: "SUCCESS", Sensitivity: "HIGH", After: map[string]any{"grantId": grant.ID, "expiresAt": grant.ExpiresAt}, CorrelationID: requestID, OccurredAt: now}
+	var stored DownloadGrant
+	atomicAudit := false
+	if atomicRepo, ok := s.Repo.(DownloadAtomicAuditRepository); ok {
+		stored, err = atomicRepo.CreateDownloadGrantWithAudit(ctx, grant, auditInput)
+		atomicAudit = true
+	} else {
+		stored, err = s.Repo.CreateDownloadGrant(ctx, grant)
+	}
 	if err != nil {
 		return DownloadAuthorization{}, err
 	}
-	if s.Audit != nil {
-		_, err = s.Audit.Record(ctx, audit.Input{ActorType: "USER", ActorID: actor, Action: "EXPORT_DOWNLOAD_AUTHORISED", ObjectType: "EXPORT_REQUEST", ObjectID: current.ID, After: map[string]any{"grantId": stored.ID, "expiresAt": stored.ExpiresAt}, CorrelationID: requestID, OccurredAt: now})
+	if s.Audit != nil && !atomicAudit {
+		_, err = s.Audit.Record(ctx, auditInput)
 		if err != nil {
 			return DownloadAuthorization{}, err
 		}
@@ -474,13 +521,25 @@ func (s *Service) AuthorizeDownload(ctx context.Context, identifier, actor, requ
 
 func (s *Service) ConsumeDownload(ctx context.Context, identifier, token, actor, requestID string) (ExportRequest, DownloadGrant, error) {
 	digest := sha256.Sum256([]byte(strings.TrimSpace(token)))
-	export, grant, err := s.Repo.ConsumeDownloadGrant(ctx, strings.TrimSpace(identifier), hex.EncodeToString(digest[:]), strings.TrimSpace(actor), s.now())
+	now := s.now()
+	identifier, actor = strings.TrimSpace(identifier), strings.TrimSpace(actor)
+	auditInput := audit.Input{ActorType: "USER", ActorID: actor, Action: "EXPORT_DOWNLOAD_AUTHENTICATED", ObjectType: "EXPORT_REQUEST", ObjectID: identifier, Outcome: "SUCCESS", Sensitivity: "HIGH", CorrelationID: requestID, OccurredAt: now}
+	var export ExportRequest
+	var grant DownloadGrant
+	var err error
+	atomicAudit := false
+	if atomicRepo, ok := s.Repo.(DownloadAtomicAuditRepository); ok {
+		export, grant, err = atomicRepo.ConsumeDownloadGrantWithAudit(ctx, identifier, hex.EncodeToString(digest[:]), actor, now, auditInput)
+		atomicAudit = true
+	} else {
+		export, grant, err = s.Repo.ConsumeDownloadGrant(ctx, identifier, hex.EncodeToString(digest[:]), actor, now)
+	}
 	if err != nil {
 		return ExportRequest{}, DownloadGrant{}, err
 	}
-	if s.Audit != nil {
-		_, auditErr := s.Audit.Record(ctx, audit.Input{ActorType: "USER", ActorID: actor, Action: "EXPORT_DOWNLOAD_AUTHENTICATED", ObjectType: "EXPORT_REQUEST", ObjectID: export.ID, Outcome: "SUCCESS", Sensitivity: "HIGH", After: map[string]any{"grantId": grant.ID, "sha256": export.SHA256, "sizeBytes": export.SizeBytes}, CorrelationID: requestID, OccurredAt: s.now()})
-		if auditErr != nil {
+	if s.Audit != nil && !atomicAudit {
+		auditInput.After = map[string]any{"grantId": grant.ID, "sha256": export.SHA256, "sizeBytes": export.SizeBytes}
+		if _, auditErr := s.Audit.Record(ctx, auditInput); auditErr != nil {
 			return ExportRequest{}, DownloadGrant{}, auditErr
 		}
 	}
@@ -525,15 +584,23 @@ func (s *Service) RevokeExport(ctx context.Context, identifier string, expected 
 	current.RevokedBy = actor
 	current.RevocationReason = strings.TrimSpace(reason)
 	current.UpdatedAt = now
-	out, err := s.Repo.UpdateExport(ctx, current, expected)
+	auditInput := audit.Input{ActorType: "USER", ActorID: actor, Action: "EXPORT_REVOKED", ObjectType: "EXPORT_REQUEST", ObjectID: identifier, Outcome: "SUCCESS", Sensitivity: "HIGH", After: map[string]any{"status": current.Status}, Reason: reason, CorrelationID: correlation, OccurredAt: now}
+	var out ExportRequest
+	atomicAudit := false
+	if atomicRepo, ok := s.Repo.(ExportAtomicAuditRepository); ok {
+		out, err = atomicRepo.RevokeExportWithAudit(ctx, current, expected, now, auditInput)
+		atomicAudit = true
+	} else {
+		out, err = s.Repo.UpdateExport(ctx, current, expected)
+		if err == nil {
+			err = s.Repo.RevokeDownloadGrants(ctx, identifier, now)
+		}
+	}
 	if err != nil {
 		return ExportRequest{}, err
 	}
-	if err := s.Repo.RevokeDownloadGrants(ctx, identifier, now); err != nil {
-		return ExportRequest{}, err
-	}
-	if s.Audit != nil {
-		_, err = s.Audit.Record(ctx, audit.Input{ActorType: "USER", ActorID: actor, Action: "EXPORT_REVOKED", ObjectType: "EXPORT_REQUEST", ObjectID: identifier, After: map[string]any{"status": out.Status}, Reason: reason, CorrelationID: correlation, OccurredAt: now})
+	if s.Audit != nil && !atomicAudit {
+		_, err = s.Audit.Record(ctx, auditInput)
 	}
 	return out, err
 }
@@ -598,13 +665,19 @@ func (s *Service) ResolveDeliveryException(ctx context.Context, recipientID stri
 	if err != nil {
 		return DeliveryResolution{}, err
 	}
-	result, err = s.Deliveries.ResolveReconciliation(ctx, recipientID, result.Status, actor, string(action), evidenceRef, reason, now)
+	auditInput := audit.Input{ActorType: "USER", ActorID: actor, Action: "DELIVERY_EXCEPTION_RESOLVED", ObjectType: "CAMPAIGN_RECIPIENT", ObjectID: recipientID, Outcome: "SUCCESS", Sensitivity: "HIGH", After: map[string]any{"action": action, "evidenceRef": evidenceRef, "resultStatus": result.Status}, Reason: reason, CorrelationID: correlation, OccurredAt: now}
+	var atomicAudit bool
+	writer := func(writeCtx context.Context, exec delivery.TransactionExecer) error {
+		_, writeErr := audit.EnqueueTx(writeCtx, exec, auditInput)
+		return writeErr
+	}
+	result, atomicAudit, err = s.Deliveries.ResolveReconciliationWithEvidence(ctx, recipientID, result.Status, actor, string(action), evidenceRef, reason, now, writer)
 	if err != nil {
 		return DeliveryResolution{}, err
 	}
 	resolution := DeliveryResolution{RecipientID: recipientID, Action: action, EvidenceRef: evidenceRef, Reason: reason, ActorID: actor, ResolvedAt: now, ResultStatus: result.Status}
-	if s.Audit != nil {
-		_, err = s.Audit.Record(ctx, audit.Input{ActorType: "USER", ActorID: actor, Action: "DELIVERY_EXCEPTION_RESOLVED", ObjectType: "CAMPAIGN_RECIPIENT", ObjectID: recipientID, After: map[string]any{"action": action, "evidenceRef": evidenceRef, "resultStatus": result.Status}, Reason: reason, CorrelationID: correlation, OccurredAt: now})
+	if s.Audit != nil && !atomicAudit {
+		_, err = s.Audit.Record(ctx, auditInput)
 		if err != nil {
 			return DeliveryResolution{}, err
 		}

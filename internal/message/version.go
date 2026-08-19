@@ -79,7 +79,8 @@ type Input struct {
 }
 
 func NewDraft(input Input, now time.Time) (Version, error) {
-	if strings.TrimSpace(input.CampaignID) == "" || strings.TrimSpace(input.CreatedBy) == "" || input.Version <= 0 {
+	createdBy := strings.TrimSpace(input.CreatedBy)
+	if strings.TrimSpace(input.CampaignID) == "" || createdBy == "" || input.Version <= 0 {
 		return Version{}, errors.New("campaign, version and creator are required")
 	}
 	if err := ValidateIdempotencyKey(input.IdempotencyKey); err != nil {
@@ -103,7 +104,8 @@ func NewDraft(input Input, now time.Time) (Version, error) {
 	if input.Type != TypeText && (input.Media == nil || input.Media.ObjectKey == "") {
 		return Version{}, errors.New("media reference is required")
 	}
-	if err := validateVariables(input.Variables); err != nil {
+	variables := canonicalVariables(input.Variables)
+	if err := validateVariables(variables); err != nil {
 		return Version{}, err
 	}
 	if input.Media != nil {
@@ -111,14 +113,15 @@ func NewDraft(input Input, now time.Time) (Version, error) {
 			return Version{}, errors.New("media must have checksum, valid size and CLEAN scan status")
 		}
 	}
-	if err := validateLinks(input.Links, input.AllowedHosts); err != nil {
+	links := canonicalLinks(input.Links)
+	if err := validateLinks(links, input.AllowedHosts); err != nil {
 		return Version{}, err
 	}
 	identifier, err := id.New()
 	if err != nil {
 		return Version{}, err
 	}
-	v := Version{ID: identifier, CampaignID: strings.TrimSpace(input.CampaignID), Version: input.Version, Type: input.Type, Body: strings.TrimSpace(input.Body), Media: cloneMedia(input.Media), Links: append([]Link(nil), input.Links...), Variables: append([]Variable(nil), input.Variables...), IdempotencyKey: strings.TrimSpace(input.IdempotencyKey), Status: StatusDraft, CreatedBy: input.CreatedBy, CreatedAt: now.UTC()}
+	v := Version{ID: identifier, CampaignID: strings.TrimSpace(input.CampaignID), Version: input.Version, Type: input.Type, Body: strings.TrimSpace(input.Body), Media: cloneMedia(input.Media), Links: links, Variables: variables, IdempotencyKey: strings.TrimSpace(input.IdempotencyKey), Status: StatusDraft, CreatedBy: createdBy, CreatedAt: now.UTC()}
 	if err := ValidateTemplate(v); err != nil {
 		return Version{}, err
 	}
@@ -129,7 +132,8 @@ func (v Version) Approve(actor string, now time.Time) (Version, error) {
 	if v.Status != StatusDraft {
 		return Version{}, errors.New("only draft message can be approved")
 	}
-	if strings.TrimSpace(actor) == "" || actor == v.CreatedBy {
+	actor = strings.TrimSpace(actor)
+	if actor == "" || actor == v.CreatedBy {
 		return Version{}, errors.New("approval requires a different authorised user")
 	}
 	approved := now.UTC()
@@ -156,6 +160,27 @@ func ValidateIdempotencyKey(value string) error {
 		return errors.New("idempotency key contains unsafe characters")
 	}
 	return nil
+}
+
+func canonicalVariables(input []Variable) []Variable {
+	out := append([]Variable(nil), input...)
+	for i := range out {
+		out[i].Name = strings.TrimSpace(out[i].Name)
+		out[i].DataType = strings.ToUpper(strings.TrimSpace(out[i].DataType))
+		if out[i].DataType == "" {
+			out[i].DataType = "TEXT"
+		}
+	}
+	return out
+}
+
+func canonicalLinks(input []Link) []Link {
+	out := append([]Link(nil), input...)
+	for i := range out {
+		out[i].URL = strings.TrimSpace(out[i].URL)
+		out[i].Label = strings.TrimSpace(out[i].Label)
+	}
+	return out
 }
 
 func validateVariables(variables []Variable) error {
@@ -188,6 +213,9 @@ func validateVariables(variables []Variable) error {
 }
 
 func validateLinks(links []Link, allowed []string) error {
+	if len(links) > 0 && len(allowed) == 0 {
+		return errors.New("destination host allow-list is required when links are present")
+	}
 	hosts := map[string]struct{}{}
 	for _, h := range allowed {
 		hosts[strings.ToLower(strings.TrimSpace(h))] = struct{}{}
@@ -207,7 +235,12 @@ func validateLinks(links []Link, allowed []string) error {
 }
 func hash(v Version) string {
 	links := append([]Link(nil), v.Links...)
-	sort.Slice(links, func(i, j int) bool { return links[i].URL < links[j].URL })
+	sort.Slice(links, func(i, j int) bool {
+		if links[i].URL == links[j].URL {
+			return links[i].Label < links[j].Label
+		}
+		return links[i].URL < links[j].URL
+	})
 	variables := append([]Variable(nil), v.Variables...)
 	sort.Slice(variables, func(i, j int) bool { return variables[i].Name < variables[j].Name })
 	payload, _ := json.Marshal(struct {

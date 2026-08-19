@@ -62,7 +62,7 @@ func TestHTTPGatewayTreatsAmbiguousServerErrorAsUnknown(t *testing.T) {
 		t.Fatalf("expected unknown, got %v", err)
 	}
 }
-func TestHTTPGatewayTreatsServiceUnavailableAsSafeRetry(t *testing.T) {
+func TestHTTPGatewayTreatsServiceUnavailableAfterSubmitAsUnknown(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Retry-After", "7")
 		http.Error(w, "draining", http.StatusServiceUnavailable)
@@ -70,8 +70,8 @@ func TestHTTPGatewayTreatsServiceUnavailableAsSafeRetry(t *testing.T) {
 	defer server.Close()
 	_, err := (&HTTPGateway{BaseURL: server.URL, CommandSecret: testGatewaySecret, Client: server.Client()}).Send(context.Background(), validGatewayRequest(time.Now().UTC()))
 	var gatewayErr GatewayError
-	if !errors.As(err, &gatewayErr) || gatewayErr.Safety != FailureSafeToRetry || gatewayErr.RetryAfter != 7*time.Second {
-		t.Fatalf("expected safe retry, got %v", err)
+	if !errors.As(err, &gatewayErr) || gatewayErr.Safety != FailureOutcomeUnknown {
+		t.Fatalf("post-submit 503 must be UNKNOWN, got %v", err)
 	}
 }
 func TestHTTPGatewayFailsClosedWithoutSigningSecret(t *testing.T) {
@@ -79,5 +79,116 @@ func TestHTTPGatewayFailsClosedWithoutSigningSecret(t *testing.T) {
 	var gatewayErr GatewayError
 	if !errors.As(err, &gatewayErr) || gatewayErr.Code != "GATEWAY_COMMAND_SIGNING_INVALID" || gatewayErr.Safety != FailurePermanent {
 		t.Fatalf("expected fail-closed signing error, got %v", err)
+	}
+}
+
+func TestHTTPGatewayTreatsTimeoutAfterRequestAcceptanceAsUnknown(t *testing.T) {
+	requestAccepted := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(requestAccepted)
+		time.Sleep(200 * time.Millisecond)
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+	client := server.Client()
+	client.Timeout = 50 * time.Millisecond
+	_, err := (&HTTPGateway{BaseURL: server.URL, CommandSecret: testGatewaySecret, Client: client}).Send(
+		context.Background(), validGatewayRequest(time.Now().UTC()),
+	)
+	select {
+	case <-requestAccepted:
+	default:
+		t.Fatal("gateway never accepted the request before timeout")
+	}
+	var gatewayErr GatewayError
+	if !errors.As(err, &gatewayErr) || gatewayErr.Safety != FailureOutcomeUnknown {
+		t.Fatalf("post-acceptance timeout must be UNKNOWN, got %v", err)
+	}
+}
+
+func TestHTTPGatewayPreparedSendDoesNotRecheckAuthorityExpiryAfterPreflight(t *testing.T) {
+	now := time.Date(2026, 8, 15, 18, 0, 0, 0, time.UTC)
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"accepted":true,"providerMessageId":"openwa-prepared","acceptedAt":"2026-08-15T18:00:02Z"}`))
+	}))
+	defer server.Close()
+	gateway := &HTTPGateway{
+		BaseURL: server.URL, CommandSecret: testGatewaySecret, Client: server.Client(),
+		Clock: func() time.Time { return now }, Nonce: func() (string, error) { return "prepared-fixed-nonce", nil },
+	}
+	request := validGatewayRequest(now)
+	request.AuthorityExpiresAt = now.Add(time.Second)
+	if err := gateway.Preflight(context.Background(), request); err != nil {
+		t.Fatalf("OpenWA preflight rejected current authority: %v", err)
+	}
+	now = now.Add(2 * time.Second)
+	result, err := gateway.SendPrepared(context.Background(), request)
+	if err != nil || !result.Accepted || calls != 1 {
+		t.Fatalf("prepared OpenWA send result=%#v calls=%d err=%v", result, calls, err)
+	}
+}
+
+func TestHTTPGatewayTreatsConflictAfterSubmitAsUnknown(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "conflict", http.StatusConflict)
+	}))
+	defer server.Close()
+	_, err := (&HTTPGateway{BaseURL: server.URL, CommandSecret: testGatewaySecret, Client: server.Client()}).Send(context.Background(), validGatewayRequest(time.Now().UTC()))
+	var gatewayErr GatewayError
+	if !errors.As(err, &gatewayErr) || gatewayErr.Safety != FailureOutcomeUnknown {
+		t.Fatalf("post-submit 409 must be UNKNOWN, got %v", err)
+	}
+}
+
+func TestHTTPGatewayPreflightTreatsExpiredAuthorityAsSafeRetry(t *testing.T) {
+	now := time.Date(2026, 8, 15, 23, 0, 0, 0, time.UTC)
+	request := validGatewayRequest(now)
+	request.AuthorityExpiresAt = now.Add(-time.Second)
+	gateway := &HTTPGateway{BaseURL: "https://gateway.example.test", CommandSecret: testGatewaySecret, Clock: func() time.Time { return now }}
+	err := gateway.Preflight(context.Background(), request)
+	var gatewayErr GatewayError
+	if !errors.As(err, &gatewayErr) || gatewayErr.Code != "GATEWAY_AUTHORITY_EXPIRED" || gatewayErr.Safety != FailureSafeToRetry {
+		t.Fatalf("expired pre-submit authority must be safely retryable, got %#v err=%v", gatewayErr, err)
+	}
+}
+
+func TestHTTPGatewayTreatsAcceptedWithoutProviderMessageIDAsUnknown(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"accepted":true}`))
+	}))
+	defer server.Close()
+	_, err := (&HTTPGateway{BaseURL: server.URL, CommandSecret: testGatewaySecret, Client: server.Client()}).Send(context.Background(), validGatewayRequest(time.Now().UTC()))
+	var gatewayErr GatewayError
+	if !errors.As(err, &gatewayErr) || gatewayErr.Code != "GATEWAY_ACCEPTANCE_UNKNOWN" || gatewayErr.Safety != FailureOutcomeUnknown {
+		t.Fatalf("acceptance without provider id must be UNKNOWN, got %#v err=%v", gatewayErr, err)
+	}
+}
+
+func TestHTTPGatewayNonceFailureBeforeSubmitIsSafeToRetry(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+	gateway := &HTTPGateway{BaseURL: server.URL, CommandSecret: testGatewaySecret, Client: server.Client(), Nonce: func() (string, error) { return "", errors.New("entropy unavailable") }}
+	_, err := gateway.Send(context.Background(), validGatewayRequest(time.Now().UTC()))
+	var gatewayErr GatewayError
+	if !errors.As(err, &gatewayErr) || gatewayErr.Code != "GATEWAY_NONCE_FAILED" || gatewayErr.Safety != FailureSafeToRetry {
+		t.Fatalf("nonce failure before client.Do must be safe to retry, got %#v err=%v", gatewayErr, err)
+	}
+	if calls != 0 {
+		t.Fatalf("nonce failure reached gateway %d times", calls)
+	}
+}
+
+func TestRedactedGatewayErrorDoesNotExposeProviderBody(t *testing.T) {
+	raw := []byte(`{"error":"recipient +2348012345678 access_token=secret-value"}`)
+	if got := redactedGatewayError(raw); got != "gateway rejected request" {
+		t.Fatalf("gateway provider body leaked through error detail: %q", got)
 	}
 }

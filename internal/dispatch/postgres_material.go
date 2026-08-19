@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -22,16 +23,18 @@ type ObjectResolver interface {
 }
 
 type PostgreSQLMaterialLoader struct {
-	DB          *sql.DB
-	Protector   *sharedcrypto.MSISDNProtector
-	Allocator   sender.Allocator
-	Objects     ObjectResolver
-	MediaURLTTL time.Duration
-	Clock       func() time.Time
+	DB                     *sql.DB
+	Protector              *sharedcrypto.MSISDNProtector
+	Allocator              sender.Allocator
+	Objects                ObjectResolver
+	MediaURLTTL            time.Duration
+	MetaHealthStaleAfter   time.Duration
+	MetaConversationWindow time.Duration
+	Clock                  func() time.Time
 }
 
 func (l *PostgreSQLMaterialLoader) Load(ctx context.Context, recipient delivery.Recipient) (Material, error) {
-	if l == nil || l.DB == nil || l.Protector == nil || l.Allocator == nil {
+	if l == nil || l.DB == nil || l.Protector == nil {
 		return Material{}, errors.New("material loader dependencies are required")
 	}
 	now := time.Now().UTC()
@@ -69,15 +72,7 @@ WHERE cr.id=$1::uuid AND cr.campaign_id=$2::uuid AND cr.contact_id=$3::uuid AND 
 	if err != nil {
 		return Material{}, err
 	}
-	sessionID, err := l.Allocator.Assign(ctx, recipient.ID, selection.Allocation, now)
-	if err != nil {
-		return Material{}, fmt.Errorf("assign sender: %w", err)
-	}
 	routeReference := recipient.CampaignID + ":" + recipient.ID
-	route, err := l.loadGovernedRoute(ctx, recipient.ID, sessionID, mappedType, routeReference, now)
-	if err != nil {
-		return Material{}, err
-	}
 	e164, err := l.Protector.Decrypt(encrypted)
 	if err != nil {
 		return Material{}, PermanentMaterialError{Err: errors.New("decrypt recipient address")}
@@ -125,10 +120,29 @@ WHERE cr.id=$1::uuid AND cr.campaign_id=$2::uuid AND cr.contact_id=$3::uuid AND 
 			return Material{}, fmt.Errorf("resolve media object: %w", err)
 		}
 	}
+	switch selection.Provider {
+	case "META":
+		return l.loadMetaMaterial(ctx, recipient, selection, mappedType, routeReference, e164, body, mediaURL, variables, values, now)
+	case "OPENWA":
+		// Continue through the governed OpenWA session allocation path below.
+	default:
+		return Material{}, PermanentMaterialError{Err: errors.New("dispatch route has no explicit supported provider authority")}
+	}
+	if l.Allocator == nil {
+		return Material{}, errors.New("OpenWA material loader requires a session allocator")
+	}
+	sessionID, err := l.Allocator.Assign(ctx, recipient.ID, selection.Allocation, now)
+	if err != nil {
+		return Material{}, fmt.Errorf("assign sender: %w", err)
+	}
+	route, err := l.loadGovernedRoute(ctx, recipient.ID, sessionID, mappedType, routeReference, now)
+	if err != nil {
+		return Material{}, err
+	}
 	return Material{
 		SenderPoolID: selection.SenderPoolID, Provider: route.Provider, Engine: route.Engine,
 		GatewayPoolID: route.GatewayPoolID, GatewayPoolVersion: route.GatewayPoolVersion,
-		GatewayAdapterVersion: route.AdapterVersion, GatewayNodeID: route.GatewayNodeID,
+		GatewayAdapterVersion: route.AdapterVersion, GatewayNodeID: route.GatewayNodeID, GatewayNodeURL: route.GatewayNodeURL,
 		GatewayNodeVersion: route.GatewayNodeVersion, SessionID: sessionID,
 		SessionLeaseVersion: route.SessionLeaseVersion, SessionConfigurationVersion: route.SessionConfigurationVersion,
 		AuthorityExpiresAt: route.AuthorityExpiresAt, RouteReference: routeReference,
@@ -139,6 +153,9 @@ WHERE cr.id=$1::uuid AND cr.campaign_id=$2::uuid AND cr.contact_id=$3::uuid AND 
 type allocationRouteSelection struct {
 	Allocation   sender.AllocationRoute
 	SenderPoolID string
+	Provider     string
+	Engine       string
+	MetaSenderID string
 }
 
 func (l *PostgreSQLMaterialLoader) loadAllocationRoute(ctx context.Context, recipientID string) (allocationRouteSelection, error) {
@@ -147,6 +164,9 @@ SELECT coalesce(sh.assigned_sender_pool_id::text,cp.transport_sender_pool_id::te
        coalesce(cp.sender_pool,''),
        CASE WHEN sh.routing_plan_id IS NULL THEN coalesce(cp.gateway_pool_id,'') ELSE coalesce(rp.gateway_pool_id::text,'') END,
        CASE WHEN sh.routing_plan_id IS NULL THEN coalesce(cp.transport_session_id::text,'') ELSE '' END,
+       CASE WHEN sh.routing_plan_id IS NULL THEN coalesce(cp.transport_provider,'') ELSE coalesce(rp.provider,'') END,
+       CASE WHEN sh.routing_plan_id IS NULL THEN coalesce(cp.transport_engine,'') ELSE coalesce(rp.engine,'') END,
+       CASE WHEN sh.routing_plan_id IS NULL THEN coalesce(cp.meta_sender_id::text,'') ELSE coalesce(rp.meta_sender_id::text,'') END,
        sh.routing_plan_id IS NOT NULL,
        rp.routing_plan_id IS NOT NULL
 FROM campaign_recipients cr
@@ -157,8 +177,9 @@ LEFT JOIN campaign_routing_plan_pools rp
  AND rp.sender_pool_id=sh.assigned_sender_pool_id
 WHERE cr.id=$1::uuid`
 	var senderPoolID, legacyPool, gatewayPoolID, specificSessionID string
+	var providerName, engine, metaSenderID string
 	var hasRoutingPlan, hasRoute bool
-	if err := l.DB.QueryRowContext(ctx, query, recipientID).Scan(&senderPoolID, &legacyPool, &gatewayPoolID, &specificSessionID, &hasRoutingPlan, &hasRoute); err != nil {
+	if err := l.DB.QueryRowContext(ctx, query, recipientID).Scan(&senderPoolID, &legacyPool, &gatewayPoolID, &specificSessionID, &providerName, &engine, &metaSenderID, &hasRoutingPlan, &hasRoute); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return allocationRouteSelection{}, PermanentMaterialError{Err: errors.New("campaign recipient route is unavailable")}
 		}
@@ -181,7 +202,38 @@ WHERE cr.id=$1::uuid`
 	if label == "" {
 		label = route.LegacyPool
 	}
-	return allocationRouteSelection{Allocation: route, SenderPoolID: label}, nil
+	providerName = strings.ToUpper(strings.TrimSpace(providerName))
+	engine = strings.ToUpper(strings.TrimSpace(engine))
+	metaSenderID = strings.TrimSpace(metaSenderID)
+	if providerName == "META" && !hasRoutingPlan {
+		return allocationRouteSelection{}, PermanentMaterialError{Err: errors.New("Meta Cloud dispatch requires a frozen routing-plan route")}
+	}
+	if err := validateAllocationProviderEndpoint(providerName, engine, metaSenderID, route); err != nil {
+		return allocationRouteSelection{}, err
+	}
+	return allocationRouteSelection{
+		Allocation: route, SenderPoolID: label, Provider: providerName, Engine: engine, MetaSenderID: metaSenderID,
+	}, nil
+}
+
+func validateAllocationProviderEndpoint(providerName, engine, metaSenderID string, route sender.AllocationRoute) error {
+	providerName = strings.ToUpper(strings.TrimSpace(providerName))
+	engine = strings.ToUpper(strings.TrimSpace(engine))
+	metaSenderID = strings.TrimSpace(metaSenderID)
+	switch providerName {
+	case "META":
+		if engine != "CLOUD_API" || metaSenderID == "" || route.GatewayPoolID != "" || route.SpecificSessionID != "" {
+			return PermanentMaterialError{Err: errors.New("Meta route has invalid provider endpoint evidence")}
+		}
+		return nil
+	case "OPENWA":
+		if (engine != "WHATSAPP_WEB_JS" && engine != "BAILEYS") || metaSenderID != "" || strings.TrimSpace(route.GatewayPoolID) == "" {
+			return PermanentMaterialError{Err: errors.New("OpenWA route has invalid provider endpoint evidence")}
+		}
+		return nil
+	default:
+		return PermanentMaterialError{Err: errors.New("dispatch route has no explicit supported provider authority")}
+	}
 }
 
 type governedRouteEvidence struct {
@@ -189,6 +241,7 @@ type governedRouteEvidence struct {
 	SessionSenderPoolID             string
 	SessionConfigurationVersion     int64
 	GatewayNodeID                   string
+	GatewayNodeURL                  string
 	GatewayNodeVersion              int64
 	GatewayNodeStatus               string
 	SessionLeaseVersion             int64
@@ -229,6 +282,7 @@ type governedRoute struct {
 	Engine                      string
 	AdapterVersion              string
 	GatewayNodeID               string
+	GatewayNodeURL              string
 	GatewayNodeVersion          int64
 	SessionLeaseVersion         int64
 	SessionConfigurationVersion int64
@@ -237,7 +291,7 @@ type governedRoute struct {
 
 func (l *PostgreSQLMaterialLoader) loadGovernedRoute(ctx context.Context, recipientID, sessionID, messageType, routeReference string, at time.Time) (governedRoute, error) {
 	const query = `
-SELECT ss.id::text,coalesce(ss.sender_pool_id::text,''),ss.governance_version,coalesce(ss.node_id::text,''),
+SELECT ss.id::text,coalesce(ss.sender_pool_id::text,''),ss.governance_version,coalesce(ss.node_id::text,''),coalesce(sn.internal_url,''),
        coalesce(sn.governance_version,0),coalesce(sn.status,''),coalesce(sl.version,0),sl.expires_at,
        ss.gateway_pool_id::text,gp.version,gp.provider,gp.engine,gp.adapter_version,gp.status,gp.capabilities,
        CASE WHEN sh.routing_plan_id IS NULL THEN coalesce(cp.transport_session_id::text,'') ELSE '' END,
@@ -270,7 +324,7 @@ WHERE cr.id=$2::uuid`
 	var effectiveFrom, effectiveTo sql.NullTime
 	if err := l.DB.QueryRowContext(ctx, query, sessionID, recipientID).Scan(
 		&evidence.SessionID, &evidence.SessionSenderPoolID, &evidence.SessionConfigurationVersion,
-		&evidence.GatewayNodeID, &evidence.GatewayNodeVersion, &evidence.GatewayNodeStatus,
+		&evidence.GatewayNodeID, &evidence.GatewayNodeURL, &evidence.GatewayNodeVersion, &evidence.GatewayNodeStatus,
 		&evidence.SessionLeaseVersion, &evidence.SessionLeaseExpiresAt,
 		&evidence.GatewayPoolID, &evidence.GatewayPoolVersion,
 		&evidence.GatewayProvider, &evidence.GatewayEngine, &evidence.GatewayAdapterVersion, &evidence.GatewayStatus, &gatewayCapsJSON,
@@ -309,7 +363,7 @@ WHERE cr.id=$2::uuid`
 	route := governedRoute{
 		GatewayPoolID: evidence.GatewayPoolID, GatewayPoolVersion: evidence.GatewayPoolVersion,
 		Provider: evidence.GatewayProvider, Engine: evidence.GatewayEngine, AdapterVersion: evidence.GatewayAdapterVersion,
-		GatewayNodeID: evidence.GatewayNodeID, GatewayNodeVersion: evidence.GatewayNodeVersion,
+		GatewayNodeID: evidence.GatewayNodeID, GatewayNodeURL: evidence.GatewayNodeURL, GatewayNodeVersion: evidence.GatewayNodeVersion,
 		SessionLeaseVersion: evidence.SessionLeaseVersion, SessionConfigurationVersion: evidence.SessionConfigurationVersion,
 		AuthorityExpiresAt: authorityExpiry,
 	}
@@ -372,6 +426,9 @@ INSERT INTO gateway_session_authority_events(
 }
 
 func validateGovernedRouteEvidence(e governedRouteEvidence, messageType string, at time.Time) error {
+	if !validGatewayNodeURL(e.GatewayNodeURL) {
+		return errors.New("assigned session has no valid governed gateway node URL")
+	}
 	if e.SessionConfigurationVersion <= 0 || e.GatewayNodeID == "" || e.GatewayNodeVersion <= 0 ||
 		e.GatewayNodeStatus != "READY" || e.SessionLeaseVersion <= 0 || !e.SessionLeaseExpiresAt.After(at) {
 		return errors.New("assigned session has no current fenced gateway authority")
@@ -446,6 +503,11 @@ func validateGovernedRouteEvidence(e governedRouteEvidence, messageType string, 
 		}
 	}
 	return nil
+}
+
+func validGatewayNodeURL(value string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	return err == nil && parsed.Host != "" && (parsed.Scheme == "http" || parsed.Scheme == "https")
 }
 
 func normalizedCapabilitySet(values []string) map[string]bool {
@@ -532,6 +594,8 @@ WITH basis AS (
 SELECT CASE
   WHEN b.contact_status <> 'ACTIVE' THEN 'CONTACT_INACTIVE'
   WHEN b.organisation_status <> 'ACTIVE' THEN 'ORGANISATION_INACTIVE'
+  WHEN b.campaign_status = 'CANCELLED' THEN 'CAMPAIGN_CANCELLED'
+  WHEN b.campaign_status = 'PAUSED' THEN 'CAMPAIGN_PAUSED'
   WHEN b.campaign_status NOT IN ('SCHEDULED','DISPATCHING') THEN 'CAMPAIGN_NOT_DISPATCHABLE'
   WHEN b.requested_start_at IS NOT NULL AND $2 < b.requested_start_at THEN 'CAMPAIGN_NOT_STARTED'
   WHEN b.completion_deadline_at IS NOT NULL AND $2 >= b.completion_deadline_at THEN 'CAMPAIGN_DEADLINE_PASSED'

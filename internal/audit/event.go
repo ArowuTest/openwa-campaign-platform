@@ -255,13 +255,36 @@ func (r *Recorder) Record(ctx context.Context, input Input) (Event, error) {
 	if err != nil {
 		return Event{}, err
 	}
+	return r.RecordPrepared(ctx, event)
+}
+
+// RecordPrepared appends an already-identified event, such as one recovered
+// from the transactional audit outbox. The event ID is preserved so replay is
+// idempotent across worker crashes and outbox redelivery.
+func (r *Recorder) RecordPrepared(ctx context.Context, event Event) (Event, error) {
+	if r == nil || r.repository == nil || strings.TrimSpace(event.ID) == "" || strings.TrimSpace(event.ActorType) == "" ||
+		strings.TrimSpace(event.ActorID) == "" || strings.TrimSpace(event.Action) == "" || strings.TrimSpace(event.ObjectType) == "" ||
+		strings.TrimSpace(event.ObjectID) == "" || strings.TrimSpace(event.CorrelationID) == "" || event.OccurredAt.IsZero() ||
+		event.Sequence != 0 || event.PreviousHash != "" || event.Hash != "" {
+		return Event{}, ErrInvalidEvent
+	}
+	var err error
+	event.Before, err = canonicalAuditJSON(event.Before)
+	if err != nil {
+		return Event{}, fmt.Errorf("canonicalise audit before summary: %w", err)
+	}
+	event.After, err = canonicalAuditJSON(event.After)
+	if err != nil {
+		return Event{}, fmt.Errorf("canonicalise audit after summary: %w", err)
+	}
+	event.IPAddress = canonicalAuditIP(event.IPAddress)
+	event.OccurredAt = event.OccurredAt.UTC().Round(time.Microsecond)
 
 	// A hash chain is inherently sequential. Serialising through one recorder
 	// avoids same-process writers repeatedly invalidating each other's observed
 	// head while PostgreSQL still provides the cross-process CAS boundary.
 	r.mu.Lock()
 	defer r.mu.Unlock()
-
 	for attempt := 0; attempt < auditChainConflictMaxAttempts; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return Event{}, err

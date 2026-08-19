@@ -161,7 +161,11 @@ func TestPostgreSQLOptOutPolicyPaginationContinuesWithoutSkipping(t *testing.T) 
 	db, ctx, _ := openCompliancePaginationDB(t)
 	actor, _ := seedComplianceActorOrganisation(t, ctx, db)
 	admin := &consent.OptOutPolicyAdministration{Store: &OptOutPolicyStore{DB: db}}
-	base := time.Date(2099, 5, 4, 12, 0, 0, 0, time.UTC)
+	var base time.Time
+	if e := db.QueryRowContext(ctx, `SELECT coalesce(max(created_at), '2099-05-04 12:00:00+00'::timestamptz) + interval '1 minute' FROM opt_out_policies`).Scan(&base); e != nil {
+		t.Fatal(e)
+	}
+	base = base.UTC()
 	created := make([]consent.GovernedOptOutPolicy, 0, 3)
 	for i := 0; i < 3; i++ {
 		at := base.Add(time.Duration(i) * time.Minute)
@@ -183,7 +187,7 @@ func TestPostgreSQLOptOutPolicyPaginationContinuesWithoutSkipping(t *testing.T) 
 	if e != nil {
 		t.Fatal(e)
 	}
-	if len(second.Items) != 1 || second.NextCursor != "" || second.Items[0].ID != created[0].ID {
-		t.Fatalf("unexpected second optout page: %#v", second)
+	if len(second.Items) == 0 || second.Items[0].ID != created[0].ID {
+		t.Fatalf("cursor skipped the oldest policy created by this test: %#v", second)
 	}
 }

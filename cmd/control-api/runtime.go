@@ -145,6 +145,10 @@ func buildMemoryRuntime(cfg config.Config, protector *sharedcrypto.MSISDNProtect
 	maintenance := &platformpolicy.MaintenanceAdministration{Store: platformPolicyStore}
 	campaigns := campaign.NewService(campaign.NewMemoryRepository()).WithOrganisationReader(orgs).WithOrganisationPolicies(organisationPolicies).WithCommercialApprovals(commercialService).WithConsentReviews(reviews).WithProviderCapabilities(providerCapabilities).WithGatewayPools(gatewayPools)
 	messages := message.NewService(message.NewMemoryRepository())
+	metaRuntime, err := buildMemoryMetaControlRuntime(cfg, messages)
+	if err != nil {
+		return nil, fmt.Errorf("initialise Meta Cloud runtime: %w", err)
+	}
 	testMessages := &testmessage.Service{Repository: testmessage.NewMemoryRepository(), Protector: protector, Messages: messages, Routes: testmessage.RouteValidatorFunc(func(context.Context, testmessage.RouteRequirements) (testmessage.RouteEvidence, error) {
 		return testmessage.RouteEvidence{GatewayPoolVersion: 1, AdapterVersion: "0.13.0", ProviderDefinitionID: "00000000-0000-4000-8000-000000000101", ProviderDefinitionVersion: 1, GatewayNodeID: "00000000-0000-4000-8000-000000000201", GatewayNodeVersion: 1, SessionLeaseVersion: 1, SessionConfigurationVersion: 1, AuthorityExpiresAt: time.Now().UTC().Add(10 * time.Minute)}, nil
 	})}
@@ -154,6 +158,7 @@ func buildMemoryRuntime(cfg config.Config, protector *sharedcrypto.MSISDNProtect
 	materialisationService := &materialisation.MaterialisationService{Repository: materialisation.NewMemoryMaterialisationRepository()}
 	metrics := delivery.NewMetricsService(delivery.NewMemoryMetricsRepository())
 	senderGovernance := &sender.GovernanceService{Store: senderStore, HealthPolicies: &sender.PlatformHealthPolicyResolver{Configurations: configurations}}
+	senderSessionHeartbeat := &sender.SessionHeartbeatService{Governance: senderGovernance, Runtime: gatewayRuntime}
 	senderLifecycle := &sender.SessionLifecycleService{Governance: senderGovernance, Gateway: &sender.HTTPSessionGateway{CommandSecret: cfg.GatewayCommandSecret}, Proxies: senderProxies, ActiveWork: sender.StaticActiveSessionWorkChecker(false), TransportRuntime: &sender.PlatformTransportRuntimeResolver{Configurations: configurations}, Maintenance: maintenance}
 	pacingPolicies := &sender.PacingAdministration{Store: sender.NewMemoryPacingStore()}
 	executionStore := execution.NewMemoryStore()
@@ -163,6 +168,7 @@ func buildMemoryRuntime(cfg config.Config, protector *sharedcrypto.MSISDNProtect
 		return campaignworkspace.DeliveryMetrics{Authorised: m.Authorised, Queued: m.Queued, Pending: m.Pending, Submitted: m.Submitted, Sent: m.Sent, Delivered: m.Delivered, Read: m.Read, Unknown: m.Unknown}, err
 	})}
 	routingPlans := &execution.RoutingAdministration{Store: execution.NewMemoryRoutingPlanStore(), Campaigns: campaigns, ProviderCapabilities: providerCapabilities, GatewayPools: gatewayPools}
+	applyMetaRoutingRuntime(routingPlans, metaRuntime, cfg.MetaHealthStaleAfter)
 	shardReallocations := &execution.ReallocationAdministration{Store: execution.NewMemoryShardRepository()}
 	executionCoordinator.RoutingPlans = routingPlans
 	reportingPrivacy := &operations.ReportingPrivacyAdministration{Store: operations.NewMemoryReportingPrivacyStore(), Audit: auditRecorder}
@@ -205,7 +211,8 @@ func buildMemoryRuntime(cfg config.Config, protector *sharedcrypto.MSISDNProtect
 	if intake == nil {
 		logger.Warn("secure audience-import intake is disabled until CLAMAV_ADDRESS is configured")
 	}
-	deps := httpserver.Dependencies{Registry: filters.Registry, FilterDefinitions: filters.Administration, Compiler: filters.Compiler, Cohorts: cohortExecution, Organisations: orgs, OrganisationPolicies: organisationPolicies, ConsentReviews: reviews, ConsentLedger: consentLedger, OptOutProcessor: optOutProcessor, OptOutPolicies: optOutPolicies, InboundReplies: inboundReplies, InboundRetentionPolicies: retentionPolicies, InboundRotation: rotationService, Campaigns: campaigns, CampaignWorkspace: campaignWorkspace, Commercial: commercialService, Geography: geography.DefaultCatalogue(), MaxImportPreviewRows: cfg.MaxImportPreviewRows, Identity: identityService, IdentityAdministration: identityAdministration, SecureCookies: cfg.SecureCookies, NetworkPolicy: httpserver.NetworkPolicy{AllowedCIDRs: cfg.AllowedNetworkCIDRs, TrustedProxyCIDRs: cfg.TrustedProxyCIDRs}, MSISDNProtector: protector, Messages: messages, TestMessages: testMessages, Snapshots: snapshots, SegmentDefinitions: segmentDefinitions, AudienceMaterialisations: materialisationService, DeliveryMetrics: metrics, Execution: executionCoordinator, RoutingPlans: routingPlans, ShardReallocations: shardReallocations, JobOperations: jobOperations, Operations: operationsService, PrivacyCases: privacyCases, ContactLifecycle: contactLifecycle, SenderGovernance: senderGovernance, SenderSessionProxies: senderProxies, GatewayPools: gatewayPoolAdministration, GatewayRuntime: gatewayRuntime, SenderSessionLifecycle: senderLifecycle, PacingPolicies: pacingPolicies, ProviderCapabilities: providerCapabilities, Configurations: configurations, Maintenance: maintenance, Retention: platformRetention, AlertPolicies: alertPolicies, AlertEvaluator: alertEvaluator, AudienceImports: imports, AudienceImportMappings: importMappings, AudienceImportRollback: importRollback, AudienceImportIssues: importIssues, AudienceConflicts: audienceConflicts, AudienceReconciliation: audienceReconciliation, AudienceSourceTrust: audienceSourceTrust, AudienceImportIntake: intake, MaxImportFileBytes: cfg.MaxImportFileBytes, DeliveryEvents: deliveryEvents, GatewayCallbackSecret: []byte(cfg.GatewayCallbackSecret), GatewayCallbackPreviousSecrets: nonEmptySecrets(cfg.GatewayCallbackPreviousSecret), GatewayCallbackMaxSkew: cfg.GatewayCallbackMaxSkew, MediaObjects: mediaStore, TrustedAssets: trustedAssets, MediaDownloadSecret: []byte(cfg.MediaDownloadSecret), ReadinessChecks: []httpserver.ReadinessCheck{filters.Readiness}}
+	deps := httpserver.Dependencies{Registry: filters.Registry, FilterDefinitions: filters.Administration, Compiler: filters.Compiler, Cohorts: cohortExecution, Organisations: orgs, OrganisationPolicies: organisationPolicies, ConsentReviews: reviews, ConsentLedger: consentLedger, OptOutProcessor: optOutProcessor, OptOutPolicies: optOutPolicies, InboundReplies: inboundReplies, InboundRetentionPolicies: retentionPolicies, InboundRotation: rotationService, Campaigns: campaigns, CampaignWorkspace: campaignWorkspace, Commercial: commercialService, Geography: geography.DefaultCatalogue(), MaxImportPreviewRows: cfg.MaxImportPreviewRows, Identity: identityService, IdentityAdministration: identityAdministration, SecureCookies: cfg.SecureCookies, NetworkPolicy: httpserver.NetworkPolicy{AllowedCIDRs: cfg.AllowedNetworkCIDRs, TrustedProxyCIDRs: cfg.TrustedProxyCIDRs}, MSISDNProtector: protector, Messages: messages, TestMessages: testMessages, Snapshots: snapshots, SegmentDefinitions: segmentDefinitions, AudienceMaterialisations: materialisationService, DeliveryMetrics: metrics, Execution: executionCoordinator, RoutingPlans: routingPlans, ShardReallocations: shardReallocations, JobOperations: jobOperations, Operations: operationsService, PrivacyCases: privacyCases, ContactLifecycle: contactLifecycle, SenderGovernance: senderGovernance, SenderSessionProxies: senderProxies, GatewayPools: gatewayPoolAdministration, GatewayRuntime: gatewayRuntime, SenderSessionHeartbeat: senderSessionHeartbeat, SenderSessionLifecycle: senderLifecycle, PacingPolicies: pacingPolicies, ProviderCapabilities: providerCapabilities, Configurations: configurations, Maintenance: maintenance, Retention: platformRetention, AlertPolicies: alertPolicies, AlertEvaluator: alertEvaluator, AudienceImports: imports, AudienceImportMappings: importMappings, AudienceImportRollback: importRollback, AudienceImportIssues: importIssues, AudienceConflicts: audienceConflicts, AudienceReconciliation: audienceReconciliation, AudienceSourceTrust: audienceSourceTrust, AudienceImportIntake: intake, MaxImportFileBytes: cfg.MaxImportFileBytes, DeliveryEvents: deliveryEvents, MetaCredentials: metaRuntime.Credentials, MetaSenders: metaRuntime.Senders, MetaTemplates: metaRuntime.Templates, MetaVerifier: metaRuntime.Verifier, MetaWebhookSenders: metaRuntime.WebhookSenders, MetaWebhookDeliveries: metaRuntime.WebhookDeliveries, GatewayCallbackSecret: []byte(cfg.GatewayCallbackSecret), GatewayCallbackPreviousSecrets: nonEmptySecrets(cfg.GatewayCallbackPreviousSecret), GatewayCallbackMaxSkew: cfg.GatewayCallbackMaxSkew, MediaObjects: mediaStore, TrustedAssets: trustedAssets, MediaDownloadSecret: []byte(cfg.MediaDownloadSecret), ReadinessChecks: []httpserver.ReadinessCheck{filters.Readiness}}
+	applyMetaControlRuntime(&deps, metaRuntime)
 	return &controlRuntime{Dependencies: deps}, nil
 }
 
@@ -264,22 +271,15 @@ func buildPostgreSQLRuntime(ctx context.Context, cfg config.Config, protector *s
 	privacyCases := &privacy.Service{Repository: &privacy.PostgreSQLRepository{DB: db}, Protector: protector, Evidence: privacyKeyring, Audit: auditRecorder}
 	retentionStore := &inbound.PostgreSQLRetentionPolicyStore{DB: db}
 	retentionPolicies := &inbound.RetentionPolicyAdministration{Store: retentionStore}
-	if _, retentionErr := retentionStore.Active(ctx, time.Now().UTC()); errors.Is(retentionErr, inbound.ErrRetentionPolicyNotFound) {
-		nowRetention := time.Now().UTC()
-		_, retentionErr = retentionStore.Create(ctx, inbound.RetentionPolicy{ID: "bootstrap-inbound-retention", RetentionDays: cfg.InboundRetentionDays, Status: inbound.RetentionPolicyActive, EffectiveFrom: nowRetention.Add(-time.Second), Version: 1, CreatedBy: "00000000-0000-4000-8000-000000000001", ApprovedBy: "00000000-0000-4000-8000-000000000001", Reason: "bootstrap governed inbound retention policy", CreatedAt: nowRetention, UpdatedAt: nowRetention})
-	} else if retentionErr != nil {
+	if retentionErr := ensureInboundRetentionPolicy(ctx, retentionStore, cfg.InboundRetentionDays, time.Now().UTC()); retentionErr != nil {
 		return fail(fmt.Errorf("initialise inbound retention policy: %w", retentionErr))
 	}
 	inboundReplies := &inbound.Service{Repository: &inbound.PostgreSQLRepository{DB: db, Keyring: inboundKeyring}, Audit: inboundAuditSink{recorder: auditRecorder}, RetentionPolicies: retentionPolicies}
 	rotationService := &inbound.RotationService{Repository: &inbound.PostgreSQLRotationRepository{DB: db, Keyring: inboundKeyring}, ActiveKeyVersion: inboundKeyring.ActiveVersion()}
 	policyStore := &postgresrepo.OptOutPolicyStore{DB: db}
 	optOutPolicies := &consent.OptOutPolicyAdministration{Store: policyStore}
-	_, activeErr := policyStore.Active(ctx, time.Now().UTC())
-	if errors.Is(activeErr, consent.ErrOptOutPolicyNotFound) {
-		nowPolicy := time.Now().UTC()
-		_, activeErr = policyStore.Create(ctx, consent.GovernedOptOutPolicy{ID: "bootstrap-opt-out-policy", Keywords: cfg.OptOutKeywords, Status: consent.OptOutPolicyActive, EffectiveFrom: nowPolicy.Add(-time.Second), Version: 1, CreatedBy: consent.DefaultGatewayServiceActorID, Reason: "bootstrap governed opt-out policy", CreatedAt: nowPolicy, UpdatedAt: nowPolicy})
-	}
-	if activeErr != nil {
+	nowPolicy := time.Now().UTC()
+	if activeErr := ensureOptOutPolicy(ctx, policyStore, cfg.OptOutKeywords, nowPolicy); activeErr != nil {
 		return fail(fmt.Errorf("initialise governed opt-out policy: %w", activeErr))
 	}
 	optOutProcessor := &consent.OptOutProcessor{Deliveries: deliveryEvents, Ledger: consentLedger, Policies: optOutPolicies, ActorID: consent.DefaultGatewayServiceActorID, Inbox: inboundReplies, Protector: protector, Senders: &postgresrepo.InboundSenderResolver{DB: db}}
@@ -298,6 +298,10 @@ func buildPostgreSQLRuntime(ctx context.Context, cfg config.Config, protector *s
 	maintenance := &platformpolicy.MaintenanceAdministration{Store: platformPolicyStore}
 	campaigns := campaign.NewService(&postgresrepo.CampaignRepository{DB: db}).WithOrganisationReader(orgs).WithOrganisationPolicies(organisationPolicies).WithCommercialApprovals(commercialService).WithConsentReviews(reviews).WithProviderCapabilities(providerCapabilities).WithGatewayPools(gatewayPools)
 	messages := message.NewService(&message.PostgreSQLRepository{DB: db})
+	metaRuntime, err := buildPostgreSQLMetaControlRuntime(cfg, db, messages, deliveryEvents, protector)
+	if err != nil {
+		return fail(fmt.Errorf("initialise Meta Cloud runtime: %w", err))
+	}
 	testMessageRepository := &testmessage.PostgreSQLRepository{DB: db}
 	testMessages := &testmessage.Service{Repository: testMessageRepository, Protector: protector, Messages: messages, Routes: testMessageRepository}
 	snapshotStore := &segment.PostgreSQLStore{DB: db}
@@ -307,15 +311,23 @@ func buildPostgreSQLRuntime(ctx context.Context, cfg config.Config, protector *s
 	materialisationService := &materialisation.MaterialisationService{Repository: &materialisation.PostgreSQLRepository{DB: db}}
 	metrics := delivery.NewMetricsService(&delivery.PostgreSQLMetricsRepository{DB: db})
 	senderGovernance := &sender.GovernanceService{Store: senderStore, HealthPolicies: &sender.PlatformHealthPolicyResolver{Configurations: configurations}, HealthSignals: &sender.PostgreSQLHealthSignalSource{DB: db}}
+	senderSessionHeartbeat := &sender.SessionHeartbeatService{Governance: senderGovernance, Runtime: gatewayRuntime}
 	senderLifecycle := &sender.SessionLifecycleService{Governance: senderGovernance, Gateway: &sender.HTTPSessionGateway{CommandSecret: cfg.GatewayCommandSecret}, Proxies: senderProxies, ActiveWork: sender.PostgreSQLActiveSessionWorkChecker{DB: db}, TransportRuntime: &sender.PlatformTransportRuntimeResolver{Configurations: configurations}, Maintenance: maintenance}
 	pacingPolicies := &sender.PacingAdministration{Store: &postgresrepo.PacingPolicyRepository{DB: db}}
 	executionStore := &execution.PostgreSQLStore{DB: db}
-	executionCoordinator := &execution.Coordinator{Campaigns: campaigns, Store: executionStore, SafetyMarginPercent: 15, Maintenance: maintenance}
+	executionCommitter := &execution.PostgreSQLLifecycleCommitter{
+		DB: db, Retry: postgresrepo.DefaultRetryPolicy(),
+	}
+	executionCoordinator := &execution.Coordinator{
+		Campaigns: campaigns, Store: executionStore, Committer: executionCommitter,
+		SafetyMarginPercent: 15, Maintenance: maintenance,
+	}
 	campaignWorkspace := &campaignworkspace.Service{Repository: &postgresrepo.CampaignWorkspaceRepository{DB: db}, Campaigns: campaigns, Metrics: campaignworkspace.MetricsReaderFunc(func(ctx context.Context, id string) (campaignworkspace.DeliveryMetrics, error) {
 		m, err := executionStore.Metrics(ctx, id)
 		return campaignworkspace.DeliveryMetrics{Authorised: m.Authorised, Queued: m.Queued, Pending: m.Pending, Submitted: m.Submitted, Sent: m.Sent, Delivered: m.Delivered, Read: m.Read, Unknown: m.Unknown}, err
 	})}
 	routingPlans := &execution.RoutingAdministration{Store: &execution.PostgreSQLRoutingPlanStore{DB: db}, Campaigns: campaigns, ProviderCapabilities: providerCapabilities, GatewayPools: gatewayPools}
+	applyMetaRoutingRuntime(routingPlans, metaRuntime, cfg.MetaHealthStaleAfter)
 	shardReallocations := &execution.ReallocationAdministration{Store: &execution.PostgreSQLShardRepository{DB: db}}
 	executionCoordinator.RoutingPlans = routingPlans
 	reportingPrivacy := &operations.ReportingPrivacyAdministration{Store: &operations.PostgreSQLReportingPrivacyStore{DB: db}, Audit: auditRecorder}
@@ -357,10 +369,61 @@ func buildPostgreSQLRuntime(ctx context.Context, cfg config.Config, protector *s
 		return fail(errors.New("secure audience-import intake is required for persistent runtime"))
 	}
 	releases := &orchestration.ReleaseService{Campaigns: campaigns, Organisations: orgs, Snapshots: snapshots, Store: &orchestration.PostgreSQLStore{DB: db}, Eligibility: orchestration.SQLFinalEligibilityChecker{}, BatchSize: 1000, ShardCount: 256}
-	deps := httpserver.Dependencies{Registry: filters.Registry, FilterDefinitions: filters.Administration, Compiler: filters.Compiler, Cohorts: cohortExecution, Organisations: orgs, OrganisationPolicies: organisationPolicies, ConsentReviews: reviews, ConsentLedger: consentLedger, OptOutProcessor: optOutProcessor, OptOutPolicies: optOutPolicies, InboundReplies: inboundReplies, InboundRetentionPolicies: retentionPolicies, InboundRotation: rotationService, Campaigns: campaigns, CampaignWorkspace: campaignWorkspace, Commercial: commercialService, Geography: geography.DefaultCatalogue(), MaxImportPreviewRows: cfg.MaxImportPreviewRows, Identity: identityService, IdentityAdministration: identityAdministration, SecureCookies: cfg.SecureCookies, NetworkPolicy: httpserver.NetworkPolicy{AllowedCIDRs: cfg.AllowedNetworkCIDRs, TrustedProxyCIDRs: cfg.TrustedProxyCIDRs}, MSISDNProtector: protector, Messages: messages, TestMessages: testMessages, Snapshots: snapshots, SegmentDefinitions: segmentDefinitions, AudienceMaterialisations: materialisationService, Releases: releases, DeliveryMetrics: metrics, Execution: executionCoordinator, RoutingPlans: routingPlans, ShardReallocations: shardReallocations, JobOperations: jobOperations, Operations: operationsService, PrivacyCases: privacyCases, ContactLifecycle: contactLifecycle, SenderGovernance: senderGovernance, SenderSessionProxies: senderProxies, GatewayPools: gatewayPoolAdministration, GatewayRuntime: gatewayRuntime, SenderSessionLifecycle: senderLifecycle, PacingPolicies: pacingPolicies, ProviderCapabilities: providerCapabilities, Configurations: configurations, Maintenance: maintenance, Retention: platformRetention, AlertPolicies: alertPolicies, AlertEvaluator: alertEvaluator, AudienceImports: imports, AudienceImportMappings: importMappings, AudienceImportRollback: importRollback, AudienceImportIssues: importIssues, AudienceConflicts: audienceConflicts, AudienceReconciliation: audienceReconciliation, AudienceSourceTrust: audienceSourceTrust, AudienceImportIntake: intake, MaxImportFileBytes: cfg.MaxImportFileBytes, DeliveryEvents: deliveryEvents, GatewayCallbackSecret: []byte(cfg.GatewayCallbackSecret), GatewayCallbackPreviousSecrets: nonEmptySecrets(cfg.GatewayCallbackPreviousSecret), GatewayCallbackMaxSkew: cfg.GatewayCallbackMaxSkew, MediaObjects: mediaStore, TrustedAssets: trustedAssets, MediaDownloadSecret: []byte(cfg.MediaDownloadSecret), ReadinessChecks: []httpserver.ReadinessCheck{{Name: "postgres", Check: db.PingContext}, {Name: "schema", Check: func(c context.Context) error { return verifyControlSchema(c, db) }}, filters.Readiness}}
+	deps := httpserver.Dependencies{Registry: filters.Registry, FilterDefinitions: filters.Administration, Compiler: filters.Compiler, Cohorts: cohortExecution, Organisations: orgs, OrganisationPolicies: organisationPolicies, ConsentReviews: reviews, ConsentLedger: consentLedger, OptOutProcessor: optOutProcessor, OptOutPolicies: optOutPolicies, InboundReplies: inboundReplies, InboundRetentionPolicies: retentionPolicies, InboundRotation: rotationService, Campaigns: campaigns, CampaignWorkspace: campaignWorkspace, Commercial: commercialService, Geography: geography.DefaultCatalogue(), MaxImportPreviewRows: cfg.MaxImportPreviewRows, Identity: identityService, IdentityAdministration: identityAdministration, SecureCookies: cfg.SecureCookies, NetworkPolicy: httpserver.NetworkPolicy{AllowedCIDRs: cfg.AllowedNetworkCIDRs, TrustedProxyCIDRs: cfg.TrustedProxyCIDRs}, MSISDNProtector: protector, Messages: messages, TestMessages: testMessages, Snapshots: snapshots, SegmentDefinitions: segmentDefinitions, AudienceMaterialisations: materialisationService, Releases: releases, DeliveryMetrics: metrics, Execution: executionCoordinator, RoutingPlans: routingPlans, ShardReallocations: shardReallocations, JobOperations: jobOperations, Operations: operationsService, PrivacyCases: privacyCases, ContactLifecycle: contactLifecycle, SenderGovernance: senderGovernance, SenderSessionProxies: senderProxies, GatewayPools: gatewayPoolAdministration, GatewayRuntime: gatewayRuntime, SenderSessionHeartbeat: senderSessionHeartbeat, SenderSessionLifecycle: senderLifecycle, PacingPolicies: pacingPolicies, ProviderCapabilities: providerCapabilities, Configurations: configurations, Maintenance: maintenance, Retention: platformRetention, AlertPolicies: alertPolicies, AlertEvaluator: alertEvaluator, AudienceImports: imports, AudienceImportMappings: importMappings, AudienceImportRollback: importRollback, AudienceImportIssues: importIssues, AudienceConflicts: audienceConflicts, AudienceReconciliation: audienceReconciliation, AudienceSourceTrust: audienceSourceTrust, AudienceImportIntake: intake, MaxImportFileBytes: cfg.MaxImportFileBytes, DeliveryEvents: deliveryEvents, MetaCredentials: metaRuntime.Credentials, MetaSenders: metaRuntime.Senders, MetaTemplates: metaRuntime.Templates, MetaVerifier: metaRuntime.Verifier, MetaWebhookSenders: metaRuntime.WebhookSenders, GatewayCallbackSecret: []byte(cfg.GatewayCallbackSecret), GatewayCallbackPreviousSecrets: nonEmptySecrets(cfg.GatewayCallbackPreviousSecret), GatewayCallbackMaxSkew: cfg.GatewayCallbackMaxSkew, MediaObjects: mediaStore, TrustedAssets: trustedAssets, MediaDownloadSecret: []byte(cfg.MediaDownloadSecret), ReadinessChecks: []httpserver.ReadinessCheck{{Name: "postgres", Check: db.PingContext}, {Name: "schema", Check: func(c context.Context) error { return verifyControlSchema(c, db) }}, filters.Readiness}}
+	applyMetaControlRuntime(&deps, metaRuntime)
 	return &controlRuntime{Dependencies: deps, DB: db, close: db.Close}, nil
 }
 
+type optOutBootstrapStore interface {
+	Active(context.Context, time.Time) (consent.GovernedOptOutPolicy, error)
+	Create(context.Context, consent.GovernedOptOutPolicy) (consent.GovernedOptOutPolicy, error)
+}
+
+func ensureOptOutPolicy(ctx context.Context, store optOutBootstrapStore, keywords []string, now time.Time) error {
+	if _, err := store.Active(ctx, now); err == nil {
+		return nil
+	} else if !errors.Is(err, consent.ErrOptOutPolicyNotFound) {
+		return err
+	}
+	_, err := store.Create(ctx, consent.GovernedOptOutPolicy{
+		ID: "bootstrap-opt-out-policy", Keywords: keywords, Status: consent.OptOutPolicyActive,
+		EffectiveFrom: now.Add(-time.Second), Version: 1, CreatedBy: consent.DefaultGatewayServiceActorID,
+		Reason: "bootstrap governed opt-out policy", CreatedAt: now, UpdatedAt: now,
+	})
+	if err == nil {
+		return nil
+	}
+	if _, activeErr := store.Active(ctx, now); activeErr == nil {
+		return nil
+	}
+	return err
+}
+
+type inboundRetentionBootstrapStore interface {
+	Active(context.Context, time.Time) (inbound.RetentionPolicy, error)
+	Create(context.Context, inbound.RetentionPolicy) (inbound.RetentionPolicy, error)
+}
+
+func ensureInboundRetentionPolicy(ctx context.Context, store inboundRetentionBootstrapStore, days int, now time.Time) error {
+	if _, err := store.Active(ctx, now); err == nil {
+		return nil
+	} else if !errors.Is(err, inbound.ErrRetentionPolicyNotFound) {
+		return err
+	}
+	_, err := store.Create(ctx, inbound.RetentionPolicy{
+		ID: "bootstrap-inbound-retention", RetentionDays: days, Status: inbound.RetentionPolicyActive,
+		EffectiveFrom: now.Add(-time.Second), Version: 1,
+		CreatedBy: "00000000-0000-4000-8000-000000000001", ApprovedBy: "00000000-0000-4000-8000-000000000001",
+		Reason: "bootstrap governed inbound retention policy", CreatedAt: now, UpdatedAt: now,
+	})
+	if err == nil {
+		return nil
+	}
+	if _, activeErr := store.Active(ctx, now); activeErr == nil {
+		return nil
+	}
+	return err
+}
 func buildPrivacyEvidenceKeyring(cfg config.Config, persistent bool) (*sharedcrypto.SecretKeyring, error) {
 	if strings.TrimSpace(cfg.PrivacyEvidenceKeysJSON) != "" {
 		return sharedcrypto.NewSecretKeyringFromJSON(cfg.PrivacyEvidenceActiveKey, cfg.PrivacyEvidenceKeysJSON)
@@ -458,6 +521,63 @@ const controlSchemaReadinessQuery = `SELECT
   AND EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='retention_policies')
   AND EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='operational_alert_policies')
   AND EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='operational_incident_events')
+  AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='campaign_execution_events' AND column_name='campaign_version')
+  AND to_regclass('public.uq_campaign_execution_event_lifecycle_version') IS NOT NULL
+  AND to_regclass('public.meta_cloud_senders') IS NOT NULL
+  AND to_regclass('public.meta_cloud_sender_events') IS NOT NULL
+  AND to_regclass('public.meta_cloud_templates') IS NOT NULL
+  AND to_regclass('public.meta_cloud_message_bindings') IS NOT NULL
+  AND to_regclass('public.meta_cloud_template_sync_state') IS NOT NULL
+  AND to_regclass('public.campaign_routing_plan_quarantine_evidence') IS NOT NULL
+  AND to_regclass('public.campaign_routing_plan_quarantined_routes') IS NOT NULL
+  AND to_regclass('public.meta_cloud_conversation_windows') IS NOT NULL
+  AND to_regclass('public.meta_cloud_conversation_window_tombstones') IS NOT NULL
+  AND to_regclass('public.meta_cloud_conversation_window_quarantine') IS NOT NULL
+  AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='meta_cloud_message_bindings' AND column_name='component_bindings')
+  AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='campaign_routing_plans' AND column_name='distribution_mode')
+  AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='campaign_routing_plan_pools' AND column_name='meta_sender_id')
+  AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='campaign_routing_plan_pools' AND column_name='meta_sender_version')
+  AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='campaigns' AND column_name='meta_sender_id')
+  AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname='campaigns_meta_sender_route_coherence')
+  AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname='campaigns_meta_sender_org_pool_fkey')
+  AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname='campaign_route_meta_sender_pool_fkey')
+  AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname='campaign_route_frozen_version_null_safe_check')
+  AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname='campaigns_frozen_version_null_safe_check')
+  AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname='campaign_routing_plan_pools_meta_sender_version_frozen_check')
+  AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname='meta_cloud_conversation_windows_pkey')
+  AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname='meta_cloud_conversation_windows_max_duration_check')
+  AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname='meta_cloud_conversation_windows_receipt_skew_check')
+  AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_meta_conversation_window_immutable' AND NOT tgisinternal AND tgenabled IN ('O','A'))
+  AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_meta_conversation_window_delete_tombstone' AND NOT tgisinternal AND tgenabled IN ('O','A'))
+  AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_meta_conversation_window_insert_tombstone_guard' AND NOT tgisinternal AND tgenabled IN ('O','A'))
+  AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_meta_conversation_window_tombstone_immutable' AND NOT tgisinternal AND tgenabled IN ('O','A'))
+  AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_meta_conversation_window_quarantine_immutable' AND NOT tgisinternal AND tgenabled IN ('O','A'))
+  AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_campaign_route_quarantine_evidence_immutable' AND NOT tgisinternal AND tgenabled IN ('O','A'))
+  AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_campaign_quarantined_route_immutable' AND NOT tgisinternal AND tgenabled IN ('O','A'))
+  AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_meta_conversation_window_no_truncate' AND NOT tgisinternal AND tgenabled IN ('O','A'))
+  AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_meta_window_tombstone_no_truncate' AND NOT tgisinternal AND tgenabled IN ('O','A'))
+  AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_meta_window_quarantine_no_truncate' AND NOT tgisinternal AND tgenabled IN ('O','A'))
+  AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_campaign_route_quarantine_evidence_no_truncate' AND NOT tgisinternal AND tgenabled IN ('O','A'))
+  AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_campaign_quarantined_route_no_truncate' AND NOT tgisinternal AND tgenabled IN ('O','A'))
+  AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='campaign_pool_capacity_reservations' AND column_name='released_by')
+  AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='campaign_pool_capacity_reservations' AND column_name='released_at')
+  AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname='campaign_pool_capacity_reservations_release_evidence_check')
+  AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_reservation_release_evidence_immutable' AND NOT tgisinternal AND tgenabled IN ('O','A'))
+  AND to_regclass('public.campaign_pool_capacity_reservation_release_tombstones') IS NOT NULL
+  AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_reservation_release_delete_tombstone' AND NOT tgisinternal AND tgenabled IN ('O','A'))
+  AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_capacity_reservation_no_truncate' AND NOT tgisinternal AND tgenabled IN ('O','A'))
+  AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_reservation_release_tombstone_immutable' AND NOT tgisinternal AND tgenabled IN ('O','A'))
+  AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_reservation_release_tombstone_no_truncate' AND NOT tgisinternal AND tgenabled IN ('O','A'))
+  AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_campaign_route_pool_organisation' AND NOT tgisinternal AND tgenabled IN ('O','A'))
+  AND to_regclass('public.platform_schema_capabilities') IS NOT NULL
+  AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname='platform_schema_capabilities_pkey')
+  AND EXISTS (SELECT 1 FROM platform_schema_capabilities WHERE capability='CAMPAIGN_FROZEN_EVIDENCE_NULL_HARDENING' AND source_migration=85 AND evidence_version=1)
+  AND EXISTS (SELECT 1 FROM platform_schema_capabilities WHERE capability='CONTROL_SCHEMA_READINESS_HARDENING' AND source_migration=87 AND evidence_version=1)
+  AND EXISTS (SELECT 1 FROM platform_schema_capabilities WHERE capability='R14_LIVE_CAPACITY_AUTHORITY_HARDENING' AND source_migration=88 AND evidence_version=1)
+  AND EXISTS (SELECT 1 FROM platform_schema_capabilities WHERE capability='R17_LIVE_CAPACITY_DELETE_HARDENING' AND source_migration=89 AND evidence_version=1)
+  AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname='campaigns_frozen_authority_v87_check')
+  AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_platform_schema_capability_immutable' AND NOT tgisinternal AND tgenabled IN ('O','A'))
+  AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='trg_platform_schema_capability_no_truncate' AND NOT tgisinternal AND tgenabled IN ('O','A'))
   AND EXISTS (SELECT 1 FROM pg_constraint WHERE conname='provider_capability_active_period_exclusion')`
 
 func verifyControlSchema(ctx context.Context, db *sql.DB) error {
@@ -489,6 +609,7 @@ func bootstrapProviderCapabilities(ctx context.Context, store provider.Store, no
 	definitions := []provider.Definition{
 		{ID: "00000000-0000-4000-8000-000000000101", Provider: "OPENWA", Channel: provider.ChannelWhatsApp, Engine: "WHATSAPP_WEB_JS", AdapterVersion: "0.13.0", Capabilities: []provider.Capability{provider.CapabilitySendText, provider.CapabilitySendImage, provider.CapabilitySendVideo, provider.CapabilitySendDocument, provider.CapabilityDeliveryEvents, provider.CapabilityReadEvents, provider.CapabilityInbound, provider.CapabilityPairingQR}, MaximumAttachmentBytes: 64 << 20, Status: provider.StatusActive, EffectiveFrom: now.Add(-time.Second), Version: 1, CreatedBy: "00000000-0000-4000-8000-000000000001", ApprovedBy: "00000000-0000-4000-8000-000000000001", Reason: "bootstrap OpenWA whatsapp-web.js capability definition", CreatedAt: now, UpdatedAt: now},
 		{ID: "00000000-0000-4000-8000-000000000102", Provider: "OPENWA", Channel: provider.ChannelWhatsApp, Engine: "BAILEYS", AdapterVersion: "0.13.0", Capabilities: []provider.Capability{provider.CapabilitySendText, provider.CapabilitySendImage, provider.CapabilitySendVideo, provider.CapabilitySendDocument, provider.CapabilityDeliveryEvents, provider.CapabilityReadEvents, provider.CapabilityInbound, provider.CapabilityPairingQR, provider.CapabilityPairingCode}, MaximumAttachmentBytes: 64 << 20, Status: provider.StatusActive, EffectiveFrom: now.Add(-time.Second), Version: 1, CreatedBy: "00000000-0000-4000-8000-000000000001", ApprovedBy: "00000000-0000-4000-8000-000000000001", Reason: "bootstrap OpenWA Baileys capability definition", CreatedAt: now, UpdatedAt: now},
+		{ID: "00000000-0000-4000-8000-000000000103", Provider: "META", Channel: provider.ChannelWhatsApp, Engine: "CLOUD_API", AdapterVersion: "1.0.0", Capabilities: []provider.Capability{provider.CapabilitySendText, provider.CapabilitySendTemplate, provider.CapabilitySendImage, provider.CapabilitySendVideo, provider.CapabilitySendDocument, provider.CapabilityDeliveryEvents, provider.CapabilityReadEvents, provider.CapabilityInbound}, MaximumAttachmentBytes: 64 << 20, Status: provider.StatusActive, EffectiveFrom: now.Add(-time.Second), Version: 1, CreatedBy: "00000000-0000-4000-8000-000000000001", ApprovedBy: "00000000-0000-4000-8000-000000000001", Reason: "bootstrap Meta Cloud API capability definition", CreatedAt: now, UpdatedAt: now},
 	}
 	for _, definition := range definitions {
 		if _, err := store.Create(ctx, definition); err != nil {

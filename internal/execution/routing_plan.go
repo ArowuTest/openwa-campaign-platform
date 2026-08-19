@@ -13,15 +13,24 @@ import (
 
 var ErrRoutingPlanInvalid = errors.New("campaign routing plan is invalid")
 
+type DistributionMode string
+
+const (
+	DistributionAuto     DistributionMode = "AUTO"
+	DistributionWeighted DistributionMode = "WEIGHTED"
+)
+
 type PoolRoute struct {
 	SenderPoolID              string `json:"senderPoolId"`
-	GatewayPoolID             string `json:"gatewayPoolId"`
+	GatewayPoolID             string `json:"gatewayPoolId,omitempty"`
+	MetaSenderID              string `json:"metaSenderId,omitempty"`
 	Provider                  string `json:"provider"`
 	Engine                    string `json:"engine"`
 	ProviderAdapterVersion    string `json:"providerAdapterVersion,omitempty"`
 	ProviderDefinitionID      string `json:"providerDefinitionId,omitempty"`
 	ProviderDefinitionVersion int64  `json:"providerDefinitionVersion,omitempty"`
 	GatewayPoolVersion        int64  `json:"gatewayPoolVersion,omitempty"`
+	MetaSenderVersion         int64  `json:"metaSenderVersion,omitempty"`
 	AllocationWeight          int    `json:"allocationWeight"`
 	MaximumRecipients         int64  `json:"maximumRecipients"`
 	ReservedMessagesPerMinute int    `json:"reservedMessagesPerMinute"`
@@ -32,18 +41,19 @@ type PoolRoute struct {
 }
 
 type RoutingPlan struct {
-	ID                      string      `json:"id"`
-	CampaignID              string      `json:"campaignId"`
-	Version                 int64       `json:"version"`
-	Routes                  []PoolRoute `json:"routes"`
-	RoutingPolicyVersion    string      `json:"routingPolicyVersion"`
-	CapacityEvidenceVersion string      `json:"capacityEvidenceVersion"`
-	PacingPolicyVersion     string      `json:"pacingPolicyVersion"`
-	FallbackMode            string      `json:"fallbackMode"`
-	ApprovedAt              time.Time   `json:"approvedAt"`
-	ApprovedBy              string      `json:"approvedBy"`
-	IdempotencyKey          string      `json:"idempotencyKey"`
-	RequestHash             string      `json:"-"`
+	ID                      string           `json:"id"`
+	CampaignID              string           `json:"campaignId"`
+	Version                 int64            `json:"version"`
+	Routes                  []PoolRoute      `json:"routes"`
+	DistributionMode        DistributionMode `json:"distributionMode"`
+	RoutingPolicyVersion    string           `json:"routingPolicyVersion"`
+	CapacityEvidenceVersion string           `json:"capacityEvidenceVersion"`
+	PacingPolicyVersion     string           `json:"pacingPolicyVersion"`
+	FallbackMode            string           `json:"fallbackMode"`
+	ApprovedAt              time.Time        `json:"approvedAt"`
+	ApprovedBy              string           `json:"approvedBy"`
+	IdempotencyKey          string           `json:"idempotencyKey"`
+	RequestHash             string           `json:"-"`
 }
 
 func (p *RoutingPlan) Validate(maximumRecipients int64) error {
@@ -53,6 +63,12 @@ func (p *RoutingPlan) Validate(maximumRecipients int64) error {
 	p.PacingPolicyVersion = strings.TrimSpace(p.PacingPolicyVersion)
 	p.ApprovedBy = strings.TrimSpace(p.ApprovedBy)
 	p.IdempotencyKey = strings.TrimSpace(p.IdempotencyKey)
+	if p.DistributionMode == "" {
+		p.DistributionMode = DistributionWeighted
+	}
+	if p.DistributionMode != DistributionAuto && p.DistributionMode != DistributionWeighted {
+		return ErrRoutingPlanInvalid
+	}
 	if p.CampaignID == "" || p.RoutingPolicyVersion == "" || p.CapacityEvidenceVersion == "" || p.PacingPolicyVersion == "" || p.ApprovedBy == "" || p.IdempotencyKey == "" || len(p.IdempotencyKey) > 200 || p.FallbackMode != "NONE" || len(p.Routes) == 0 || maximumRecipients < 1 {
 		return ErrRoutingPlanInvalid
 	}
@@ -62,9 +78,17 @@ func (p *RoutingPlan) Validate(maximumRecipients int64) error {
 		r := &p.Routes[i]
 		r.SenderPoolID = strings.TrimSpace(r.SenderPoolID)
 		r.GatewayPoolID = strings.TrimSpace(r.GatewayPoolID)
+		r.MetaSenderID = strings.TrimSpace(r.MetaSenderID)
 		r.Provider = strings.ToUpper(strings.TrimSpace(r.Provider))
 		r.Engine = strings.ToUpper(strings.TrimSpace(r.Engine))
-		if r.SenderPoolID == "" || r.GatewayPoolID == "" || r.Provider != "OPENWA" || (r.Engine != "WHATSAPP_WEB_JS" && r.Engine != "BAILEYS") || r.AllocationWeight < 1 || r.AllocationWeight > 10000 || r.MaximumRecipients < 1 || r.ReservedMessagesPerMinute < 1 || r.ReservedHourlyUnits < 1 || r.ReservedDailyUnits < r.ReservedHourlyUnits {
+		endpointValid := false
+		switch r.Provider {
+		case "OPENWA":
+			endpointValid = r.GatewayPoolID != "" && r.MetaSenderID == "" && (r.Engine == "WHATSAPP_WEB_JS" || r.Engine == "BAILEYS")
+		case "META":
+			endpointValid = r.GatewayPoolID == "" && r.MetaSenderID != "" && r.Engine == "CLOUD_API"
+		}
+		if r.SenderPoolID == "" || !endpointValid || r.AllocationWeight < 1 || r.AllocationWeight > 10000 || r.MaximumRecipients < 1 || r.ReservedMessagesPerMinute < 1 || r.ReservedHourlyUnits < 1 || r.ReservedDailyUnits < r.ReservedHourlyUnits {
 			return ErrRoutingPlanInvalid
 		}
 		if _, ok := seen[r.SenderPoolID]; ok {
@@ -83,7 +107,8 @@ func (p *RoutingPlan) Validate(maximumRecipients int64) error {
 func (p RoutingPlan) computeRequestHash() (string, error) {
 	type routeIntent struct {
 		SenderPoolID              string `json:"senderPoolId"`
-		GatewayPoolID             string `json:"gatewayPoolId"`
+		GatewayPoolID             string `json:"gatewayPoolId,omitempty"`
+		MetaSenderID              string `json:"metaSenderId,omitempty"`
 		Provider                  string `json:"provider"`
 		Engine                    string `json:"engine"`
 		AllocationWeight          int    `json:"allocationWeight"`
@@ -97,7 +122,7 @@ func (p RoutingPlan) computeRequestHash() (string, error) {
 	routes := make([]routeIntent, 0, len(p.Routes))
 	for _, route := range p.Routes {
 		routes = append(routes, routeIntent{
-			SenderPoolID: route.SenderPoolID, GatewayPoolID: route.GatewayPoolID,
+			SenderPoolID: route.SenderPoolID, GatewayPoolID: route.GatewayPoolID, MetaSenderID: route.MetaSenderID,
 			Provider: route.Provider, Engine: route.Engine, AllocationWeight: route.AllocationWeight,
 			MaximumRecipients: route.MaximumRecipients, ReservedMessagesPerMinute: route.ReservedMessagesPerMinute,
 			ReservedHourlyUnits: route.ReservedHourlyUnits, ReservedDailyUnits: route.ReservedDailyUnits,
@@ -105,14 +130,15 @@ func (p RoutingPlan) computeRequestHash() (string, error) {
 		})
 	}
 	payload := struct {
-		CampaignID              string        `json:"campaignId"`
-		Routes                  []routeIntent `json:"routes"`
-		RoutingPolicyVersion    string        `json:"routingPolicyVersion"`
-		CapacityEvidenceVersion string        `json:"capacityEvidenceVersion"`
-		PacingPolicyVersion     string        `json:"pacingPolicyVersion"`
-		FallbackMode            string        `json:"fallbackMode"`
-		ApprovedBy              string        `json:"approvedBy"`
-	}{p.CampaignID, routes, p.RoutingPolicyVersion, p.CapacityEvidenceVersion, p.PacingPolicyVersion, p.FallbackMode, p.ApprovedBy}
+		CampaignID              string           `json:"campaignId"`
+		Routes                  []routeIntent    `json:"routes"`
+		DistributionMode        DistributionMode `json:"distributionMode"`
+		RoutingPolicyVersion    string           `json:"routingPolicyVersion"`
+		CapacityEvidenceVersion string           `json:"capacityEvidenceVersion"`
+		PacingPolicyVersion     string           `json:"pacingPolicyVersion"`
+		FallbackMode            string           `json:"fallbackMode"`
+		ApprovedBy              string           `json:"approvedBy"`
+	}{CampaignID: p.CampaignID, Routes: routes, DistributionMode: p.DistributionMode, RoutingPolicyVersion: p.RoutingPolicyVersion, CapacityEvidenceVersion: p.CapacityEvidenceVersion, PacingPolicyVersion: p.PacingPolicyVersion, FallbackMode: p.FallbackMode, ApprovedBy: p.ApprovedBy}
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return "", err
@@ -129,6 +155,9 @@ func (p RoutingPlan) AssignShard(shardOrdinal int64) (PoolRoute, error) {
 	total := 0
 	for _, r := range p.Routes {
 		total += r.AllocationWeight
+	}
+	if total < 1 {
+		return PoolRoute{}, ErrRoutingPlanInvalid
 	}
 	slot := int(shardOrdinal % int64(total))
 	running := 0
@@ -196,9 +225,14 @@ func EvaluateMultiPoolAdmission(in MultiPoolAdmissionInput) (MultiPoolAdmission,
 	rawMPM := 0
 	var rawHour, rawDay int64
 	reasons := []string{}
+	unavailableFrozenRoute := false
 	for _, r := range in.Plan.Routes {
 		c, ok := caps[r.SenderPoolID+"\x00"+r.GatewayPoolID]
-		if !ok || c.HealthySessions < 1 || c.HealthyNodes < c.MinimumHealthyNodes {
+		if !ok || c.HealthySessions < 1 || c.HealthyNodes < c.MinimumHealthyNodes ||
+			c.AvailableMessagesPerMinute < r.ReservedMessagesPerMinute ||
+			c.AvailableHourlyUnits < r.ReservedHourlyUnits ||
+			c.AvailableDailyUnits < r.ReservedDailyUnits {
+			unavailableFrozenRoute = true
 			reasons = append(reasons, "POOL_UNAVAILABLE:"+r.SenderPoolID)
 			continue
 		}
@@ -219,6 +253,11 @@ func EvaluateMultiPoolAdmission(in MultiPoolAdmissionInput) (MultiPoolAdmission,
 	if effMPM < 1 || effHour < 1 || effDay < 1 {
 		out.Decision = DecisionReject
 		out.Reasons = append(out.Reasons, "NO_EFFECTIVE_THROUGHPUT")
+		return out, nil
+	}
+	if unavailableFrozenRoute {
+		out.Decision = DecisionHold
+		out.Reasons = append(out.Reasons, "FROZEN_ROUTE_UNAVAILABLE")
 		return out, nil
 	}
 

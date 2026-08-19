@@ -470,7 +470,8 @@ func (p *PostgreSQLReportingPrivacyStore) CompareAndSwap(ctx context.Context, v 
 		if v.OrganisationID != "" {
 			scope = v.OrganisationID
 		}
-		if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "report-privacy:"+scope); err != nil {
+		var lockResult any
+		if err = tx.QueryRowContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "report-privacy:"+scope).Scan(&lockResult); err != nil {
 			return v, err
 		}
 		_, err = tx.ExecContext(ctx, `WITH superseded AS (

@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "provider": "railway",
+  "services": {
+    "control-api": {
+      "dockerfile": "infrastructure/docker/control-api.Dockerfile",
+      "port": 8080,
+      "health_path": "/readyz",
+      "public_ingress": true,
+      "secret_classes": [
+        "database",
+        "identity",
+        "gateway-control",
+        "object-store",
+        "meta"
+      ],
+      "required_environment": [
+        "ALLOWED_NETWORK_CIDRS",
+        "TRUSTED_PROXY_CIDRS",
+        "CLAMAV_ADDRESS",
+        "MEDIA_DOWNLOAD_BASE_URL"
+      ]
+    },
+    "audience-worker": {
+      "dockerfile": "infrastructure/docker/audience-worker.Dockerfile",
+      "port": 8091,
+      "health_path": "/readyz",
+      "public_ingress": false,
+      "secret_classes": [
+        "database",
+        "object-store",
+        "msisdn"
+      ]
+    },
+    "campaign-worker": {
+      "dockerfile": "infrastructure/docker/campaign-worker.Dockerfile",
+      "port": 8092,
+      "health_path": "/readyz",
+      "public_ingress": false,
+      "secret_classes": [
+        "database",
+        "gateway-control",
+        "msisdn",
+        "meta"
+      ],
+      "required_environment": [
+        "MEDIA_DOWNLOAD_BASE_URL"
+      ]
+    },
+    "export-worker": {
+      "dockerfile": "infrastructure/docker/export-worker.Dockerfile",
+      "port": 8093,
+      "health_path": "/readyz",
+      "public_ingress": false,
+      "secret_classes": [
+        "database",
+        "object-store",
+        "privacy"
+      ]
+    },
+    "inbound-governance-worker": {
+      "dockerfile": "infrastructure/docker/inbound-governance-worker.Dockerfile",
+      "port": 8094,
+      "health_path": "/readyz",
+      "public_ingress": false,
+      "secret_classes": [
+        "database",
+        "inbound-content"
+      ]
+    },
+    "metrics-worker": {
+      "dockerfile": "infrastructure/docker/metrics-worker.Dockerfile",
+      "port": 8096,
+      "health_path": "/readyz",
+      "public_ingress": false,
+      "secret_classes": [
+        "database"
+      ]
+    },
+    "platform-governance-worker": {
+      "dockerfile": "infrastructure/docker/platform-governance-worker.Dockerfile",
+      "port": 8095,
+      "health_path": "/readyz",
+      "public_ingress": false,
+      "secret_classes": [
+        "database",
+        "object-store"
+      ]
+    }
+  },
+  "forbidden_services": [
+    "openwa-gateway"
+  ],
+  "meta_credential_consumers": [
+    "control-api",
+    "campaign-worker"
+  ],
+  "shared_dependencies": {
+    "postgresql": "private-managed-service",
+    "redis": "private-managed-service",
+    "object_storage": "private-s3-compatible-service",
+    "clamav": "private-malware-scanner"
+  }
+}

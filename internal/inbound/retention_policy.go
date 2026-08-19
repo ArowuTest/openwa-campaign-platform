@@ -106,7 +106,7 @@ func (a *RetentionPolicyAdministration) Decide(ctx context.Context, id string, e
 	if p.Version != expected {
 		return p, ErrRetentionPolicyConflict
 	}
-	if p.Status != RetentionPolicyPending || strings.TrimSpace(actor) == "" || actor == p.SubmittedBy || len(strings.TrimSpace(reason)) < 5 {
+	if p.Status != RetentionPolicyPending || strings.TrimSpace(actor) == "" || actor == p.CreatedBy || actor == p.SubmittedBy || len(strings.TrimSpace(reason)) < 5 {
 		return p, ErrRetentionPolicyInvalid
 	}
 	if approve {

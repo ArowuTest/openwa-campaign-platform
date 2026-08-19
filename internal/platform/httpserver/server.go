@@ -33,6 +33,7 @@ import (
 	"campaign-platform/internal/inbound"
 	"campaign-platform/internal/jobs"
 	"campaign-platform/internal/message"
+	"campaign-platform/internal/metacloud"
 	"campaign-platform/internal/operations"
 	"campaign-platform/internal/orchestration"
 	"campaign-platform/internal/organisation"
@@ -87,6 +88,7 @@ type Dependencies struct {
 	SenderSessionProxies           *sender.SessionProxyAdministration
 	GatewayPools                   *sender.GatewayPoolAdministration
 	GatewayRuntime                 *sender.RuntimeRegistrationService
+	SenderSessionHeartbeat         *sender.SessionHeartbeatService
 	SenderSessionLifecycle         *sender.SessionLifecycleService
 	PacingPolicies                 *sender.PacingAdministration
 	ProviderCapabilities           *provider.Service
@@ -113,6 +115,15 @@ type Dependencies struct {
 	AudienceImportIntake           *importer.IntakeService
 	MaxImportFileBytes             int64
 	DeliveryEvents                 *delivery.Service
+	MetaCredentials                metacloud.CredentialResolver
+	MetaSenders                    *metacloud.Service
+	MetaTemplates                  *metacloud.TemplateService
+	MetaVerifier                   MetaSenderVerifier
+	MetaWebhookSenders             MetaWebhookSenderResolver
+	MetaWebhookDeliveries          MetaWebhookDeliveryResolver
+	MetaConversationWindows        MetaConversationWindowStore
+	MetaConversationWindow         time.Duration
+	MetaWebhookMaxBody             int64
 	GatewayCallbackSecret          []byte
 	GatewayCallbackPreviousSecrets [][]byte
 	GatewayCallbackMaxSkew         time.Duration
@@ -140,6 +151,9 @@ func New(logger *slog.Logger, deps Dependencies) *Server {
 	if deps.GatewayCallbackMaxBody <= 0 {
 		deps.GatewayCallbackMaxBody = 1 << 20
 	}
+	if deps.MetaWebhookMaxBody <= 0 {
+		deps.MetaWebhookMaxBody = 1 << 20
+	}
 	if deps.MaxImportFileBytes <= 0 {
 		deps.MaxImportFileBytes = 512 << 20
 	}
@@ -153,6 +167,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/auth/login", s.login)
 	mux.HandleFunc("POST /api/v1/internal/gateway/events", s.ingestGatewayEvent)
 	mux.HandleFunc("POST /api/v1/internal/gateway/inbound", s.ingestGatewayInboundMessage)
+	mux.HandleFunc("GET /api/v1/webhooks/meta/{credentialKey}", s.verifyMetaWebhook)
+	mux.HandleFunc("POST /api/v1/webhooks/meta/{credentialKey}", s.ingestMetaWebhook)
 	mux.HandleFunc("GET /api/v1/internal/media", s.downloadSignedMedia)
 	mux.HandleFunc("POST /api/v1/auth/mfa/verify", s.verifyMFA)
 	mux.Handle("POST /api/v1/auth/step-up", s.require("", s.stepUp))
@@ -270,6 +286,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/campaigns/{id}/message-versions", s.require("campaign.read", s.listMessageVersions))
 	mux.Handle("POST /api/v1/campaigns/{id}/message-versions", s.require("campaign.write", s.createMessageVersion))
 	mux.Handle("POST /api/v1/message-versions/{id}/approve", s.require("campaign.approve", s.approveMessageVersion))
+	mux.Handle("POST /api/v1/message-versions/{id}/meta-binding", s.require("campaign.approve", s.createMetaMessageBinding))
+	mux.Handle("GET /api/v1/message-versions/{id}/meta-binding", s.require("campaign.read", s.getMetaMessageBinding))
 	mux.Handle("POST /api/v1/message-versions/{id}/preview", s.require("campaign.read", s.previewMessageVersion))
 	mux.Handle("GET /api/v1/admin/test-recipients", s.require("sender.read", s.listTestRecipients))
 	mux.Handle("POST /api/v1/admin/test-recipients", s.require("sender.write", s.createTestRecipient))
@@ -381,6 +399,15 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/admin/maintenance-windows/{id}/decision", s.require("configuration.approve", s.decideMaintenanceWindow))
 	mux.Handle("POST /api/v1/admin/maintenance-windows/{id}/end", s.require("operations.write", s.endMaintenanceWindow))
 	mux.Handle("GET /api/v1/admin/maintenance-windows/{id}/events", s.require("operations.read", s.listMaintenanceEvents))
+	mux.Handle("GET /api/v1/admin/meta-senders", s.require("sender.read", s.listMetaSenders))
+	mux.Handle("POST /api/v1/admin/meta-senders", s.require("sender.admin", s.createMetaSender))
+	mux.Handle("GET /api/v1/admin/meta-senders/{id}", s.require("sender.read", s.getMetaSender))
+	mux.Handle("POST /api/v1/admin/meta-senders/{id}/submit", s.require("sender.admin", s.submitMetaSender))
+	mux.Handle("POST /api/v1/admin/meta-senders/{id}/decision", s.require("configuration.approve", s.decideMetaSender))
+	mux.Handle("POST /api/v1/admin/meta-senders/{id}/retire", s.require("sender.admin", s.retireMetaSender))
+	mux.Handle("POST /api/v1/admin/meta-senders/{id}/verify", s.require("sender.admin", s.verifyMetaSender))
+	mux.Handle("POST /api/v1/admin/meta-senders/{id}/templates/sync", s.require("sender.admin", s.syncMetaSenderTemplates))
+	mux.Handle("GET /api/v1/admin/meta-senders/{id}/templates", s.require("sender.read", s.listMetaSenderTemplates))
 	mux.Handle("GET /api/v1/admin/gateway-pools", s.require("sender.read", s.listGatewayPools))
 	mux.Handle("POST /api/v1/admin/gateway-pools", s.require("sender.admin", s.createGatewayPool))
 	mux.Handle("GET /api/v1/admin/gateway-pools/{id}", s.require("sender.read", s.getGatewayPool))
@@ -411,7 +438,6 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/sender-pools/{id}/capacity", s.require("sender.read", s.getSenderPoolCapacity))
 	mux.Handle("GET /api/v1/sender-nodes", s.require("sender.read", s.listSenderNodes))
 	mux.Handle("POST /api/v1/sender-nodes", s.require("sender.admin", s.registerSenderNode))
-	mux.Handle("POST /api/v1/internal/sender-nodes/{id}/heartbeat", s.require("sender.operate", s.heartbeatSenderNode))
 	mux.Handle("GET /api/v1/sender-sessions", s.require("sender.read", s.listSenderSessions))
 	mux.Handle("GET /api/v1/sender-sessions/{id}/health", s.require("sender.read", s.getSenderSessionHealth))
 	mux.Handle("POST /api/v1/sender-sessions", s.require("sender.admin", s.registerSenderSession))
@@ -432,7 +458,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/sender-sessions/{id}/stop", s.require("sender.operate", s.stopGatewaySenderSession))
 	mux.Handle("POST /api/v1/sender-sessions/{id}/logout", s.require("sender.admin", s.logoutGatewaySenderSession))
 	mux.Handle("DELETE /api/v1/sender-sessions/{id}", s.require("sender.admin", s.deleteGatewaySenderSession))
-	mux.Handle("POST /api/v1/internal/sender-sessions/{id}/heartbeat", s.require("sender.operate", s.heartbeatSenderSession))
+	mux.HandleFunc("POST /api/v1/internal/sender-sessions/{id}/heartbeat", s.heartbeatSenderSession)
 
 	var handler http.Handler = mux
 	handler = s.recoverPanic(handler)
@@ -1578,6 +1604,12 @@ func (s *Server) transitionCampaign(w http.ResponseWriter, r *http.Request) {
 	}
 	principal, _ := identity.PrincipalFromContext(r.Context())
 	input.ActorID = principal.User.ID
+	switch input.Action {
+	case campaign.ActionStartDispatch, campaign.ActionPause, campaign.ActionResume,
+		campaign.ActionCancel, campaign.ActionComplete:
+		httpx.WriteError(w, r, http.StatusConflict, "CAMPAIGN_EXECUTION_ROUTE_REQUIRED", "Execution lifecycle actions must use the governed campaign execution endpoint.", nil)
+		return
+	}
 	if input.Action == campaign.ActionApproveFinal && !identity.StepUpSatisfied(principal.Session, time.Now().UTC(), 10*time.Minute) {
 		s.deps.Identity.RecordStepUpRequired(r.Context(), principal.User.ID, "campaign.final_approval", authenticationAttempt(r, principal.User.Email))
 		httpx.WriteError(w, r, http.StatusForbidden, "STEP_UP_REQUIRED", "Recent multi-factor verification is required for final campaign approval.", nil)
@@ -3571,6 +3603,9 @@ func (s *Server) releaseRoutingPlanReservations(w http.ResponseWriter, r *http.R
 	}
 	if err := s.deps.RoutingPlans.Release(r.Context(), r.PathValue("id"), principal.User.ID); errors.Is(err, execution.ErrRoutingPlanNotFound) {
 		httpx.WriteError(w, r, http.StatusNotFound, "ROUTING_PLAN_NOT_FOUND", "The routing plan or active reservations were not found.", nil)
+		return
+	} else if errors.Is(err, execution.ErrRoutingPlanConflict) {
+		httpx.WriteError(w, r, http.StatusConflict, "ROUTING_RESERVATIONS_IN_USE", "Reservations cannot be released while the campaign is dispatching or paused.", nil)
 		return
 	} else if err != nil {
 		s.internalError(w, r, err)

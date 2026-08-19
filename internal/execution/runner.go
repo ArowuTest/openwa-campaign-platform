@@ -10,10 +10,21 @@ import (
 	"campaign-platform/internal/campaign"
 )
 
+type CampaignLease struct {
+	Campaign   campaign.Campaign
+	Owner      string
+	FenceToken int64
+	ExpiresAt  time.Time
+}
+
+func (l CampaignLease) Fence() ExecutionLeaseFence {
+	return ExecutionLeaseFence{Owner: l.Owner, FenceToken: l.FenceToken}
+}
+
 type LeaseRepository interface {
-	ClaimDue(context.Context, string, time.Duration, time.Time, int) ([]campaign.Campaign, error)
-	ClaimActive(context.Context, string, time.Duration, time.Time, int) ([]campaign.Campaign, error)
-	Release(context.Context, string, string, time.Time) error
+	ClaimDue(context.Context, string, time.Duration, time.Time, int) ([]CampaignLease, error)
+	ClaimActive(context.Context, string, time.Duration, time.Time, int) ([]CampaignLease, error)
+	Release(context.Context, string, string, int64, time.Time) error
 }
 type Runner struct {
 	Repository   LeaseRepository
@@ -58,16 +69,21 @@ func (r *Runner) runOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	for _, c := range due {
+	for _, lease := range due {
+		c := lease.Campaign
 		r.active.Add(1)
-		_, _, operationErr := r.Coordinator.Start(ctx, c.ID, "execution-scheduler", "scheduled start", c.Version)
-		if operationErr != nil {
+		_, _, operationErr := r.Coordinator.StartWithExecutionLease(
+			ctx, c.ID, "execution-scheduler", "scheduled start", c.Version, lease.Fence(),
+		)
+		if operationErr != nil && !errors.Is(operationErr, ErrExecutionLeaseConflict) {
 			if eventErr := r.Coordinator.Store.RecordEvent(context.WithoutCancel(ctx), c.ID, "SCHEDULED_START_FAILED", "execution-scheduler", "scheduled start failed", map[string]any{"error": operationErr.Error()}, r.Coordinator.now()); eventErr != nil {
 				r.active.Add(-1)
 				return fmt.Errorf("record scheduled-start failure for campaign %s: %w", c.ID, eventErr)
 			}
 		}
-		if releaseErr := r.Repository.Release(context.WithoutCancel(ctx), c.ID, r.Owner, r.Coordinator.now()); releaseErr != nil {
+		if releaseErr := r.Repository.Release(
+			context.WithoutCancel(ctx), c.ID, lease.Owner, lease.FenceToken, r.Coordinator.now(),
+		); releaseErr != nil && !errors.Is(releaseErr, ErrExecutionLeaseConflict) {
 			r.active.Add(-1)
 			return fmt.Errorf("release due campaign %s: %w", c.ID, releaseErr)
 		}
@@ -77,16 +93,21 @@ func (r *Runner) runOnce(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	for _, c := range active {
+	for _, lease := range active {
+		c := lease.Campaign
 		r.active.Add(1)
-		_, _, operationErr := r.Coordinator.AssessAndComplete(ctx, c.ID, "execution-scheduler", c.Version)
-		if operationErr != nil {
+		_, _, operationErr := r.Coordinator.AssessAndCompleteWithExecutionLease(
+			ctx, c.ID, "execution-scheduler", c.Version, lease.Fence(),
+		)
+		if operationErr != nil && !errors.Is(operationErr, ErrExecutionLeaseConflict) {
 			if eventErr := r.Coordinator.Store.RecordEvent(context.WithoutCancel(ctx), c.ID, "COMPLETION_ASSESSMENT_FAILED", "execution-scheduler", "completion assessment failed", map[string]any{"error": operationErr.Error()}, r.Coordinator.now()); eventErr != nil {
 				r.active.Add(-1)
 				return fmt.Errorf("record completion-assessment failure for campaign %s: %w", c.ID, eventErr)
 			}
 		}
-		if releaseErr := r.Repository.Release(context.WithoutCancel(ctx), c.ID, r.Owner, r.Coordinator.now()); releaseErr != nil {
+		if releaseErr := r.Repository.Release(
+			context.WithoutCancel(ctx), c.ID, lease.Owner, lease.FenceToken, r.Coordinator.now(),
+		); releaseErr != nil && !errors.Is(releaseErr, ErrExecutionLeaseConflict) {
 			r.active.Add(-1)
 			return fmt.Errorf("release active campaign %s: %w", c.ID, releaseErr)
 		}

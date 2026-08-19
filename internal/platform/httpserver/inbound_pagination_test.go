@@ -65,7 +65,9 @@ func TestInboundRepliesReturnCursorContinuationWithoutContentLeak(t *testing.T) 
 	}
 }
 
-func containsJSONText(body, value string) bool { return len(value) > 0 && strings.Contains(body, value) }
+func containsJSONText(body, value string) bool {
+	return len(value) > 0 && strings.Contains(body, value)
+}
 
 func TestInboundReencryptionRunsReturnCursorContinuation(t *testing.T) {
 	base := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"campaign-platform/internal/campaign"
+	"campaign-platform/internal/metacloud"
 	"campaign-platform/internal/provider"
 	"campaign-platform/internal/sender"
 	"campaign-platform/internal/shared/id"
@@ -50,12 +51,33 @@ type CampaignReader interface {
 	Get(context.Context, string) (campaign.Campaign, error)
 }
 
+type MetaSenderReader interface {
+	Get(context.Context, string) (metacloud.Sender, error)
+}
+
+type MetaTemplateReader interface {
+	GetBinding(context.Context, string) (metacloud.Binding, error)
+	FindApproved(context.Context, string, string, string, string) (metacloud.Template, error)
+}
+
 type RoutingAdministration struct {
 	Store                RoutingPlanStore
 	Campaigns            CampaignReader
 	ProviderCapabilities *provider.Service
 	GatewayPools         *sender.GatewayPoolService
+	MetaSenders          MetaSenderReader
+	MetaTemplates        MetaTemplateReader
+	MetaHealthStaleAfter time.Duration
 	Clock                func() time.Time
+}
+
+func routingPlanCreationBlocked(status string) bool {
+	switch strings.ToUpper(strings.TrimSpace(status)) {
+	case "DISPATCHING", "PAUSED", "COMPLETED", "COMPLETED_WITH_EXCEPTIONS", "CANCELLED":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *RoutingAdministration) now() time.Time {
@@ -73,11 +95,17 @@ func (s *RoutingAdministration) CreateApproved(ctx context.Context, plan Routing
 	if err != nil {
 		return RoutingPlan{}, err
 	}
+	if routingPlanCreationBlocked(string(entity.Status)) {
+		return RoutingPlan{}, ErrRoutingPlanConflict
+	}
 	if entity.RequestedStartAt == nil || entity.CompletionDeadlineAt == nil || !entity.CompletionDeadlineAt.After(*entity.RequestedStartAt) {
 		return RoutingPlan{}, ErrRoutingPlanInvalid
 	}
 	plan.ApprovedBy = strings.TrimSpace(actor)
 	plan.ApprovedAt = s.now()
+	if err := prepareDistribution(&plan); err != nil {
+		return RoutingPlan{}, err
+	}
 	if err := plan.Validate(entity.MaximumUniqueRecipients); err != nil {
 		return RoutingPlan{}, err
 	}
@@ -110,8 +138,8 @@ func (s *RoutingAdministration) CreateApproved(ctx context.Context, plan Routing
 }
 
 func (s *RoutingAdministration) freezeGovernedRoutes(ctx context.Context, plan *RoutingPlan, entity campaign.Campaign) error {
-	if s.ProviderCapabilities == nil || s.GatewayPools == nil {
-		return errors.New("provider capability and gateway pool governance are required")
+	if s.ProviderCapabilities == nil {
+		return errors.New("provider capability governance is required")
 	}
 	start := s.now()
 	if entity.RequestedStartAt != nil && entity.RequestedStartAt.After(start) {
@@ -133,43 +161,63 @@ func (s *RoutingAdministration) freezeGovernedRoutes(ctx context.Context, plan *
 	}
 	for i := range plan.Routes {
 		route := &plan.Routes[i]
-		definition, err := s.ProviderCapabilities.Require(ctx, route.Provider, provider.ChannelWhatsApp, route.Engine, start, providerRequired)
+		required := append([]provider.Capability(nil), providerRequired...)
+		if route.Provider == "META" {
+			required = append(required, provider.CapabilitySendTemplate)
+		}
+		definition, err := s.ProviderCapabilities.Require(ctx, route.Provider, provider.ChannelWhatsApp, route.Engine, start, required)
 		if err != nil {
 			return fmt.Errorf("govern routing plan route %s: %w", route.SenderPoolID, err)
 		}
 		if end.After(start) {
-			atEnd, endErr := s.ProviderCapabilities.Require(ctx, route.Provider, provider.ChannelWhatsApp, route.Engine, end, providerRequired)
+			atEnd, endErr := s.ProviderCapabilities.Require(ctx, route.Provider, provider.ChannelWhatsApp, route.Engine, end, required)
 			if endErr != nil || atEnd.ID != definition.ID || atEnd.Version != definition.Version {
 				return fmt.Errorf("govern routing plan route %s: provider definition does not cover the complete campaign window", route.SenderPoolID)
 			}
 		}
-		pool, err := s.GatewayPools.RequireCapabilities(ctx, route.GatewayPoolID, sender.GatewayProvider(route.Provider), sender.GatewayEngine(route.Engine), gatewayRequired)
-		if err != nil {
-			return fmt.Errorf("govern routing plan route %s: %w", route.SenderPoolID, err)
-		}
-		if strings.TrimSpace(pool.AdapterVersion) != strings.TrimSpace(definition.AdapterVersion) {
-			return fmt.Errorf("govern routing plan route %s: gateway adapter does not match provider definition", route.SenderPoolID)
-		}
-		if definition.MinimumGatewayVersion != "" {
-			ok, versionErr := provider.VersionAtLeast(pool.AdapterVersion, definition.MinimumGatewayVersion)
-			if versionErr != nil {
-				return versionErr
+		switch route.Provider {
+		case "OPENWA":
+			if s.GatewayPools == nil {
+				return errors.New("gateway pool governance is required for OpenWA routes")
 			}
-			if !ok {
-				return fmt.Errorf("govern routing plan route %s: gateway version is below the provider minimum", route.SenderPoolID)
+			pool, poolErr := s.GatewayPools.RequireCapabilities(ctx, route.GatewayPoolID, sender.GatewayProvider(route.Provider), sender.GatewayEngine(route.Engine), gatewayRequired)
+			if poolErr != nil {
+				return fmt.Errorf("govern routing plan route %s: %w", route.SenderPoolID, poolErr)
 			}
+			if strings.TrimSpace(pool.AdapterVersion) != strings.TrimSpace(definition.AdapterVersion) {
+				return fmt.Errorf("govern routing plan route %s: gateway adapter does not match provider definition", route.SenderPoolID)
+			}
+			if definition.MinimumGatewayVersion != "" {
+				ok, versionErr := provider.VersionAtLeast(pool.AdapterVersion, definition.MinimumGatewayVersion)
+				if versionErr != nil {
+					return fmt.Errorf("govern routing plan route %s: invalid governed gateway version evidence: %w", route.SenderPoolID, versionErr)
+				}
+				if !ok {
+					return fmt.Errorf("govern routing plan route %s: gateway version is below the provider minimum", route.SenderPoolID)
+				}
+			}
+			route.GatewayPoolVersion = pool.Version
+			route.MetaSenderVersion = 0
+		case "META":
+			if err := s.freezeMetaRoute(ctx, route, entity, start, end); err != nil {
+				return fmt.Errorf("govern routing plan route %s: %w", route.SenderPoolID, err)
+			}
+		default:
+			return fmt.Errorf("govern routing plan route %s: unsupported provider", route.SenderPoolID)
 		}
 		route.ProviderAdapterVersion = definition.AdapterVersion
 		route.ProviderDefinitionID = definition.ID
 		route.ProviderDefinitionVersion = definition.Version
-		route.GatewayPoolVersion = pool.Version
 	}
 	return nil
 }
 
 func (s *RoutingAdministration) ValidateForExecution(ctx context.Context, plan RoutingPlan, entity campaign.Campaign, at time.Time) error {
-	if s == nil || s.ProviderCapabilities == nil || s.GatewayPools == nil {
-		return errors.New("provider capability and gateway pool governance are required")
+	if s == nil || s.ProviderCapabilities == nil {
+		return errors.New("provider capability governance is required")
+	}
+	if err := plan.Validate(entity.MaximumUniqueRecipients); err != nil {
+		return fmt.Errorf("routing plan structure is invalid: %w", err)
 	}
 	providerRequired := make([]provider.Capability, 0, len(entity.Transport.RequiredCapabilities))
 	gatewayRequired := make([]sender.Capability, 0, len(entity.Transport.RequiredCapabilities))
@@ -182,8 +230,8 @@ func (s *RoutingAdministration) ValidateForExecution(ctx context.Context, plan R
 		gatewayRequired = append(gatewayRequired, sender.Capability(value))
 	}
 	for _, route := range plan.Routes {
-		if route.ProviderDefinitionID == "" || route.ProviderDefinitionVersion <= 0 || route.GatewayPoolVersion <= 0 || route.ProviderAdapterVersion == "" {
-			return fmt.Errorf("routing plan route %s lacks frozen provider or gateway evidence", route.SenderPoolID)
+		if route.ProviderDefinitionID == "" || route.ProviderDefinitionVersion <= 0 || route.ProviderAdapterVersion == "" {
+			return fmt.Errorf("routing plan route %s lacks frozen provider evidence", route.SenderPoolID)
 		}
 		definition, err := s.ProviderCapabilities.Get(ctx, route.ProviderDefinitionID)
 		if err != nil {
@@ -200,36 +248,55 @@ func (s *RoutingAdministration) ValidateForExecution(ctx context.Context, plan R
 		if definition.Version != route.ProviderDefinitionVersion || definition.Status != provider.StatusActive || definition.Provider != route.Provider || string(definition.Channel) != "WHATSAPP" || definition.Engine != route.Engine || definition.AdapterVersion != route.ProviderAdapterVersion || definition.EffectiveFrom.After(windowStart) || (definition.EffectiveTo != nil && !definition.EffectiveTo.After(windowEnd)) {
 			return fmt.Errorf("routing plan route %s provider evidence is no longer valid", route.SenderPoolID)
 		}
+		required := append([]provider.Capability(nil), providerRequired...)
+		if route.Provider == "META" {
+			required = append(required, provider.CapabilitySendTemplate)
+		}
 		available := map[provider.Capability]bool{}
 		for _, c := range definition.Capabilities {
 			available[c] = true
 		}
-		for _, c := range providerRequired {
+		for _, c := range required {
 			if !available[c] {
 				return fmt.Errorf("routing plan route %s lacks provider capability %s", route.SenderPoolID, c)
 			}
 		}
-		pool, err := s.GatewayPools.Get(ctx, route.GatewayPoolID)
-		if err != nil {
-			return fmt.Errorf("validate routing plan route %s: %w", route.SenderPoolID, err)
-		}
-		if pool.Version != route.GatewayPoolVersion || pool.Status != sender.GatewayPoolActive || string(pool.Provider) != route.Provider || string(pool.Engine) != route.Engine || pool.AdapterVersion != route.ProviderAdapterVersion {
-			return fmt.Errorf("routing plan route %s gateway evidence is no longer valid", route.SenderPoolID)
-		}
-		caps := map[sender.Capability]bool{}
-		for _, c := range pool.Capabilities {
-			caps[c] = true
-		}
-		for _, c := range gatewayRequired {
-			if !caps[c] {
-				return fmt.Errorf("routing plan route %s lacks gateway capability %s", route.SenderPoolID, c)
+		switch route.Provider {
+		case "OPENWA":
+			if s.GatewayPools == nil || route.GatewayPoolVersion <= 0 || route.MetaSenderVersion != 0 {
+				return fmt.Errorf("routing plan route %s lacks frozen gateway evidence", route.SenderPoolID)
 			}
-		}
-		if definition.MinimumGatewayVersion != "" {
-			ok, versionErr := provider.VersionAtLeast(pool.AdapterVersion, definition.MinimumGatewayVersion)
-			if versionErr != nil || !ok {
-				return fmt.Errorf("routing plan route %s gateway version is below the provider minimum", route.SenderPoolID)
+			pool, poolErr := s.GatewayPools.Get(ctx, route.GatewayPoolID)
+			if poolErr != nil {
+				return fmt.Errorf("validate routing plan route %s: %w", route.SenderPoolID, poolErr)
 			}
+			if pool.Version != route.GatewayPoolVersion || pool.Status != sender.GatewayPoolActive || string(pool.Provider) != route.Provider || string(pool.Engine) != route.Engine || pool.AdapterVersion != route.ProviderAdapterVersion {
+				return fmt.Errorf("routing plan route %s gateway evidence is no longer valid", route.SenderPoolID)
+			}
+			caps := map[sender.Capability]bool{}
+			for _, c := range pool.Capabilities {
+				caps[c] = true
+			}
+			for _, c := range gatewayRequired {
+				if !caps[c] {
+					return fmt.Errorf("routing plan route %s lacks gateway capability %s", route.SenderPoolID, c)
+				}
+			}
+			if definition.MinimumGatewayVersion != "" {
+				ok, versionErr := provider.VersionAtLeast(pool.AdapterVersion, definition.MinimumGatewayVersion)
+				if versionErr != nil {
+					return fmt.Errorf("routing plan route %s has invalid governed gateway version evidence: %w", route.SenderPoolID, versionErr)
+				}
+				if !ok {
+					return fmt.Errorf("routing plan route %s gateway version is below the provider minimum", route.SenderPoolID)
+				}
+			}
+		case "META":
+			if err := s.validateMetaRoute(ctx, route, entity, windowStart, windowEnd, at.UTC()); err != nil {
+				return fmt.Errorf("validate routing plan route %s: %w", route.SenderPoolID, err)
+			}
+		default:
+			return fmt.Errorf("routing plan route %s has unsupported provider", route.SenderPoolID)
 		}
 	}
 	return nil
@@ -257,10 +324,23 @@ func (s *RoutingAdministration) PoolReport(ctx context.Context, planID string) (
 	return s.Store.PoolExecutionReport(ctx, strings.TrimSpace(planID))
 }
 func (s *RoutingAdministration) Release(ctx context.Context, planID, actor string) error {
-	if strings.TrimSpace(actor) == "" {
+	planID = strings.TrimSpace(planID)
+	actor = strings.TrimSpace(actor)
+	if s == nil || s.Store == nil || s.Campaigns == nil || planID == "" || actor == "" {
 		return ErrRoutingPlanInvalid
 	}
-	return s.Store.ReleaseReservations(ctx, planID, actor, s.now())
+	plan, err := s.Store.Get(ctx, planID)
+	if err != nil {
+		return err
+	}
+	entity, err := s.Campaigns.Get(ctx, plan.CampaignID)
+	if err != nil {
+		return err
+	}
+	if entity.Status == campaign.StatusDispatching || entity.Status == campaign.StatusPaused {
+		return ErrRoutingPlanConflict
+	}
+	return s.Store.ReleaseReservations(ctx, plan.ID, actor, s.now())
 }
 
 type PoolExecutionReport struct {

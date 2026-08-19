@@ -16,12 +16,22 @@ type messageVersionPaginationRepository struct {
 	items []message.Version
 }
 
-func (*messageVersionPaginationRepository) CreateDraft(context.Context, message.Input, time.Time) (message.Version, error) { return message.Version{}, nil }
-func (*messageVersionPaginationRepository) Get(context.Context, string) (message.Version, error) { return message.Version{}, nil }
-func (*messageVersionPaginationRepository) ListByCampaign(context.Context, string) ([]message.Version, error) { return nil, nil }
-func (*messageVersionPaginationRepository) Approve(context.Context, string, string, string, time.Time) (message.Version, error) { return message.Version{}, nil }
+func (*messageVersionPaginationRepository) CreateDraft(context.Context, message.Input, time.Time) (message.Version, error) {
+	return message.Version{}, nil
+}
+func (*messageVersionPaginationRepository) Get(context.Context, string) (message.Version, error) {
+	return message.Version{}, nil
+}
+func (*messageVersionPaginationRepository) ListByCampaign(context.Context, string) ([]message.Version, error) {
+	return nil, nil
+}
+func (*messageVersionPaginationRepository) Approve(context.Context, string, string, string, time.Time) (message.Version, error) {
+	return message.Version{}, nil
+}
 func (r *messageVersionPaginationRepository) ListByCampaignPage(_ context.Context, _ string, limit int, _ int) ([]message.Version, error) {
-	if len(r.items) > limit { return append([]message.Version(nil), r.items[:limit]...), nil }
+	if len(r.items) > limit {
+		return append([]message.Version(nil), r.items[:limit]...), nil
+	}
 	return append([]message.Version(nil), r.items...), nil
 }
 

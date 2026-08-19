@@ -48,6 +48,13 @@ type countingGateway struct {
 	request []dispatch.GatewayRequest
 }
 
+func (g *countingGateway) Preflight(context.Context, dispatch.GatewayRequest) error {
+	return nil
+}
+
+func (g *countingGateway) SendPrepared(ctx context.Context, request dispatch.GatewayRequest) (dispatch.GatewayResult, error) {
+	return g.Send(ctx, request)
+}
 func (g *countingGateway) Send(_ context.Context, request dispatch.GatewayRequest) (dispatch.GatewayResult, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()

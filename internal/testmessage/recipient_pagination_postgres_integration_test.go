@@ -31,7 +31,13 @@ func TestPostgreSQLRecipientPaginationContinuesWithoutSkipping(t *testing.T) {
 	if _, err := db.ExecContext(ctx, `INSERT INTO internal_users(id,email,display_name,status,mfa_required) VALUES($1::uuid,$2,'Test Recipient Pagination','DISABLED',false)`, actor, "test-recipient-pagination-"+actor+"@internal.invalid"); err != nil {
 		t.Fatal(err)
 	}
-	base := time.Date(2099, 5, 1, 12, 0, 0, 0, time.UTC)
+	defer func() {
+		cleanup, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		_, _ = db.ExecContext(cleanup, `DELETE FROM approved_test_recipients WHERE created_by=$1::uuid`, actor)
+		_, _ = db.ExecContext(cleanup, `DELETE FROM internal_users WHERE id=$1::uuid`, actor)
+	}()
+	base := time.Date(2500, 5, 1, 12, 0, 0, 0, time.UTC)
 	ids := make([]string, 3)
 	for i := 0; i < 3; i++ {
 		if err := db.QueryRowContext(ctx, `SELECT gen_random_uuid()::text`).Scan(&ids[i]); err != nil {
@@ -52,11 +58,11 @@ func TestPostgreSQLRecipientPaginationContinuesWithoutSkipping(t *testing.T) {
 	if len(first.Items) != 2 || first.NextCursor == "" || first.Items[0].ID != ids[2] || first.Items[1].ID != ids[1] {
 		t.Fatalf("unexpected first test-recipient page: %#v", first)
 	}
-	second, err := service.ListRecipientsPage(ctx, 2, first.NextCursor)
+	second, err := service.ListRecipientsPage(ctx, 1, first.NextCursor)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(second.Items) != 1 || second.NextCursor != "" || second.Items[0].ID != ids[0] {
+	if len(second.Items) != 1 || second.Items[0].ID != ids[0] {
 		t.Fatalf("unexpected second test-recipient page: %#v", second)
 	}
 }

@@ -54,7 +54,7 @@ func (p NetworkPolicy) Allows(r *http.Request) (netip.Addr, bool) {
 
 func (s *Server) networkAdmission(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !s.deps.NetworkPolicy.Enabled() || r.URL.Path == "/healthz" || r.URL.Path == "/readyz" {
+		if !s.deps.NetworkPolicy.Enabled() || r.URL.Path == "/healthz" || r.URL.Path == "/readyz" || strings.HasPrefix(r.URL.Path, "/api/v1/webhooks/meta/") {
 			next.ServeHTTP(w, r)
 			return
 		}

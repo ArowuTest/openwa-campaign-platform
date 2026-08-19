@@ -24,7 +24,7 @@ func (r *PostgreSQLDefinitionRepository) Create(ctx context.Context, v Definitio
 		return Definition{}, err
 	}
 	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, `INSERT INTO segments(id,name,description,organisation_id,definition,definition_version,status,created_by,created_at,updated_at,updated_by,version) VALUES($1::uuid,$2,$3,$4::uuid,$5::jsonb,$6,$7,$8::uuid,$9,$10,$11::uuid,$12)`, v.ID, v.Name, v.Description, v.OrganisationID, payload, v.Version, v.Status, v.CreatedBy, v.CreatedAt, v.UpdatedAt, v.UpdatedBy, v.Version)
+	_, err = tx.ExecContext(ctx, `INSERT INTO segments(id,name,description,organisation_id,definition,definition_version,status,created_by,created_at,updated_at,updated_by,version) VALUES($1::uuid,$2,$3,$4::uuid,$5::jsonb,$6,$7,$8::uuid,$9,$10,$11::uuid,$12)`, v.ID, v.Name, v.Description, v.OrganisationID, string(payload), v.Version, v.Status, v.CreatedBy, v.CreatedAt, v.UpdatedAt, v.UpdatedBy, v.Version)
 	if err != nil {
 		return Definition{}, fmt.Errorf("create segment: %w", err)
 	}
@@ -114,7 +114,7 @@ func (r *PostgreSQLDefinitionRepository) Update(ctx context.Context, v Definitio
 		return Definition{}, err
 	}
 	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `UPDATE segments SET name=$2,description=$3,definition=$4::jsonb,definition_version=$5,status=$6,updated_by=$7::uuid,updated_at=$8,version=$5 WHERE id=$1::uuid AND version=$9`, v.ID, v.Name, v.Description, payload, v.Version, v.Status, v.UpdatedBy, v.UpdatedAt, expected)
+	res, err := tx.ExecContext(ctx, `UPDATE segments SET name=$2,description=$3,definition=$4::jsonb,definition_version=$5,status=$6,updated_by=$7::uuid,updated_at=$8,version=$10 WHERE id=$1::uuid AND version=$9`, v.ID, v.Name, v.Description, string(payload), v.Version, v.Status, v.UpdatedBy, v.UpdatedAt, expected, v.Version)
 	if err != nil {
 		return Definition{}, err
 	}
@@ -213,6 +213,6 @@ func insertDefinitionVersion(ctx context.Context, tx *sql.Tx, v Definition, reas
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO segment_definition_versions(segment_id,version,name,description,definition,status,changed_by,reason,created_at) VALUES($1::uuid,$2,$3,$4,$5::jsonb,$6,$7::uuid,$8,$9)`, v.ID, v.Version, v.Name, v.Description, payload, v.Status, v.UpdatedBy, reason, v.UpdatedAt)
+	_, err = tx.ExecContext(ctx, `INSERT INTO segment_definition_versions(segment_id,version,name,description,definition,status,changed_by,reason,created_at) VALUES($1::uuid,$2,$3,$4,$5::jsonb,$6,$7::uuid,$8,$9)`, v.ID, v.Version, v.Name, v.Description, string(payload), v.Status, v.UpdatedBy, reason, v.UpdatedAt)
 	return err
 }

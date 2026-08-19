@@ -190,3 +190,39 @@ func TestProcessorFailsClosedWhenGovernedRouteDrifts(t *testing.T) {
 		t.Fatalf("expected governed route failure, got %+v", got)
 	}
 }
+
+type capturingGateway struct{ request dispatch.GatewayRequest }
+
+func (g *capturingGateway) Send(_ context.Context, request dispatch.GatewayRequest) (dispatch.GatewayResult, error) {
+	g.request = request
+	return dispatch.GatewayResult{Accepted: true, ProviderMessageID: "wamid.node-addressed", AcceptedAt: time.Now()}, nil
+}
+
+func TestProcessorUsesRevalidatedGovernedGatewayNodeURL(t *testing.T) {
+	repo := NewMemoryRepository()
+	msgs := draftMessage(t)
+	routes := RouteValidatorFunc(func(context.Context, RouteRequirements) (RouteEvidence, error) {
+		return RouteEvidence{GatewayPoolVersion: 1, AdapterVersion: "0.13.0", ProviderDefinitionID: "definition-1", ProviderDefinitionVersion: 1,
+			GatewayNodeID: "node-2", GatewayNodeURL: "http://10.20.30.42:2785", GatewayNodeVersion: 3,
+			SessionLeaseVersion: 5, SessionConfigurationVersion: 7, AuthorityExpiresAt: time.Now().UTC().Add(10 * time.Minute)}, nil
+	})
+	svc := &Service{Repository: repo, Protector: testProtector(t), Messages: msgs, Routes: routes}
+	r := approvedRecipient(t, svc)
+	versions, _ := msgs.ListByCampaign(context.Background(), "campaign-1")
+	_, err := svc.Schedule(context.Background(), "campaign-1", versions[0].ID, r.ID, "gateway-1", "pool-1", "OPENWA", "BAILEYS", "session-1", "operator", "node route", "test-send-node-url-0001", map[string]string{"name": "Ada"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := repo.ClaimSends(context.Background(), "worker", time.Now(), time.Minute, 1)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("claim=%v err=%v", claimed, err)
+	}
+	gateway := &capturingGateway{}
+	p := &Processor{Repository: repo, Protector: svc.Protector, Messages: msgs, Routes: routes, Gateway: gateway}
+	if err := p.Process(context.Background(), claimed[0]); err != nil {
+		t.Fatal(err)
+	}
+	if gateway.request.GatewayNodeID != "node-2" || gateway.request.GatewayNodeURL != "http://10.20.30.42:2785" {
+		t.Fatalf("controlled test send lost governed node destination: %+v", gateway.request)
+	}
+}

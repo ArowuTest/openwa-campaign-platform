@@ -62,7 +62,7 @@ func sanitiseLogString(value string) string {
 }
 
 func sensitiveKey(key string) bool {
-	for _, fragment := range []string{"password", "secret", "token", "authorization", "cookie", "msisdn", "recipient", "message.body", "message.content", "rawbody", "private_key", "encryption_key", "database_url", "dsn"} {
+	for _, fragment := range []string{"password", "secret", "token", "authorization", "cookie", "email", "msisdn", "recipient", "message.body", "message.content", "rawbody", "private_key", "encryption_key", "database_url", "dsn"} {
 		if strings.Contains(key, fragment) {
 			return true
 		}

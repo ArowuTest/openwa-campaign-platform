@@ -73,12 +73,12 @@ func TestConfigurationApprovalRequiresIndependentActor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	v, err = admin.Submit(context.Background(), v.ID, v.Version, "maker", "submit")
+	v, err = admin.Submit(context.Background(), v.ID, v.Version, "submitter", "submit")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, err = admin.Decide(context.Background(), v.ID, v.Version, true, "maker", "approve"); err == nil {
-		t.Fatal("expected maker-checker rejection")
+		t.Fatal("creator approved own configuration after another actor submitted it")
 	}
 }
 

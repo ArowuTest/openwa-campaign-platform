@@ -628,7 +628,12 @@
       "infrastructure/compose/compose.production.yaml",
       "infrastructure/docker/control-api.Dockerfile",
       "infrastructure/docker/openwa-gateway.Dockerfile",
-      ".github/workflows/ci.yml"
+      ".github/workflows/ci.yml",
+      "config/deployment-topology.json",
+      "scripts/verify-deployment-topology.py",
+      "tests/governance/test_deployment_topology.py",
+      "infrastructure/compose/compose.hostinger-openwa-gateway.yaml",
+      "infrastructure/railway/service-contracts.json"
     ],
     "notes": "Application deployment manifests, Dockerfiles and configuration are version-controlled in this repository and can reproduce the application topology. The required private hosted-repository assurance and a clean environment recreation exercise are not yet evidenced."
   },
@@ -2259,7 +2264,12 @@
     "evidence": [
       "infrastructure/compose/compose.production.yaml",
       "scripts/verify-production-compose.py",
-      "infrastructure/nginx/default.conf"
+      "infrastructure/nginx/default.conf",
+      "config/deployment-topology.json",
+      "scripts/verify-deployment-topology.py",
+      "tests/governance/test_deployment_topology.py",
+      "infrastructure/compose/compose.hostinger-openwa-gateway.yaml",
+      "infrastructure/railway/service-contracts.json"
     ],
     "notes": "Production Compose publishes no application host ports and places first-party services on an internal private network; the historical reverse-proxy config limits portal/API/health paths. Actual Railway/Hostinger TLS termination and an external port scan against the production endpoints are deferred to infrastructure integration."
   },
@@ -2272,7 +2282,11 @@
     "status": "PARTIAL",
     "evidence": [
       "infrastructure/compose/compose.production.yaml",
-      "scripts/verify-production-compose.py"
+      "scripts/verify-production-compose.py",
+      "config/deployment-topology.json",
+      "scripts/verify-deployment-topology.py",
+      "tests/governance/test_deployment_topology.py",
+      "infrastructure/railway/service-contracts.json"
     ],
     "notes": "The first-party production stack uses an internal network and does not publish PostgreSQL or Redis ports; the agreed Railway architecture also keeps managed data services private. The acceptance requires real production firewall/external-scan evidence, which is deferred."
   },
@@ -2283,7 +2297,12 @@
       "internal/sender/runtime_registration_test.go",
       "internal/platform/httpserver/gateway_admin.go",
       "services/openwa-gateway/src/internal-auth.middleware.ts",
-      "infrastructure/compose/compose.production.yaml"
+      "infrastructure/compose/compose.production.yaml",
+      "config/deployment-topology.json",
+      "scripts/verify-deployment-topology.py",
+      "tests/governance/test_deployment_topology.py",
+      "infrastructure/compose/compose.hostinger-openwa-gateway.yaml",
+      "infrastructure/railway/service-contracts.json"
     ],
     "notes": "Control/gateway commands, callbacks and runtime reports are signed, replay-resistant and bound to governed node identities; production Compose isolates service traffic. Cross-provider firewall/static-egress and optional mTLS evidence require the Railway/Hostinger deployment."
   },
@@ -2292,7 +2311,12 @@
     "evidence": [
       "internal/shared/config/config.go",
       "infrastructure/compose/compose.production.yaml",
-      "UPSTREAM.md"
+      "UPSTREAM.md",
+      "config/deployment-topology.json",
+      "scripts/verify-deployment-topology.py",
+      "tests/governance/test_deployment_topology.py",
+      "infrastructure/compose/compose.hostinger-openwa-gateway.yaml",
+      "infrastructure/railway/service-contracts.json"
     ],
     "notes": "Service/object-store/gateway endpoints are parameterised by DNS/service URL rather than hardcoded production IPs, preserving provider portability. A real DNS/certificate move and migration exercise has not yet been performed."
   },
@@ -2326,7 +2350,12 @@
     "evidence": [
       "infrastructure/compose/compose.production.yaml",
       "database/bootstrap/002_service_roles.sql",
-      "scripts/verify-production-compose.py"
+      "scripts/verify-production-compose.py",
+      "config/deployment-topology.json",
+      "scripts/verify-deployment-topology.py",
+      "tests/governance/test_deployment_topology.py",
+      "infrastructure/compose/compose.hostinger-openwa-gateway.yaml",
+      "infrastructure/railway/service-contracts.json"
     ],
     "notes": "Production services use distinct mounted secret files and scoped database identities, and active/smoke development gateway identities are separated. A production/staging/monitoring credential inventory and access review across the deployed providers has not yet been executed."
   },

@@ -4,6 +4,10 @@
 
 This checklist is evidence-driven. A box may be marked complete only when the referenced evidence exists and has been reviewed. “Code exists” is not equivalent to “production validated.”
 
+## 17 August 2026 scope clarification
+
+Production certification now covers three sibling WhatsApp transports: OpenWA/Baileys, OpenWA/WWebJS and direct Meta Cloud API. Local backend green evidence is necessary but does not close target-infrastructure/live-provider gates. Current programme order is backend freeze → Railway/Hostinger + real-provider validation → frontend/UAT.
+
 ## 1. Product and requirements
 
 - [ ] All Must SRS requirements are `IMPLEMENTED_TESTED` or have an approved waiver.
@@ -58,6 +62,12 @@ This checklist is evidence-driven. A box may be marked complete only when the re
 - [ ] Signed send commands and signed event callbacks pass replay tests.
 - [ ] Text, image, video and document sends are tested where enabled.
 - [ ] Sent, delivered, read, inbound and failure events reconcile correctly.
+
+- [ ] Meta sender/WABA/phone-number/credential authority is deployed and verified against the exact tenant and sender pool.
+- [ ] Meta approved-template binding and authenticated inbound-text FREE_FORM conversation-window eligibility are validated live.
+- [ ] Signed Meta webhooks prove sender/tenant/frozen-route binding for delivery, inbound and STOP evidence.
+- [ ] Cross-provider safety is exercised: ambiguous/UNKNOWN outcomes never trigger automatic resend through another provider.
+- [ ] Direct Graph API submission, webhook reconciliation and credential rotation are exercised without routing through OpenWA browser engines.
 
 ## 7. Database, queue and storage
 

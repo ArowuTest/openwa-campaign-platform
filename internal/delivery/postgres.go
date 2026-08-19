@@ -88,6 +88,15 @@ func (r *PostgreSQLRepository) ApplyEvent(ctx context.Context, id string, event 
 	if err != nil {
 		return Recipient{}, false, err
 	}
+	if event.Type == EventSubmitting {
+		var campaignStatus string
+		if err = tx.QueryRowContext(ctx, `SELECT status FROM campaigns WHERE id=$1::uuid FOR UPDATE`, current.CampaignID).Scan(&campaignStatus); err != nil {
+			return Recipient{}, false, fmt.Errorf("lock campaign for submission: %w", err)
+		}
+		if campaignStatus != "SCHEDULED" && campaignStatus != "DISPATCHING" {
+			return Recipient{}, false, fmt.Errorf("%w: %s", ErrCampaignNotDispatchable, campaignStatus)
+		}
+	}
 	next, changed, err := Apply(current, event)
 	if err != nil {
 		return Recipient{}, false, err
@@ -173,6 +182,14 @@ func scanRecipient(row recipientScanner) (Recipient, error) {
 var _ = time.Time{}
 
 func (r *PostgreSQLRepository) ResolveReconciliation(ctx context.Context, id string, expected Status, actor, action, evidence, reason string, now time.Time) (Recipient, error) {
+	return r.resolveReconciliation(ctx, id, expected, actor, action, evidence, reason, now, nil)
+}
+
+func (r *PostgreSQLRepository) ResolveReconciliationWithEvidence(ctx context.Context, id string, expected Status, actor, action, evidence, reason string, now time.Time, writer ReconciliationEvidenceWriter) (Recipient, error) {
+	return r.resolveReconciliation(ctx, id, expected, actor, action, evidence, reason, now, writer)
+}
+
+func (r *PostgreSQLRepository) resolveReconciliation(ctx context.Context, id string, expected Status, actor, action, evidence, reason string, now time.Time, writer ReconciliationEvidenceWriter) (Recipient, error) {
 	if r == nil || r.DB == nil {
 		return Recipient{}, errors.New("database is required")
 	}
@@ -184,8 +201,7 @@ func (r *PostgreSQLRepository) ResolveReconciliation(ctx context.Context, id str
 		return Recipient{}, err
 	}
 	defer tx.Rollback()
-	var current Recipient
-	current, err = scanRecipient(tx.QueryRowContext(ctx, recipientSelect+` WHERE id=$1 FOR UPDATE`, id))
+	current, err := scanRecipient(tx.QueryRowContext(ctx, recipientSelect+` WHERE id=$1 FOR UPDATE`, id))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Recipient{}, ErrRecipientNotFound
 	}
@@ -200,6 +216,11 @@ func (r *PostgreSQLRepository) ResolveReconciliation(ctx context.Context, id str
 	}
 	if _, err = tx.ExecContext(ctx, `UPDATE campaign_recipients SET reconciliation_required=false,last_error_detail=NULL,updated_at=$2,version=version+1 WHERE id=$1::uuid`, id, now.UTC()); err != nil {
 		return Recipient{}, err
+	}
+	if writer != nil {
+		if err := writer(ctx, tx); err != nil {
+			return Recipient{}, err
+		}
 	}
 	if err = tx.Commit(); err != nil {
 		return Recipient{}, err

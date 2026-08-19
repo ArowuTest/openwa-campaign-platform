@@ -2,6 +2,7 @@ package commercial
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -59,5 +60,31 @@ func TestCommercialEntitlementCannotBeReusedByAnotherCampaign(t *testing.T) {
 	}
 	if id, err := s.ValidateCampaignApproval(context.Background(), "campaign-a", "org", 100); err != nil || id != r.ID {
 		t.Fatalf("campaign A entitlement invalid: id=%q err=%v", id, err)
+	}
+}
+
+func TestCommercialCreatorCannotApproveAfterIndependentSubmission(t *testing.T) {
+	ctx := context.Background()
+	paid := time.Date(2026, 8, 5, 8, 0, 0, 0, time.UTC)
+	service := &Service{Store: NewMemoryStore()}
+	draft, err := service.CreateDraft(ctx, Record{
+		CampaignID: "campaign-three-actor", OrganisationID: "org",
+		QuotationReference: "Q-3", InvoiceReference: "I-3", Currency: "NGN",
+		ApprovedRecipients: 10, UnitPriceMinor: 50, TotalAmountMinor: 500,
+		PaymentReference: "PAY-3", PaymentReceivedAt: &paid,
+	}, "maker", "maker creates entitlement")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := service.Submit(ctx, draft.ID, draft.Version, "submitter", "submitter submits entitlement")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = service.Decide(ctx, pending.ID, pending.Version, true, "maker", "maker self approves"); !errors.Is(err, ErrMakerChecker) {
+		t.Fatalf("creator approved own commercial record after another actor submitted it: %v", err)
+	}
+	stored, err := service.Store.Get(ctx, pending.ID)
+	if err != nil || stored.Status != StatusPending {
+		t.Fatalf("rejected decision mutated record: status=%s err=%v", stored.Status, err)
 	}
 }

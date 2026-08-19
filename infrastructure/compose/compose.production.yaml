@@ -1,4 +1,6 @@
-name: campaign-platform-production
+# Production control-plane reference for the Railway service set.
+# OpenWA gateway nodes are deployed separately with compose.hostinger-openwa-gateway.yaml.
+name: campaign-platform-production-control-plane-reference
 
 x-service-defaults: &service-defaults
   restart: unless-stopped
@@ -74,8 +76,9 @@ services:
       S3_ACCESS_KEY_ID_FILE: /run/secrets/s3_access_key_id
       S3_SECRET_ACCESS_KEY_FILE: /run/secrets/s3_secret_access_key
       CLAMAV_ADDRESS: ${CLAMAV_ADDRESS:?CLAMAV_ADDRESS is required}
-      OPENWA_GATEWAY_URL: http://openwa-gateway:2785
-      MEDIA_DOWNLOAD_BASE_URL: http://control-api:8080/api/v1/internal/media
+      ALLOWED_NETWORK_CIDRS: ${ALLOWED_NETWORK_CIDRS:?ALLOWED_NETWORK_CIDRS is required}
+      TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:?TRUSTED_PROXY_CIDRS is required}
+      MEDIA_DOWNLOAD_BASE_URL: ${MEDIA_DOWNLOAD_BASE_URL:?approved Railway HTTPS media URL is required}
     secrets:
       - control_api_database_url
       - bootstrap_admin_password
@@ -148,8 +151,7 @@ services:
       MSISDN_LOOKUP_KEY_BASE64_FILE: /run/secrets/msisdn_lookup_key
       GATEWAY_COMMAND_SECRET_FILE: /run/secrets/gateway_command_secret
       MEDIA_DOWNLOAD_SECRET_FILE: /run/secrets/media_download_secret
-      OPENWA_GATEWAY_URL: http://openwa-gateway:2785
-      MEDIA_DOWNLOAD_BASE_URL: http://control-api:8080/api/v1/internal/media
+      MEDIA_DOWNLOAD_BASE_URL: ${MEDIA_DOWNLOAD_BASE_URL:?approved Railway HTTPS media URL is required}
     secrets:
       - campaign_worker_database_url
       - msisdn_encryption_key
@@ -264,89 +266,11 @@ services:
       timeout: 5s
       retries: 5
 
-  openwa-gateway:
-    <<: *service-defaults
-    image: ${OPENWA_GATEWAY_IMAGE:?OPENWA_GATEWAY_IMAGE must be digest-pinned}
-    shm_size: 1gb
-    tmpfs:
-      - /tmp:size=512m,nosuid
-    environment:
-      NODE_ENV: production
-      PORT: 2785
-      GATEWAY_PROVIDER_MODE: openwa
-      OPENWA_ENGINE: ${OPENWA_ENGINE:?OPENWA_ENGINE is required}
-      GATEWAY_POOL_ID: ${GATEWAY_POOL_ID:?GATEWAY_POOL_ID is required}
-      GATEWAY_POOL_VERSION: ${GATEWAY_POOL_VERSION:?GATEWAY_POOL_VERSION is required}
-      GATEWAY_NODE_ID: ${GATEWAY_NODE_ID:?GATEWAY_NODE_ID is required}
-      GATEWAY_NODE_VERSION: ${GATEWAY_NODE_VERSION:?GATEWAY_NODE_VERSION is required}
-      GATEWAY_ADAPTER_VERSION: ${GATEWAY_ADAPTER_VERSION:?GATEWAY_ADAPTER_VERSION is required}
-      GATEWAY_CONFIGURATION_VERSION: ${GATEWAY_CONFIGURATION_VERSION:?GATEWAY_CONFIGURATION_VERSION is required}
-      GATEWAY_CAPABILITIES: ${GATEWAY_CAPABILITIES:?GATEWAY_CAPABILITIES is required}
-      GATEWAY_INTERNAL_URL: http://openwa-gateway:2785
-      CONTROL_API_INTERNAL_URL: http://control-api:8080
-      OPENWA_SESSION_REGISTRY_DIR: /data/openwa-session-registry
-      OPENWA_SESSION_DATA_DIR: /app/session-data
-      OPENWA_MAX_CONCURRENT_SESSIONS: ${OPENWA_MAX_CONCURRENT_SESSIONS:?OPENWA_MAX_CONCURRENT_SESSIONS is required}
-      OPENWA_RECONNECT_BASE_DELAY_MS: ${OPENWA_RECONNECT_BASE_DELAY_MS:-}
-      OPENWA_RECONNECT_MAX_ATTEMPTS: ${OPENWA_RECONNECT_MAX_ATTEMPTS:-}
-      OPENWA_RECONNECT_STABILITY_RESET_MS: ${OPENWA_RECONNECT_STABILITY_RESET_MS:-300000}
-      OPENWA_WATCHDOG_INTERVAL_MS: ${OPENWA_WATCHDOG_INTERVAL_MS:-60000}
-      OPENWA_WATCHDOG_PROBE_TIMEOUT_MS: ${OPENWA_WATCHDOG_PROBE_TIMEOUT_MS:-15000}
-      OPENWA_WATCHDOG_FAILURE_THRESHOLD: ${OPENWA_WATCHDOG_FAILURE_THRESHOLD:-2}
-      OPENWA_ENGINE_TEARDOWN_TIMEOUT_MS: ${OPENWA_ENGINE_TEARDOWN_TIMEOUT_MS:-30000}
-      PUPPETEER_HEADLESS: "true"
-      PUPPETEER_EXECUTABLE_PATH: /usr/local/bin/puppeteer-chrome
-      GATEWAY_COMMAND_SECRET_FILE: /run/secrets/gateway_command_secret
-      GATEWAY_COMMAND_SECRET_PREVIOUS_FILE: /run/secrets/gateway_command_secret_previous
-      GATEWAY_CALLBACK_SECRET_FILE: /run/secrets/gateway_callback_secret
-      GATEWAY_CALLBACK_SECRET_PREVIOUS_FILE: /run/secrets/gateway_callback_secret_previous
-      GATEWAY_RUNTIME_SECRET_FILE: /run/secrets/gateway_runtime_secret
-      MEDIA_DOWNLOAD_SECRET_FILE: /run/secrets/media_download_secret
-      PROFILING_TOKEN_FILE: /run/secrets/profiling_token
-      MEDIA_DOWNLOAD_BASE_URL: http://control-api:8080/api/v1/internal/media
-      SSRF_ALLOWED_HOSTS: control-api
-      CONTROL_API_CALLBACK_URL: http://control-api:8080/api/v1/internal/gateway/events
-      CONTROL_API_INBOUND_URL: http://control-api:8080/api/v1/internal/gateway/inbound
-      GATEWAY_SESSION_AUTHORITY_DIR: /data/gateway-session-authority
-      GATEWAY_EVENT_OUTBOX_DIR: /data/gateway-event-outbox
-      GATEWAY_INBOUND_OUTBOX_DIR: /data/gateway-inbound-outbox
-      GATEWAY_COMMAND_NONCE_DIR: /data/gateway-command-nonces
-      GATEWAY_IDEMPOTENCY_DIR: /data/gateway-idempotency
-    secrets:
-      - gateway_command_secret
-      - gateway_command_secret_previous
-      - gateway_callback_secret
-      - gateway_callback_secret_previous
-      - gateway_runtime_secret
-      - media_download_secret
-      - profiling_token
-    volumes:
-      - openwa-gateway-data:/data
-      - openwa-session-data:/app/session-data
-    healthcheck:
-      test:
-        - CMD
-        - node
-        - -e
-        - "require('http').get('http://127.0.0.1:2785/healthz',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
-      interval: 15s
-      timeout: 5s
-      retries: 8
-      start_period: 30s
-    networks:
-      - private
-      - egress
-
 networks:
   private:
     driver: bridge
     internal: true
-  egress:
-    driver: bridge
 
-volumes:
-  openwa-gateway-data:
-  openwa-session-data:
 
 secrets:
   control_api_database_url: { file: "${CONTROL_API_DATABASE_URL_FILE:?required}" }

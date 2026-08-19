@@ -29,6 +29,7 @@ const (
 	ChannelEmail    Channel = "EMAIL"
 
 	CapabilitySendText       Capability = "SEND_TEXT"
+	CapabilitySendTemplate   Capability = "SEND_TEMPLATE"
 	CapabilitySendImage      Capability = "SEND_IMAGE"
 	CapabilitySendVideo      Capability = "SEND_VIDEO"
 	CapabilitySendDocument   Capability = "SEND_DOCUMENT"
@@ -81,7 +82,7 @@ type Store interface {
 	Get(context.Context, string) (Definition, error)
 	Active(context.Context, string, Channel, string, time.Time) (Definition, error)
 	Create(context.Context, Definition) (Definition, error)
-	CompareAndSwap(context.Context, Definition, int64) (Definition, error)
+	CompareAndSwap(context.Context, Definition, int64, string, string) (Definition, error)
 	ListEvents(context.Context, string) ([]Event, error)
 }
 
@@ -105,6 +106,7 @@ func (s *Service) CreateDraft(ctx context.Context, d Definition, actor, reason s
 	d.ID = ""
 	d.Status = StatusDraft
 	d.Version = 1
+	d.SubmittedBy, d.ApprovedBy = "", ""
 	d.CreatedBy = strings.TrimSpace(actor)
 	d.Reason = strings.TrimSpace(reason)
 	d.CreatedAt, d.UpdatedAt = now, now
@@ -123,6 +125,9 @@ func (s *Service) CreateDraft(ctx context.Context, d Definition, actor, reason s
 }
 
 func (s *Service) Submit(ctx context.Context, definitionID string, expected int64, actor, reason string) (Definition, error) {
+	if s == nil || s.Store == nil {
+		return Definition{}, errors.New("provider capability store is required")
+	}
 	d, err := s.Store.Get(ctx, strings.TrimSpace(definitionID))
 	if err != nil {
 		return Definition{}, err
@@ -140,10 +145,13 @@ func (s *Service) Submit(ctx context.Context, definitionID string, expected int6
 	d.Status, d.SubmittedBy, d.Reason = StatusPending, actor, reason
 	d.Version++
 	d.UpdatedAt = s.now()
-	return s.Store.CompareAndSwap(ctx, d, expected)
+	return s.Store.CompareAndSwap(ctx, d, expected, actor, string(StatusPending))
 }
 
 func (s *Service) Decide(ctx context.Context, definitionID string, expected int64, approve bool, actor, reason string) (Definition, error) {
+	if s == nil || s.Store == nil {
+		return Definition{}, errors.New("provider capability store is required")
+	}
 	d, err := s.Store.Get(ctx, strings.TrimSpace(definitionID))
 	if err != nil {
 		return Definition{}, err
@@ -152,18 +160,19 @@ func (s *Service) Decide(ctx context.Context, definitionID string, expected int6
 		return Definition{}, ErrConflict
 	}
 	actor, reason = strings.TrimSpace(actor), strings.TrimSpace(reason)
-	if d.Status != StatusPending || actor == "" || actor == d.SubmittedBy || len(reason) < 5 {
+	if d.Status != StatusPending || actor == "" || actor == d.CreatedBy || actor == d.SubmittedBy || len(reason) < 5 {
 		return Definition{}, ErrInvalid
 	}
+	d.ApprovedBy = actor
 	if approve {
-		d.Status, d.ApprovedBy = StatusActive, actor
+		d.Status = StatusActive
 	} else {
 		d.Status = StatusRejected
 	}
 	d.Reason = reason
 	d.Version++
 	d.UpdatedAt = s.now()
-	return s.Store.CompareAndSwap(ctx, d, expected)
+	return s.Store.CompareAndSwap(ctx, d, expected, actor, string(d.Status))
 }
 
 func (s *Service) Get(ctx context.Context, definitionID string) (Definition, error) {
@@ -181,6 +190,9 @@ func (s *Service) ListEvents(ctx context.Context, definitionID string) ([]Event,
 }
 
 func (s *Service) Retire(ctx context.Context, definitionID string, expected int64, actor, reason string) (Definition, error) {
+	if s == nil || s.Store == nil {
+		return Definition{}, errors.New("provider capability store is required")
+	}
 	d, err := s.Store.Get(ctx, strings.TrimSpace(definitionID))
 	if err != nil {
 		return Definition{}, err
@@ -193,11 +205,13 @@ func (s *Service) Retire(ctx context.Context, definitionID string, expected int6
 		return Definition{}, ErrInvalid
 	}
 	now := s.now()
-	d.Status, d.EffectiveTo, d.Reason = StatusRetired, &now, reason
-	d.ApprovedBy = actor
+	d.Status, d.Reason = StatusRetired, reason
+	if now.After(d.EffectiveFrom) && (d.EffectiveTo == nil || now.Before(*d.EffectiveTo)) {
+		d.EffectiveTo = &now
+	}
 	d.Version++
 	d.UpdatedAt = now
-	return s.Store.CompareAndSwap(ctx, d, expected)
+	return s.Store.CompareAndSwap(ctx, d, expected, actor, string(StatusRetired))
 }
 
 func (s *Service) Require(ctx context.Context, providerName string, channel Channel, engine string, at time.Time, required []Capability) (Definition, error) {
@@ -207,6 +221,9 @@ func (s *Service) Require(ctx context.Context, providerName string, channel Chan
 	d, err := s.Store.Active(ctx, strings.ToUpper(strings.TrimSpace(providerName)), channel, strings.ToUpper(strings.TrimSpace(engine)), at.UTC())
 	if err != nil {
 		return Definition{}, err
+	}
+	if strings.TrimSpace(d.ID) == "" || d.Version <= 0 || strings.TrimSpace(d.AdapterVersion) == "" {
+		return Definition{}, errors.New("active provider capability evidence is incomplete")
 	}
 	available := make(map[Capability]struct{}, len(d.Capabilities))
 	for _, c := range d.Capabilities {
@@ -243,7 +260,7 @@ func validate(d *Definition) error {
 		return ErrInvalid
 	}
 	allowed := map[Capability]bool{
-		CapabilitySendText: true, CapabilitySendImage: true, CapabilitySendVideo: true, CapabilitySendDocument: true,
+		CapabilitySendText: true, CapabilitySendTemplate: true, CapabilitySendImage: true, CapabilitySendVideo: true, CapabilitySendDocument: true,
 		CapabilityDeliveryEvents: true, CapabilityReadEvents: true, CapabilityInbound: true, CapabilityPairingQR: true, CapabilityPairingCode: true,
 	}
 	uniq := map[Capability]struct{}{}
@@ -341,7 +358,7 @@ func (m *MemoryStore) Create(_ context.Context, d Definition) (Definition, error
 	m.appendEvent(d, "CREATED", d.CreatedBy)
 	return d, nil
 }
-func (m *MemoryStore) CompareAndSwap(_ context.Context, d Definition, expected int64) (Definition, error) {
+func (m *MemoryStore) CompareAndSwap(_ context.Context, d Definition, expected int64, actor, action string) (Definition, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	current, ok := m.items[d.ID]
@@ -368,19 +385,14 @@ func (m *MemoryStore) CompareAndSwap(_ context.Context, d Definition, expected i
 			if !supersededAt.After(d.UpdatedAt) {
 				existing.Status = StatusRetired
 			}
-			existing.ApprovedBy = d.ApprovedBy
 			existing.Reason = "superseded by provider definition " + d.ID
 			existing.Version++
 			existing.UpdatedAt = d.UpdatedAt
 			m.items[identifier] = existing
-			m.appendEvent(existing, "SUPERSEDED", d.ApprovedBy)
+			m.appendEvent(existing, "SUPERSEDED", actor)
 		}
 	}
 	m.items[d.ID] = d
-	action, actor := string(d.Status), d.SubmittedBy
-	if d.Status == StatusActive || d.Status == StatusRejected || d.Status == StatusRetired {
-		actor = d.ApprovedBy
-	}
 	m.appendEvent(d, action, actor)
 	return d, nil
 }

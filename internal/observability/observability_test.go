@@ -45,9 +45,9 @@ func TestTraceParentPropagation(t *testing.T) {
 func TestLoggerRedactsSecretsCredentialsAndMSISDN(t *testing.T) {
 	var output bytes.Buffer
 	logger := NewLogger(&output, "service", "test")
-	logger.Error("failed", "DATABASE_URL", "postgres://user:password@example/db", "recipient_msisdn", "+2348012345678", "error", slog.StringValue("postgres://u:p@host/db"))
+	logger.Error("failed", "DATABASE_URL", "postgres://user:password@example/db", "recipient_msisdn", "+2348012345678", "email", "bootstrap-admin@example.invalid", "error", slog.StringValue("postgres://u:p@host/db"))
 	text := output.String()
-	if strings.Contains(text, "password") || strings.Contains(text, "+2348012345678") || strings.Contains(text, "u:p") {
+	if strings.Contains(text, "password") || strings.Contains(text, "+2348012345678") || strings.Contains(text, "bootstrap-admin@example.invalid") || strings.Contains(text, "u:p") {
 		t.Fatalf("sensitive log content leaked: %s", text)
 	}
 }

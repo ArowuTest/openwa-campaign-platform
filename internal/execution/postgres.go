@@ -23,7 +23,7 @@ func (s *PostgreSQLStore) RecordAdmission(ctx context.Context, e CapacityEvidenc
 }
 func (s *PostgreSQLStore) Metrics(ctx context.Context, id string) (Metrics, error) {
 	var m Metrics
-	err := s.DB.QueryRowContext(ctx, `SELECT cm.authorised_total,cm.queued_total,cm.submitted_total,cm.sent_total,cm.delivered_total,cm.read_total,cm.failed_total,cm.unknown_total,cm.suppressed_total,coalesce((SELECT count(*) FROM campaign_recipients cr WHERE cr.campaign_id=cm.campaign_id AND cr.status IN ('AUTHORISED','QUEUED','CLAIMED','SUBMITTING','GATEWAY_ACCEPTED','FAILED_RETRYABLE')),0) FROM campaign_metrics cm WHERE cm.campaign_id=$1::uuid`, id).Scan(&m.Authorised, &m.Queued, &m.Submitted, &m.Sent, &m.Delivered, &m.Read, &m.Failed, &m.Unknown, &m.Suppressed, &m.Pending)
+	err := s.DB.QueryRowContext(ctx, `SELECT coalesce(cm.authorised_total,0),coalesce(cm.queued_total,0),coalesce(cm.submitted_total,0),coalesce(cm.sent_total,0),coalesce(cm.delivered_total,0),coalesce(cm.read_total,0),coalesce(cm.failed_total,0),coalesce(cm.unknown_total,0),coalesce(cm.suppressed_total,0),coalesce((SELECT count(*) FROM campaign_recipients cr WHERE cr.campaign_id=c.id AND cr.status IN ('AUTHORISED','QUEUED','CLAIMED','SUBMITTING','GATEWAY_ACCEPTED','FAILED_RETRYABLE')),0) FROM campaigns c LEFT JOIN campaign_metrics cm ON cm.campaign_id=c.id WHERE c.id=$1::uuid`, id).Scan(&m.Authorised, &m.Queued, &m.Submitted, &m.Sent, &m.Delivered, &m.Read, &m.Failed, &m.Unknown, &m.Suppressed, &m.Pending)
 	return m, err
 }
 func (s *PostgreSQLStore) Capacity(ctx context.Context, referenceID string, now time.Time) (int, int64, error) {
@@ -47,6 +47,9 @@ SELECT rate,daily FROM pool_capacity UNION ALL SELECT rate,daily FROM session_ca
 func (s *PostgreSQLStore) RouteCapacity(ctx context.Context, route PoolRoute, now time.Time) (PoolCapacity, error) {
 	if s == nil || s.DB == nil {
 		return PoolCapacity{}, errors.New("database is required")
+	}
+	if route.Provider == "META" {
+		return s.metaRouteCapacity(ctx, route, now)
 	}
 	var out PoolCapacity
 	out.SenderPoolID = route.SenderPoolID
@@ -113,6 +116,29 @@ GROUP BY sp.max_messages_per_minute,sp.daily_capacity,sp.reserved_capacity,gp.mi
 	return out, nil
 }
 
+func (s *PostgreSQLStore) metaRouteCapacity(ctx context.Context, route PoolRoute, now time.Time) (PoolCapacity, error) {
+	if route.MetaSenderID == "" || route.MetaSenderVersion <= 0 {
+		return PoolCapacity{}, errors.New("Meta route lacks frozen sender evidence")
+	}
+	var out PoolCapacity
+	out.SenderPoolID = route.SenderPoolID
+	err := s.DB.QueryRowContext(ctx, `
+SELECT
+ CASE WHEN m.status='ACTIVE' AND m.health_status IN ('HEALTHY','DEGRADED') AND m.health_observed_at>$3 AND m.version>=$4 THEN 1 ELSE 0 END,
+ CASE WHEN m.status='ACTIVE' AND m.health_status IN ('HEALTHY','DEGRADED') AND m.health_observed_at>$3 AND m.version>=$4 THEN 1 ELSE 0 END,
+ 1,
+ CASE WHEN m.status='ACTIVE' AND m.health_status IN ('HEALTHY','DEGRADED') AND m.health_observed_at>$3 AND m.version>=$4 THEN sp.max_messages_per_minute ELSE 0 END,
+ CASE WHEN m.status='ACTIVE' AND m.health_status IN ('HEALTHY','DEGRADED') AND m.health_observed_at>$3 AND m.version>=$4 THEN greatest(sp.daily_capacity-sp.reserved_capacity,0) ELSE 0 END
+FROM sender_pools sp
+JOIN meta_cloud_senders m ON m.id=$2::uuid AND m.sender_pool_id=sp.id
+WHERE sp.id=$1::uuid AND sp.status='ACTIVE'`, route.SenderPoolID, route.MetaSenderID, now.Add(-5*time.Minute), route.MetaSenderVersion).Scan(&out.HealthySessions, &out.HealthyNodes, &out.MinimumHealthyNodes, &out.AvailableMessagesPerMinute, &out.AvailableDailyUnits)
+	if err != nil {
+		return PoolCapacity{}, err
+	}
+	out.AvailableHourlyUnits = int64(out.AvailableMessagesPerMinute) * 60
+	return out, nil
+}
+
 func (s *PostgreSQLStore) RecordEvent(ctx context.Context, campaignID, eventType, actor, reason string, details map[string]any, now time.Time) error {
 	if s == nil || s.DB == nil {
 		return errors.New("database is required")
@@ -122,5 +148,30 @@ func (s *PostgreSQLStore) RecordEvent(ctx context.Context, campaignID, eventType
 		return err
 	}
 	_, err = s.DB.ExecContext(ctx, `INSERT INTO campaign_execution_events(campaign_id,event_type,actor_id,reason,details,created_at) VALUES($1::uuid,$2,$3,NULLIF($4,''),$5::jsonb,$6)`, campaignID, eventType, actor, reason, string(b), now.UTC())
+	return err
+}
+
+func (s *PostgreSQLStore) RecordLifecycleEventInTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	value LifecycleCommit,
+) error {
+	if s == nil || s.DB == nil || tx == nil {
+		return errors.New("database transaction is required")
+	}
+	if err := value.Validate(); err != nil {
+		return err
+	}
+	details, err := json.Marshal(value.Details)
+	if err != nil {
+		return err
+	}
+	_, err = tx.ExecContext(ctx, `
+INSERT INTO campaign_execution_events(
+	campaign_id,event_type,actor_id,reason,details,created_at,campaign_version
+) VALUES($1::uuid,$2,$3,NULLIF($4,''),$5::jsonb,$6,$7)`,
+		value.Campaign.ID, value.EventType, value.ActorID, value.Reason,
+		string(details), value.OccurredAt.UTC(), value.Campaign.Version,
+	)
 	return err
 }

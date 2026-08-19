@@ -2,6 +2,7 @@ import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { ProviderEventOutboxService } from './provider-event-outbox.service';
 import { createHmac, randomUUID } from 'node:crypto';
 import { GatewayObservabilityService } from './observability.service';
+import { boundedResponseDetail } from './control-plane-response';
 
 type ProviderEventType =
   | 'gateway.accepted'
@@ -79,11 +80,11 @@ export class ProviderEventPublisherService {
         ...(this.observability.traceparent() ? { traceparent: this.observability.traceparent()! } : {})
       },
       body,
+      redirect: 'manual',
       signal: AbortSignal.timeout(timeoutMs)
     });
     if (!response.ok) {
-      // Never consume an unbounded or potentially sensitive response body.
-      const detail = (await response.text()).slice(0, 300);
+      const detail = await boundedResponseDetail(response, 300);
       throw new ServiceUnavailableException(`control-plane callback failed with HTTP ${response.status}: ${detail}`);
     }
   }

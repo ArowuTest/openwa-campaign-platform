@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "name": "OpenWA production split topology",
+  "transports": [
+    "OPENWA/BAILEYS",
+    "OPENWA/WHATSAPP_WEB_JS",
+    "META/CLOUD_API"
+  ],
+  "railway": {
+    "services": [
+      "control-api",
+      "audience-worker",
+      "campaign-worker",
+      "export-worker",
+      "inbound-governance-worker",
+      "metrics-worker",
+      "platform-governance-worker"
+    ],
+    "openwa_gateway_allowed": false
+  },
+  "hostinger": {
+    "services": [
+      "openwa-gateway"
+    ],
+    "engines": [
+      "BAILEYS",
+      "WHATSAPP_WEB_JS"
+    ],
+    "database_credentials_allowed": false,
+    "object_store_credentials_allowed": false,
+    "meta_credentials_allowed": false
+  },
+  "meta": {
+    "via_openwa_gateway": false,
+    "credential_consumers": [
+      "control-api",
+      "campaign-worker"
+    ],
+    "webhook_owner": "control-api",
+    "submission_owner": "campaign-worker"
+  },
+  "cross_provider_boundary": {
+    "required_scheme": "https",
+    "hostinger_control_url_env": "CONTROL_API_INTERNAL_URL",
+    "hostinger_callback_url_env": "CONTROL_API_CALLBACK_URL",
+    "hostinger_inbound_url_env": "CONTROL_API_INBOUND_URL",
+    "hostinger_media_url_env": "MEDIA_DOWNLOAD_BASE_URL",
+    "docker_internal_hostnames_forbidden": [
+      "control-api",
+      "openwa-gateway",
+      "host.docker.internal",
+      "bridge.docker.internal"
+    ],
+    "hostinger_bind_address_env": "GATEWAY_BIND_ADDRESS",
+    "hostinger_gateway_url_env": "GATEWAY_INTERNAL_URL"
+  }
+}

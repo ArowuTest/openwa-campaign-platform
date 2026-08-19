@@ -105,6 +105,9 @@ func (s *Service) WithGatewayPools(pools interface {
 }
 
 func (s *Service) resolveProviderCapabilities(ctx context.Context, transport TransportSelection, effectiveAt time.Time) (TransportSelection, error) {
+	transport.Channel = strings.ToUpper(strings.TrimSpace(transport.Channel))
+	transport.Provider = Provider(strings.ToUpper(strings.TrimSpace(string(transport.Provider))))
+	transport.Engine = Engine(strings.ToUpper(strings.TrimSpace(string(transport.Engine))))
 	if s.providerCapabilities == nil {
 		return transport, nil
 	}
@@ -129,7 +132,7 @@ func (s *Service) resolveProviderCapabilities(ctx context.Context, transport Tra
 	}
 	transport.ProviderDefinitionID = definition.ID
 	transport.ProviderDefinitionVersion = definition.Version
-	if s.gatewayPools != nil {
+	if s.gatewayPools != nil && transport.Provider == ProviderOpenWA {
 		pool, poolErr := s.gatewayPools.RequireCapabilities(ctx, transport.GatewayPoolID, sender.GatewayProvider(transport.Provider), sender.GatewayEngine(transport.Engine), gatewayRequired)
 		if poolErr != nil {
 			return transport, poolErr
@@ -234,6 +237,11 @@ func (s *Service) Clone(ctx context.Context, identifier string, input CloneInput
 	if err != nil {
 		return Campaign{}, err
 	}
+	if s.policies != nil {
+		if err := s.policies.ValidatePurpose(ctx, clone.OrganisationID, clone.PurposeID); err != nil {
+			return Campaign{}, err
+		}
+	}
 	clone.Transport.ProviderDefinitionID = ""
 	clone.Transport.ProviderDefinitionVersion = 0
 	clone.Transport.GatewayPoolVersion = 0
@@ -248,7 +256,7 @@ func (s *Service) Clone(ctx context.Context, identifier string, input CloneInput
 	return clone, nil
 }
 
-func (s *Service) Transition(ctx context.Context, identifier string, input TransitionInput) (Campaign, error) {
+func (s *Service) PrepareTransition(ctx context.Context, identifier string, input TransitionInput) (Campaign, error) {
 	entity, err := s.repository.Get(ctx, identifier)
 	if err != nil {
 		return Campaign{}, err
@@ -285,12 +293,19 @@ func (s *Service) Transition(ctx context.Context, identifier string, input Trans
 		}
 		input.CommercialApprovalID = approvalID
 	}
-	originalVersion := entity.Version
 	entity, err = entity.Transition(input, s.clock())
 	if err != nil {
 		return Campaign{}, err
 	}
-	if err := s.repository.CompareAndSwap(ctx, entity, originalVersion); err != nil {
+	return entity, nil
+}
+
+func (s *Service) Transition(ctx context.Context, identifier string, input TransitionInput) (Campaign, error) {
+	entity, err := s.PrepareTransition(ctx, identifier, input)
+	if err != nil {
+		return Campaign{}, err
+	}
+	if err := s.repository.CompareAndSwap(ctx, entity, input.ExpectedVersion); err != nil {
 		return Campaign{}, err
 	}
 	return entity, nil

@@ -19,7 +19,7 @@ func (r *PostgreSQLReconciliationRepository) Ensure(ctx context.Context, record 
 		return ReconciliationRecord{}, false, err
 	}
 	var insertedID string
-	err = r.DB.QueryRowContext(ctx, `INSERT INTO audience_import_reconciliations(id,audience_import_id,evidence,evidence_hash,reason,performed_by,created_at) VALUES($1::uuid,$2::uuid,$3::jsonb,$4,$5,$6::uuid,$7) ON CONFLICT(audience_import_id) DO NOTHING RETURNING id::text`, record.ID, record.ImportID, evidence, record.EvidenceHash, record.Reason, record.PerformedBy, record.CreatedAt).Scan(&insertedID)
+	err = r.DB.QueryRowContext(ctx, `INSERT INTO audience_import_reconciliations(id,audience_import_id,evidence,evidence_hash,reason,performed_by,created_at) VALUES($1::uuid,$2::uuid,$3::jsonb,$4,$5,$6::uuid,$7) ON CONFLICT(audience_import_id) DO NOTHING RETURNING id::text`, record.ID, record.ImportID, string(evidence), record.EvidenceHash, record.Reason, record.PerformedBy, record.CreatedAt).Scan(&insertedID)
 	if errors.Is(err, sql.ErrNoRows) {
 		existing, loadErr := r.GetByImport(ctx, record.ImportID)
 		if loadErr != nil {

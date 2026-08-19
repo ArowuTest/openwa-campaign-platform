@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"campaign-platform/internal/metacloud"
+	sharedconfig "campaign-platform/internal/shared/config"
 	"campaign-platform/internal/shared/envfile"
 )
 
@@ -169,8 +171,8 @@ func (c AudienceConfig) Validate() error {
 	default:
 		return fmt.Errorf("APP_ENV %q is unsupported", c.Environment)
 	}
-	if c.HealthAddr == "" {
-		return errors.New("WORKER_HEALTH_ADDR is required")
+	if err := ValidateHealthAddress(c.HealthAddr); err != nil {
+		return err
 	}
 	if c.DatabaseDriver == "" {
 		return errors.New("POSTGRES_DRIVER is required")
@@ -191,7 +193,7 @@ func (c AudienceConfig) Validate() error {
 		}
 	case "s3", "minio":
 	default:
-		return errors.New("OBJECT_STORE_DRIVER must be filesystem or s3")
+		return errors.New("OBJECT_STORE_DRIVER must be filesystem, s3, or minio")
 	}
 	if err := validateKey("MSISDN_ENCRYPTION_KEY_BASE64", c.MSISDNEncryptionKey, 32, true); err != nil {
 		return err
@@ -222,6 +224,21 @@ func (c AudienceConfig) Validate() error {
 	}
 	if c.MaterialisationPollInterval <= 0 || c.MaterialisationPollInterval > time.Minute {
 		return errors.New("AUDIENCE_MATERIALISATION_POLL_INTERVAL must be positive and no more than one minute")
+	}
+	if c.MergeConcurrency < 1 || c.MergeConcurrency > 64 {
+		return errors.New("AUDIENCE_MERGE_CONCURRENCY must be between 1 and 64")
+	}
+	if c.MergeClaimBatch < 1 || c.MergeClaimBatch > c.MergeConcurrency {
+		return errors.New("AUDIENCE_MERGE_CLAIM_BATCH must be between 1 and merge concurrency")
+	}
+	if c.MergeLeaseDuration < 15*time.Second || c.MergeLeaseDuration > 30*time.Minute {
+		return errors.New("AUDIENCE_MERGE_LEASE_DURATION must be between 15 seconds and 30 minutes")
+	}
+	if c.MergePollInterval <= 0 || c.MergePollInterval > time.Minute {
+		return errors.New("AUDIENCE_MERGE_POLL_INTERVAL must be positive and no more than one minute")
+	}
+	if c.MergeFailureBackoff <= 0 || c.MergeFailureBackoff > time.Hour {
+		return errors.New("AUDIENCE_MERGE_FAILURE_BACKOFF must be positive and no more than one hour")
 	}
 	if c.StageBatchSize < 1 || c.StageBatchSize > 10_000 {
 		return errors.New("AUDIENCE_STAGE_BATCH_SIZE must be between 1 and 10000")
@@ -304,7 +321,7 @@ func duration(key string, fallback time.Duration) (time.Duration, error) {
 }
 
 func resolveWorkerFiles(environment string) error {
-	return envfile.Resolve(environment, "DATABASE_URL", "MSISDN_ENCRYPTION_KEY_BASE64", "MSISDN_LOOKUP_KEY_BASE64", "GATEWAY_COMMAND_SECRET", "OPENWA_GATEWAY_API_KEY", "MEDIA_DOWNLOAD_SECRET", "INBOUND_CONTENT_KEYS_JSON", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY", "S3_SESSION_TOKEN", "PROFILING_TOKEN")
+	return envfile.Resolve(environment, "DATABASE_URL", "MSISDN_ENCRYPTION_KEY_BASE64", "MSISDN_LOOKUP_KEY_BASE64", "GATEWAY_COMMAND_SECRET", "OPENWA_GATEWAY_API_KEY", "MEDIA_DOWNLOAD_SECRET", "META_CLOUD_CREDENTIALS_JSON", "INBOUND_CONTENT_KEYS_JSON", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY", "S3_SESSION_TOKEN", "PROFILING_TOKEN")
 }
 
 func env(key, fallback string) string {
@@ -325,16 +342,13 @@ func hostname(fallback string) string {
 // ValidateHealthAddress catches common configuration mistakes without binding
 // the port. It is separated for focused tests and startup diagnostics.
 func ValidateHealthAddress(address string) error {
-	if strings.HasPrefix(address, ":") {
-		_, err := strconv.Atoi(strings.TrimPrefix(address, ":"))
-		if err != nil {
-			return errors.New("WORKER_HEALTH_ADDR has an invalid port")
-		}
-		return nil
-	}
-	_, _, err := net.SplitHostPort(address)
+	_, portText, err := net.SplitHostPort(strings.TrimSpace(address))
 	if err != nil {
 		return errors.New("WORKER_HEALTH_ADDR must be in host:port form")
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil || port < 1 || port > 65535 {
+		return errors.New("WORKER_HEALTH_ADDR has an invalid port")
 	}
 	return nil
 }
@@ -359,6 +373,9 @@ type CampaignConfig struct {
 	GatewayCommandSecret           string
 	MediaDownloadBaseURL           string
 	MediaDownloadSecret            string
+	MetaCloudCredentialsJSON       string
+	MetaHealthStaleAfter           time.Duration
+	MetaConversationWindow         time.Duration
 	GatewayHTTPTimeout             time.Duration
 	GatewayMaxResponse             int64
 	SenderHeartbeatTTL             time.Duration
@@ -386,17 +403,18 @@ func LoadCampaign() (CampaignConfig, error) {
 		return CampaignConfig{}, err
 	}
 	cfg := CampaignConfig{
-		Environment:          environment,
-		HealthAddr:           strings.TrimSpace(env("WORKER_HEALTH_ADDR", ":8092")),
-		DatabaseDriver:       strings.TrimSpace(env("POSTGRES_DRIVER", "postgres")),
-		DatabaseURL:          strings.TrimSpace(os.Getenv("DATABASE_URL")),
-		WorkerID:             strings.TrimSpace(env("WORKER_ID", hostname("campaign-worker"))),
-		MSISDNEncryptionKey:  strings.TrimSpace(os.Getenv("MSISDN_ENCRYPTION_KEY_BASE64")),
-		MSISDNLookupKey:      strings.TrimSpace(os.Getenv("MSISDN_LOOKUP_KEY_BASE64")),
-		GatewayURL:           strings.TrimSpace(os.Getenv("OPENWA_GATEWAY_URL")),
-		GatewayCommandSecret: strings.TrimSpace(firstNonEmpty(os.Getenv("GATEWAY_COMMAND_SECRET"), os.Getenv("OPENWA_GATEWAY_API_KEY"))),
-		MediaDownloadBaseURL: strings.TrimSpace(os.Getenv("MEDIA_DOWNLOAD_BASE_URL")),
-		MediaDownloadSecret:  strings.TrimSpace(os.Getenv("MEDIA_DOWNLOAD_SECRET")),
+		Environment:              environment,
+		HealthAddr:               strings.TrimSpace(env("WORKER_HEALTH_ADDR", ":8092")),
+		DatabaseDriver:           strings.TrimSpace(env("POSTGRES_DRIVER", "postgres")),
+		DatabaseURL:              strings.TrimSpace(os.Getenv("DATABASE_URL")),
+		WorkerID:                 strings.TrimSpace(env("WORKER_ID", hostname("campaign-worker"))),
+		MSISDNEncryptionKey:      strings.TrimSpace(os.Getenv("MSISDN_ENCRYPTION_KEY_BASE64")),
+		MSISDNLookupKey:          strings.TrimSpace(os.Getenv("MSISDN_LOOKUP_KEY_BASE64")),
+		GatewayURL:               strings.TrimSpace(os.Getenv("OPENWA_GATEWAY_URL")),
+		GatewayCommandSecret:     strings.TrimSpace(firstNonEmpty(os.Getenv("GATEWAY_COMMAND_SECRET"), os.Getenv("OPENWA_GATEWAY_API_KEY"))),
+		MediaDownloadBaseURL:     strings.TrimSpace(os.Getenv("MEDIA_DOWNLOAD_BASE_URL")),
+		MediaDownloadSecret:      strings.TrimSpace(os.Getenv("MEDIA_DOWNLOAD_SECRET")),
+		MetaCloudCredentialsJSON: strings.TrimSpace(os.Getenv("META_CLOUD_CREDENTIALS_JSON")),
 	}
 	var err error
 	if cfg.DBMaxOpen, err = integer("DB_MAX_OPEN", 40); err != nil {
@@ -442,6 +460,12 @@ func LoadCampaign() (CampaignConfig, error) {
 		return CampaignConfig{}, err
 	}
 	if cfg.GatewayHTTPTimeout, err = duration("GATEWAY_HTTP_TIMEOUT", 30*time.Second); err != nil {
+		return CampaignConfig{}, err
+	}
+	if cfg.MetaHealthStaleAfter, err = duration("META_CLOUD_HEALTH_STALE_AFTER", 5*time.Minute); err != nil {
+		return CampaignConfig{}, err
+	}
+	if cfg.MetaConversationWindow, err = sharedconfig.ParseMetaConversationWindow(os.Getenv("META_CLOUD_CONVERSATION_WINDOW")); err != nil {
 		return CampaignConfig{}, err
 	}
 	if cfg.SenderHeartbeatTTL, err = duration("SENDER_HEARTBEAT_TTL", 90*time.Second); err != nil {
@@ -498,16 +522,38 @@ func (c CampaignConfig) Validate() error {
 	if err := validateKey("MSISDN_LOOKUP_KEY_BASE64", c.MSISDNLookupKey, 32, false); err != nil {
 		return err
 	}
-	gateway, err := url.Parse(c.GatewayURL)
-	if err != nil || gateway.Scheme == "" || gateway.Host == "" || (gateway.Scheme != "http" && gateway.Scheme != "https") {
-		return errors.New("OPENWA_GATEWAY_URL must be a valid http or https URL")
+	openwaConfigured := strings.TrimSpace(c.GatewayURL) != "" || strings.TrimSpace(c.GatewayCommandSecret) != ""
+	metaConfigured := strings.TrimSpace(c.MetaCloudCredentialsJSON) != ""
+	if !openwaConfigured && !metaConfigured {
+		return errors.New("campaign worker requires at least one configured messaging transport")
 	}
-	if len(c.GatewayCommandSecret) < 32 {
-		return errors.New("GATEWAY_COMMAND_SECRET must contain at least 32 characters")
+	if metaConfigured {
+		if _, err := metacloud.ParseCredentialSet(c.MetaCloudCredentialsJSON); err != nil {
+			return errors.New("META_CLOUD_CREDENTIALS_JSON is invalid")
+		}
+	}
+	if openwaConfigured {
+		if strings.TrimSpace(c.GatewayURL) != "" {
+			gateway, err := url.Parse(c.GatewayURL)
+			if err != nil || gateway.Scheme == "" || gateway.Host == "" || (gateway.Scheme != "http" && gateway.Scheme != "https") {
+				return errors.New("OPENWA_GATEWAY_URL must be a valid http or https URL when configured")
+			}
+		}
+		if len(c.GatewayCommandSecret) < 32 {
+			return errors.New("GATEWAY_COMMAND_SECRET must contain at least 32 characters when OpenWA is configured")
+		}
 	}
 	mediaURL, err := url.Parse(c.MediaDownloadBaseURL)
 	if err != nil || mediaURL.Scheme == "" || mediaURL.Host == "" || (mediaURL.Scheme != "http" && mediaURL.Scheme != "https") {
 		return errors.New("MEDIA_DOWNLOAD_BASE_URL must be a valid http or https URL")
+	}
+	if c.Environment == "staging" || c.Environment == "production" {
+		if mediaURL.Scheme != "https" {
+			return errors.New("deployed campaign workers require an HTTPS MEDIA_DOWNLOAD_BASE_URL")
+		}
+		if isDisallowedDeployedHostname(mediaURL.Hostname()) {
+			return errors.New("deployed campaign workers must not use a Docker-local, loopback, or link-local MEDIA_DOWNLOAD_BASE_URL hostname")
+		}
 	}
 	if len(c.MediaDownloadSecret) < 32 {
 		return errors.New("MEDIA_DOWNLOAD_SECRET must contain at least 32 characters")
@@ -524,8 +570,20 @@ func (c CampaignConfig) Validate() error {
 	if c.DispatchQueueRepairBatch < 1 || c.DispatchQueueRepairBatch > 10000 || c.DispatchQueueRepairInterval < time.Second || c.DispatchQueueRepairInterval > time.Hour {
 		return errors.New("dispatch queue repair bounds are invalid")
 	}
+	if c.DispatchQueueBackpressureLimit < 1 || c.DispatchQueueBackpressureLimit > 10_000_000 {
+		return errors.New("DISPATCH_QUEUE_BACKPRESSURE_LIMIT must be between 1 and 10000000")
+	}
+	if c.DispatchQueueBackpressureRetry <= 0 || c.DispatchQueueBackpressureRetry > 5*time.Minute {
+		return errors.New("DISPATCH_QUEUE_BACKPRESSURE_RETRY must be positive and no more than 5 minutes")
+	}
 	if c.OutboxConcurrency < 1 || c.OutboxConcurrency > 128 || c.OutboxClaimBatch < 1 || c.OutboxClaimBatch > c.OutboxConcurrency {
 		return errors.New("outbox concurrency or claim batch is invalid")
+	}
+	if c.MetaHealthStaleAfter <= 0 || c.MetaHealthStaleAfter > time.Hour {
+		return errors.New("META_CLOUD_HEALTH_STALE_AFTER must be positive and no more than 1 hour")
+	}
+	if c.MetaConversationWindow <= 0 || c.MetaConversationWindow > sharedconfig.DefaultMetaConversationWindow {
+		return errors.New("META_CLOUD_CONVERSATION_WINDOW must be positive and no more than 24 hours")
 	}
 	if c.GatewayHTTPTimeout <= 0 || c.GatewayHTTPTimeout > 2*time.Minute {
 		return errors.New("GATEWAY_HTTP_TIMEOUT must be positive and no more than 2 minutes")
@@ -708,8 +766,12 @@ type GovernanceConfig struct {
 }
 
 func LoadGovernance() (GovernanceConfig, error) {
+	environment := strings.ToLower(strings.TrimSpace(env("APP_ENV", "development")))
+	if err := resolveWorkerFiles(environment); err != nil {
+		return GovernanceConfig{}, err
+	}
 	cfg := GovernanceConfig{
-		Environment:             strings.ToLower(strings.TrimSpace(env("APP_ENV", "development"))),
+		Environment:             environment,
 		HealthAddr:              strings.TrimSpace(env("WORKER_HEALTH_ADDR", ":8094")),
 		DatabaseDriver:          strings.TrimSpace(env("POSTGRES_DRIVER", "postgres")),
 		DatabaseURL:             strings.TrimSpace(os.Getenv("DATABASE_URL")),
@@ -798,6 +860,7 @@ func (c GovernanceConfig) Validate() error {
 // object-store credentials required for governed retention actions.
 type PlatformGovernanceConfig struct {
 	Environment             string
+	ObjectStoreDriver       string
 	HealthAddr              string
 	DatabaseDriver          string
 	DatabaseURL             string
@@ -826,12 +889,13 @@ func LoadPlatformGovernance() (PlatformGovernanceConfig, error) {
 		return PlatformGovernanceConfig{}, err
 	}
 	cfg := PlatformGovernanceConfig{
-		Environment:     environment,
-		HealthAddr:      strings.TrimSpace(env("WORKER_HEALTH_ADDR", ":8095")),
-		DatabaseDriver:  strings.TrimSpace(env("POSTGRES_DRIVER", "postgres")),
-		DatabaseURL:     strings.TrimSpace(os.Getenv("DATABASE_URL")),
-		WorkerID:        strings.TrimSpace(env("WORKER_ID", hostname("platform-governance-worker"))),
-		ObjectStoreRoot: strings.TrimSpace(env("OBJECT_STORE_ROOT", filepath.Join(os.TempDir(), "campaign-platform-objects"))),
+		Environment:       environment,
+		ObjectStoreDriver: strings.ToLower(strings.TrimSpace(env("OBJECT_STORE_DRIVER", "filesystem"))),
+		HealthAddr:        strings.TrimSpace(env("WORKER_HEALTH_ADDR", ":8095")),
+		DatabaseDriver:    strings.TrimSpace(env("POSTGRES_DRIVER", "postgres")),
+		DatabaseURL:       strings.TrimSpace(os.Getenv("DATABASE_URL")),
+		WorkerID:          strings.TrimSpace(env("WORKER_ID", hostname("platform-governance-worker"))),
+		ObjectStoreRoot:   strings.TrimSpace(os.Getenv("OBJECT_STORE_ROOT")),
 	}
 	var err error
 	if cfg.DBMaxOpen, err = integer("DB_MAX_OPEN", 12); err != nil {
@@ -902,6 +966,25 @@ func (c PlatformGovernanceConfig) Validate() error {
 	if c.WorkerID == "" || len(c.WorkerID) > 128 {
 		return errors.New("WORKER_ID must contain 1 to 128 characters")
 	}
+	switch c.ObjectStoreDriver {
+	case "filesystem":
+		if c.ObjectStoreRoot == "" {
+			return errors.New("OBJECT_STORE_ROOT is required for filesystem storage")
+		}
+		if c.Environment == "staging" || c.Environment == "production" {
+			if !filepath.IsAbs(c.ObjectStoreRoot) {
+				return errors.New("deployed platform governance workers require an absolute OBJECT_STORE_ROOT for filesystem storage")
+			}
+			root := filepath.Clean(c.ObjectStoreRoot)
+			temp := filepath.Clean(os.TempDir())
+			if rel, err := filepath.Rel(temp, root); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				return errors.New("deployed platform governance workers must not use a temporary OBJECT_STORE_ROOT")
+			}
+		}
+	case "s3", "minio":
+	default:
+		return errors.New("OBJECT_STORE_DRIVER must be filesystem, s3, or minio")
+	}
 	if c.DBMaxOpen < 1 || c.DBMaxOpen > 100 || c.DBMaxIdle < 0 || c.DBMaxIdle > c.DBMaxOpen {
 		return errors.New("database pool bounds are invalid")
 	}
@@ -939,4 +1022,14 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func isDisallowedDeployedHostname(hostname string) bool {
+	normalized := strings.ToLower(strings.Trim(strings.TrimSpace(hostname), "[]"))
+	if normalized == "control-api" || normalized == "openwa-gateway" || normalized == "localhost" ||
+		strings.HasSuffix(normalized, ".localhost") || normalized == "host.docker.internal" || strings.HasSuffix(normalized, ".docker.internal") {
+		return true
+	}
+	ip := net.ParseIP(normalized)
+	return ip != nil && (ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified())
 }

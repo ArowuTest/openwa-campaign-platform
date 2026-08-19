@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -175,22 +176,6 @@ func (s *Server) registerSenderNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.WriteJSON(w, 201, v)
-}
-func (s *Server) heartbeatSenderNode(w http.ResponseWriter, r *http.Request) {
-	if !s.requireSenderGovernance(w, r) {
-		return
-	}
-	var in senderNodeRequest
-	if err := httpx.DecodeJSON(w, r, 64<<10, &in); err != nil {
-		httpx.WriteError(w, r, 400, "INVALID_JSON", "The node heartbeat is invalid.", nil)
-		return
-	}
-	v, err := s.deps.SenderGovernance.Store.HeartbeatNode(r.Context(), r.PathValue("id"), in.ExpectedVersion, sender.Node{InternalURL: in.InternalURL, GatewayPoolID: in.GatewayPoolID, Provider: in.Provider, Engine: in.Engine, AdapterVersion: in.AdapterVersion, BootID: in.BootID, Status: strings.ToUpper(in.Status), BuildVersion: in.BuildVersion, Capacity: in.Capacity, QueueDepth: in.QueueDepth, Draining: in.Draining}, time.Now().UTC())
-	if err != nil {
-		s.writeSenderError(w, r, err)
-		return
-	}
-	httpx.WriteJSON(w, 200, v)
 }
 func (s *Server) listSenderSessions(w http.ResponseWriter, r *http.Request) {
 	if !s.requireSenderGovernance(w, r) {
@@ -421,20 +406,41 @@ func (s *Server) reinstateSenderSession(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) heartbeatSenderSession(w http.ResponseWriter, r *http.Request) {
-	if !s.requireSenderGovernance(w, r) {
+	if s.deps.SenderSessionHeartbeat == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "SENDER_HEARTBEAT_UNAVAILABLE", "Signed sender-session heartbeat is unavailable.", nil)
 		return
 	}
-	var in senderSessionRequest
-	if err := httpx.DecodeJSON(w, r, 64<<10, &in); err != nil {
-		httpx.WriteError(w, r, 400, "INVALID_JSON", "The session heartbeat is invalid.", nil)
-		return
-	}
-	v, err := s.deps.SenderGovernance.Store.HeartbeatSession(r.Context(), r.PathValue("id"), in.ExpectedVersion, sender.GovernedSession{Status: in.Status, EngineVersion: in.EngineVersion, SafeMessagesPerMinute: in.SafeMessagesPerMinute, SafeDailyCapacity: in.SafeDailyCapacity, InFlightLimit: in.InFlightLimit, SentToday: in.SentToday}, time.Now().UTC())
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	raw, err := io.ReadAll(r.Body)
 	if err != nil {
-		s.writeSenderError(w, r, err)
+		httpx.WriteError(w, r, http.StatusBadRequest, "SENDER_HEARTBEAT_BODY_INVALID", "The sender-session heartbeat could not be read.", nil)
 		return
 	}
-	httpx.WriteJSON(w, 200, v)
+	value, err := s.deps.SenderSessionHeartbeat.Heartbeat(r.Context(), r.PathValue("id"), r.Header.Get(sender.RuntimeTimestampHeader), r.Header.Get(sender.RuntimeNonceHeader), r.Header.Get(sender.RuntimeSignatureHeader), raw)
+	if err != nil {
+		s.writeSessionHeartbeatError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, value)
+}
+
+func (s *Server) writeSessionHeartbeatError(w http.ResponseWriter, r *http.Request, err error) {
+	switch {
+	case errors.Is(err, sender.ErrRuntimeAuthentication):
+		httpx.WriteError(w, r, http.StatusUnauthorized, "SENDER_HEARTBEAT_AUTHENTICATION_FAILED", "The sender-session heartbeat signature or timestamp is invalid.", nil)
+	case errors.Is(err, sender.ErrRuntimeReplay):
+		httpx.WriteError(w, r, http.StatusConflict, "SENDER_HEARTBEAT_REPLAY", "The sender-session heartbeat nonce has already been used.", nil)
+	case errors.Is(err, sender.ErrSessionHeartbeatIdentity):
+		httpx.WriteError(w, r, http.StatusConflict, "SENDER_HEARTBEAT_IDENTITY_MISMATCH", "The sender-session heartbeat does not match its governed node and session.", nil)
+	case errors.Is(err, sender.ErrSessionHeartbeatStale), errors.Is(err, sender.ErrSenderConflict):
+		httpx.WriteError(w, r, http.StatusConflict, "SENDER_HEARTBEAT_STALE", "The sender-session heartbeat is stale or conflicts with newer telemetry.", nil)
+	case errors.Is(err, sender.ErrSenderNotFound):
+		httpx.WriteError(w, r, http.StatusNotFound, "SENDER_SESSION_NOT_FOUND", "The governed sender session does not exist.", nil)
+	case errors.Is(err, sender.ErrSessionHeartbeatInvalid):
+		httpx.WriteError(w, r, http.StatusBadRequest, "SENDER_HEARTBEAT_INVALID", "The sender-session heartbeat is invalid.", nil)
+	default:
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "SENDER_HEARTBEAT_REJECTED", err.Error(), nil)
+	}
 }
 func (s *Server) writeSenderError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {

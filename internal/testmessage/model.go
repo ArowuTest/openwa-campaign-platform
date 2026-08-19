@@ -123,6 +123,7 @@ type RouteEvidence struct {
 	ProviderDefinitionID        string
 	ProviderDefinitionVersion   int64
 	GatewayNodeID               string
+	GatewayNodeURL              string
 	GatewayNodeVersion          int64
 	SessionLeaseVersion         int64
 	SessionConfigurationVersion int64

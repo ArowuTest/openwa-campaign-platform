@@ -33,3 +33,23 @@ func TestRetentionPolicyMakerCheckerAndActivation(t *testing.T) {
 		t.Fatalf("duration=%v err=%v", d, err)
 	}
 }
+
+func TestInboundRetentionCreatorCannotApproveAfterIndependentSubmission(t *testing.T) {
+	ctx := context.Background()
+	admin := &RetentionPolicyAdministration{Store: NewMemoryRetentionPolicyStore(RetentionPolicy{})}
+	draft, err := admin.CreateDraft(ctx, 30, time.Now().Add(time.Hour), "maker", "maker reduces retention")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := admin.Submit(ctx, draft.ID, draft.Version, "submitter", "submitter sends for review")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = admin.Decide(ctx, pending.ID, pending.Version, true, "maker", "maker self approves"); !errors.Is(err, ErrRetentionPolicyInvalid) {
+		t.Fatalf("creator approved own inbound-retention policy after another actor submitted it: %v", err)
+	}
+	stored, err := admin.Store.Get(ctx, pending.ID)
+	if err != nil || stored.Status != RetentionPolicyPending {
+		t.Fatalf("rejected decision mutated policy: status=%s err=%v", stored.Status, err)
+	}
+}

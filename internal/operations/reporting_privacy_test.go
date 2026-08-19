@@ -2,6 +2,7 @@ package operations
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -71,5 +72,27 @@ func TestFutureReportingPrivacyPolicyPreservesCurrentPolicyUntilBoundary(t *test
 	}
 	if resolvedFuture.ID != future.ID || resolvedFuture.MinimumCohortSize != 25 {
 		t.Fatalf("future policy did not take effect: %+v", resolvedFuture)
+	}
+}
+
+func TestReportingPrivacyCreatorCannotApproveAfterIndependentSubmission(t *testing.T) {
+	ctx := context.Background()
+	admin := &ReportingPrivacyAdministration{Store: NewMemoryReportingPrivacyStore()}
+	draft, err := admin.Create(ctx, ReportingPrivacyPolicy{
+		MinimumCohortSize: 10, ApplyGeography: true, ApplyDemographics: true, ApplyAttributes: true,
+	}, "maker", "maker creates privacy policy", "request-create")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := admin.Submit(ctx, draft.ID, draft.Version, "submitter", "submitter sends policy", "request-submit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = admin.Decide(ctx, pending.ID, pending.Version, true, "maker", "maker self approves policy", "request-decide"); !errors.Is(err, ErrConflict) {
+		t.Fatalf("creator approved own reporting-privacy policy after another actor submitted it: %v", err)
+	}
+	stored, err := admin.Store.Get(ctx, pending.ID)
+	if err != nil || stored.Status != ReportingPrivacyPending {
+		t.Fatalf("rejected decision mutated policy: status=%s err=%v", stored.Status, err)
 	}
 }

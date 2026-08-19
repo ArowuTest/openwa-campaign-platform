@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import sys
@@ -10,13 +11,16 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT = ROOT / "infrastructure/compose/compose.production.yaml"
+DEFAULT_TOPOLOGY = ROOT / "config/deployment-topology.json"
 DEFAULT_SESSION_TOKEN_OVERLAY = ROOT / "infrastructure/compose/compose.production.s3-session-token.yaml"
+DEFAULT_META_OVERLAY = ROOT / "infrastructure/compose/compose.production.meta-cloud.yaml"
 DIGEST = re.compile(r"^[^\s@]+@sha256:[0-9a-fA-F]{64}$")
 VARIABLE = re.compile(r"^\$\{([A-Z0-9_]+):\?[^}]+\}$")
 SERVICE = re.compile(r"^  ([a-z0-9][a-z0-9_-]*):\s*$")
 KEY_VALUE = re.compile(r"^      ([A-Z0-9_]+):\s*(.*?)\s*$")
 SENSITIVE_SUFFIXES = ("_SECRET", "_PASSWORD", "_TOKEN", "_KEY", "_DATABASE_URL")
 OBJECT_STORE_CONSUMERS = {"control-api", "audience-worker", "export-worker", "platform-governance-worker"}
+META_CONSUMERS = {"control-api", "campaign-worker"}
 
 
 def service_blocks(text: str) -> dict[str, list[str]]:
@@ -58,6 +62,25 @@ def main() -> int:
     services = service_blocks(text)
     if not services:
         errors.append("production compose must define services")
+    try:
+        topology = json.loads(DEFAULT_TOPOLOGY.read_text(encoding="utf-8"))
+        expected_services = set(topology.get("railway", {}).get("services", []))
+    except (OSError, json.JSONDecodeError):
+        expected_services = set()
+        errors.append("cannot read canonical deployment topology")
+    if expected_services and set(services) != expected_services:
+        errors.append("production compose must contain exactly the Railway control-plane services")
+    if "OPENWA_GATEWAY_URL:" in text:
+        errors.append("Railway control-plane services must use governed node-addressed OpenWA routing, not OPENWA_GATEWAY_URL")
+    media_binding = "MEDIA_DOWNLOAD_BASE_URL: ${MEDIA_DOWNLOAD_BASE_URL:?"
+    if text.count(media_binding) != 2:
+        errors.append("production control plane must require MEDIA_DOWNLOAD_BASE_URL for control-api and campaign-worker")
+    if re.search(r"MEDIA_DOWNLOAD_BASE_URL:\s*http://", text, re.IGNORECASE):
+        errors.append("MEDIA_DOWNLOAD_BASE_URL must not use HTTP or Docker-internal production routing")
+    control_block = "\n".join(services.get("control-api", []))
+    for required in ("ALLOWED_NETWORK_CIDRS: ${ALLOWED_NETWORK_CIDRS:?", "TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:?"):
+        if required not in control_block:
+            errors.append("public control-api must require Railway network allowlist and trusted proxy environment")
 
     for name, lines in services.items():
         block = "\n".join(lines)
@@ -111,6 +134,8 @@ def main() -> int:
 
     if "S3_SESSION_TOKEN_FILE" in text or re.search(r"^  s3_session_token:", text, re.MULTILINE):
         errors.append("optional S3 session token belongs in compose.production.s3-session-token.yaml, not the base stack")
+    if "META_CLOUD_CREDENTIALS_JSON_FILE" in text or re.search(r"^  meta_cloud_credentials:", text, re.MULTILINE):
+        errors.append("optional Meta Cloud credentials belong in compose.production.meta-cloud.yaml, not the base stack")
     if not re.search(r"^secrets:\s*$", text, re.MULTILINE):
         errors.append("production compose must define mounted secrets")
     secret_count = len(re.findall(r"^  [a-z0-9][a-z0-9_]*:\s*\{\s*file:", text, re.MULTILINE))
@@ -128,6 +153,18 @@ def main() -> int:
         match = re.search(pattern, overlay, re.MULTILINE | re.DOTALL)
         if match and "s3_session_token" in match.group(0):
             errors.append(f"session-token overlay must not grant S3 credentials to {service}")
+
+    meta_overlay = DEFAULT_META_OVERLAY.read_text(encoding="utf-8") if DEFAULT_META_OVERLAY.exists() else ""
+    for service in sorted(META_CONSUMERS):
+        if not re.search(rf"^  {re.escape(service)}:\s*$", meta_overlay, re.MULTILINE):
+            errors.append(f"Meta overlay must include credential consumer {service}")
+    if "META_CLOUD_CREDENTIALS_JSON_FILE: /run/secrets/meta_cloud_credentials" not in meta_overlay or not re.search(r"^  meta_cloud_credentials:\s*$", meta_overlay, re.MULTILINE):
+        errors.append("Meta overlay must mount credentials as a file secret")
+    for service in set(services) - META_CONSUMERS:
+        pattern = rf"^  {re.escape(service)}:\s*$.*?(?=^  [a-z0-9][a-z0-9_-]*:\s*$|^secrets:|\Z)"
+        match = re.search(pattern, meta_overlay, re.MULTILINE | re.DOTALL)
+        if match and "meta_cloud_credentials" in match.group(0):
+            errors.append(f"Meta overlay must not grant credentials to {service}")
 
     if errors:
         for error in errors:

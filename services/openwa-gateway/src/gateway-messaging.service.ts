@@ -19,29 +19,80 @@ export class GatewayMessagingService {
     const health = await this.provider.health(request.sessionId);
     if (!health.ready || health.status !== 'READY') throw new ServiceUnavailableException('session is not ready for governed submission');
     return this.pipelines.run(request.sessionId, () =>
-      this.idempotency.execute(request, () => this.provider.send(request))
+      this.authorities.submitIfCurrent(request, async () => {
+        const currentHealth = await this.provider.health(request.sessionId);
+        if (!currentHealth.ready || currentHealth.status !== 'READY') throw new ServiceUnavailableException('session is not ready for governed submission');
+        return this.idempotency.execute(request, async () => {
+          try {
+            const result = await this.provider.send(request);
+            this.pipelines.recordProviderSuccess(request.sessionId);
+            return result;
+          } catch (error) {
+            this.pipelines.recordProviderFailure(request.sessionId);
+            throw error;
+          }
+        });
+      })
     );
   }
   async health(sessionId: string): Promise<SessionHealth & { pipeline: ReturnType<SessionPipelineService['status']> }> {
     return { ...(await this.provider.health(sessionId)), pipeline: this.pipelines.status(sessionId) };
   }
   getSession(sessionId: string): Promise<SessionRecord> { return required(this.provider.getSession, 'session read').call(this.provider, sessionId); }
-  createSession(name: string): Promise<SessionRecord> { return required(this.provider.createSession, 'session creation').call(this.provider, name); }
-  startSession(sessionId: string, options?: SessionStartOptions): Promise<SessionRecord> { return required(this.provider.startSession, 'session start').call(this.provider, sessionId, options); }
+  async createSession(name: string): Promise<SessionRecord> {
+    return this.authorities.runIfNotTombstoned(name, () =>
+      required(this.provider.createSession, 'session creation').call(this.provider, name)
+    );
+  }
+  async startSession(sessionId: string, options?: SessionStartOptions): Promise<SessionRecord> {
+    return this.authorities.runIfNotTombstoned(sessionId, async () => {
+      this.pipelines.beginStart(sessionId);
+      try {
+        const session = await required(this.provider.startSession, 'session start').call(this.provider, sessionId, options);
+        this.pipelines.finishStart(sessionId, true);
+        return session;
+      } catch (error) {
+        this.pipelines.finishStart(sessionId, false);
+        throw error;
+      }
+    });
+  }
   async stopSession(sessionId: string): Promise<SessionRecord> {
-    this.pipelines.drain(sessionId);
-    return required(this.provider.stopSession, 'session stop').call(this.provider, sessionId);
+    await this.pipelines.drainForTeardown(sessionId);
+    try {
+      return await required(this.provider.stopSession, 'session stop').call(this.provider, sessionId);
+    } finally {
+      this.pipelines.finishTeardown(sessionId);
+    }
   }
   async logoutSession(sessionId: string): Promise<SessionRecord> {
-    this.pipelines.drain(sessionId);
-    return required(this.provider.logoutSession, 'session logout').call(this.provider, sessionId);
+    await this.pipelines.drainForTeardown(sessionId);
+    try {
+      return await required(this.provider.logoutSession, 'session logout').call(this.provider, sessionId);
+    } finally {
+      this.pipelines.finishTeardown(sessionId);
+    }
   }
   async deleteSession(sessionId: string): Promise<void> {
-    this.pipelines.drain(sessionId);
-    return required(this.provider.deleteSession, 'session deletion').call(this.provider, sessionId);
+    await this.authorities.tombstone(sessionId);
+    await this.pipelines.drainForTeardown(sessionId);
+    try {
+      await required(this.provider.deleteSession, 'session deletion').call(this.provider, sessionId);
+    } finally {
+      this.pipelines.finishTeardown(sessionId);
+      this.pipelines.forgetTornDown(sessionId);
+    }
   }
-  qr(sessionId: string): Promise<unknown> { return required(this.provider.qr, 'QR pairing').call(this.provider, sessionId); }
-  pairingCode(sessionId: string, phoneNumber: string): Promise<unknown> { return required(this.provider.pairingCode, 'pairing code').call(this.provider, sessionId, phoneNumber); }
+  async qr(sessionId: string): Promise<unknown> {
+    return this.authorities.runIfNotTombstoned(sessionId, () =>
+      required(this.provider.qr, 'QR pairing').call(this.provider, sessionId)
+    );
+  }
+  async pairingCode(sessionId: string, phoneNumber: string): Promise<unknown> {
+    return this.authorities.runIfNotTombstoned(sessionId, () =>
+      required(this.provider.pairingCode, 'pairing code').call(this.provider, sessionId, phoneNumber)
+    );
+  }
   drain(sessionId: string) { this.pipelines.drain(sessionId); }
   resume(sessionId: string) { this.pipelines.resume(sessionId); }
 }

@@ -295,3 +295,182 @@ func TestMigrationsReferenceCanonicalRolesTable(t *testing.T) {
 		}
 	}
 }
+
+func TestMetaUpgradeMigrationsNormalizeLegacyInvalidEvidenceBeforeConstraints(t *testing.T) {
+	m77, err := os.ReadFile(filepath.Join(migrationDirectory(t), "0077_meta_cloud_council_hardening.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text77 := string(m77)
+	cleanup77 := strings.Index(text77, "UPDATE campaigns")
+	constraint77 := strings.Index(text77, "ADD CONSTRAINT campaigns_meta_sender_route_coherence")
+	if cleanup77 < 0 || constraint77 < 0 || cleanup77 > constraint77 {
+		t.Fatal("0077 must unfreeze legacy partial Meta campaign evidence before adding route coherence")
+	}
+
+	m78, err := os.ReadFile(filepath.Join(migrationDirectory(t), "0078_campaign_transport_null_hardening.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text78 := string(m78)
+	cleanup78 := strings.Index(text78, "UPDATE campaigns")
+	providerCheck78 := strings.Index(text78, "ADD CONSTRAINT campaigns_transport_provider_engine_check")
+	routeCheck78 := strings.Index(text78, "ADD CONSTRAINT campaigns_transport_route_check")
+	if cleanup78 < 0 || providerCheck78 < 0 || routeCheck78 < 0 || cleanup78 > providerCheck78 || cleanup78 > routeCheck78 {
+		t.Fatal("0078 must normalize legacy transport evidence before adding strict NULL-safe checks")
+	}
+
+	m79, err := os.ReadFile(filepath.Join(migrationDirectory(t), "0079_meta_sender_tenant_pool_fencing.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text79 := string(m79)
+	campaignCleanup := strings.Index(text79, "UPDATE campaigns c")
+	campaignFK := strings.Index(text79, "ADD CONSTRAINT campaigns_meta_sender_org_pool_fkey")
+	if campaignCleanup < 0 || campaignFK < 0 || campaignCleanup > campaignFK {
+		t.Fatal("0079 must unfreeze invalid campaign Meta ownership before adding its composite foreign key")
+	}
+	quarantine := strings.Index(text79, "CREATE TABLE campaign_routing_plan_quarantine_evidence")
+	routeFK := strings.Index(text79, "ADD CONSTRAINT campaign_route_meta_sender_pool_fkey")
+	if quarantine < 0 || routeFK < 0 || quarantine > routeFK {
+		t.Fatal("0079 must quarantine invalid routing plans before adding the Meta sender/pool foreign key")
+	}
+	for _, required := range []string{
+		"CREATE TABLE campaign_routing_plan_quarantined_routes",
+		"CREATE TEMP TABLE invalid_routing_plans ON COMMIT DROP",
+		"route_evidence jsonb NOT NULL",
+		"reservation_evidence jsonb NOT NULL",
+		"SET status='RELEASED'",
+		"DELETE FROM campaign_routing_plan_pools",
+		"CREATE TRIGGER trg_campaign_route_pool_organisation",
+		"UPDATE OF routing_plan_id,sender_pool_id,meta_sender_id",
+		"routing plan is quarantined and cannot accept active routes",
+		"SET search_path = pg_catalog, public",
+	} {
+		if !strings.Contains(text79, required) {
+			t.Errorf("0079 upgrade hardening missing %q", required)
+		}
+	}
+	reservationRelease := strings.Index(text79, "SET status='RELEASED'")
+	routeDelete := strings.Index(text79, "DELETE FROM campaign_routing_plan_pools")
+	if reservationRelease < 0 || routeDelete < 0 || reservationRelease > routeDelete {
+		t.Fatal("0079 must release capacity reservations before removing quarantined plan routes")
+	}
+
+	m81, err := os.ReadFile(filepath.Join(migrationDirectory(t), "0081_frozen_provider_gateway_version_null_hardening.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text81 := string(m81)
+	quarantine81 := strings.Index(text81, "CREATE TEMP TABLE invalid_frozen_version_plans")
+	routeConstraint81 := strings.Index(text81, "ADD CONSTRAINT campaign_route_provider_binding_pair")
+	campaignCleanup81 := strings.Index(text81, "UPDATE campaigns")
+	campaignConstraint81 := strings.Index(text81, "ADD CONSTRAINT campaigns_provider_capability_binding_pair")
+	if quarantine81 < 0 || routeConstraint81 < 0 || quarantine81 > routeConstraint81 {
+		t.Fatal("0081 must quarantine partial frozen routing evidence before installing NULL-safe route checks")
+	}
+	if campaignCleanup81 < 0 || campaignConstraint81 < 0 || campaignCleanup81 > campaignConstraint81 {
+		t.Fatal("0081 must unfreeze partial campaign evidence before installing NULL-safe campaign checks")
+	}
+	for _, required := range []string{
+		"provider_capability_definition_version IS NOT NULL",
+		"gateway_pool_version IS NOT NULL",
+		"campaign_route_frozen_version_null_safe_check",
+		"campaigns_frozen_version_null_safe_check",
+		"FROZEN_PROVIDER_OR_GATEWAY_VERSION_MISSING",
+		"SET status='RELEASED'",
+		"DELETE FROM campaign_routing_plan_pools",
+	} {
+		if !strings.Contains(text81, required) {
+			t.Errorf("0081 NULL-safe frozen-version hardening missing %q", required)
+		}
+	}
+
+	m80, err := os.ReadFile(filepath.Join(migrationDirectory(t), "0080_meta_route_sender_version_null_hardening.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text80 := string(m80)
+	quarantine80 := strings.Index(text80, "CREATE TEMP TABLE invalid_meta_sender_version_plans ON COMMIT DROP")
+	constraint80 := strings.Index(text80, "ADD CONSTRAINT campaign_routing_plan_pools_meta_sender_version_frozen_check")
+	if quarantine80 < 0 || constraint80 < 0 || quarantine80 > constraint80 {
+		t.Fatal("0080 must quarantine META routes with missing frozen sender version before installing the NULL-safe constraint")
+	}
+	for _, required := range []string{"meta_sender_version IS NOT NULL AND meta_sender_version > 0", "META_SENDER_VERSION_MISSING", "SET status='RELEASED'", "DELETE FROM campaign_routing_plan_pools"} {
+		if !strings.Contains(text80, required) {
+			t.Errorf("0080 sender-version hardening missing %q", required)
+		}
+	}
+
+	m82, err := os.ReadFile(filepath.Join(migrationDirectory(t), "0082_meta_conversation_window_evidence.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text82 := string(m82)
+	for _, required := range []string{
+		"CREATE TABLE meta_cloud_conversation_windows",
+		"meta_sender_id uuid NOT NULL REFERENCES meta_cloud_senders(id)",
+		"contact_id uuid NOT NULL REFERENCES contacts(id)",
+		"PRIMARY KEY (meta_sender_id, source_provider_message_id)",
+		"CHECK (eligible_until > inbound_occurred_at)",
+		"CREATE INDEX idx_meta_conversation_window_current",
+		"CREATE TRIGGER trg_meta_conversation_window_immutable",
+		"SET search_path = pg_catalog, public",
+	} {
+		if !strings.Contains(text82, required) {
+			t.Errorf("0082 conversation-window evidence missing %q", required)
+		}
+	}
+	m83, err := os.ReadFile(filepath.Join("..", "..", "database", "migrations", "0083_final_review_boundary_hardening.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text83 := string(m83)
+	for _, required := range []string{"meta_cloud_conversation_windows_max_duration_check", "trg_meta_conversation_window_insert_tombstone_guard", "released_by text", "released_at timestamptz", "meta_cloud_conversation_window_quarantine", "meta_cloud_conversation_window_tombstones"} {
+		if !strings.Contains(text83, required) {
+			t.Errorf("0083 boundary hardening missing %q", required)
+		}
+	}
+	m84, err := os.ReadFile(filepath.Join(migrationDirectory(t), "0084_final_council_evidence_hardening.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text84 := string(m84)
+	for _, required := range []string{
+		"trg_meta_conversation_window_tombstone_immutable",
+		"trg_meta_conversation_window_quarantine_immutable",
+		"trg_campaign_route_quarantine_evidence_immutable",
+		"trg_campaign_quarantined_route_immutable",
+		"meta_cloud_conversation_window_quarantine retained",
+		"campaign_pool_capacity_reservations_release_evidence_check",
+		"trg_reservation_release_evidence_immutable",
+		"meta_cloud_conversation_windows_receipt_skew_check",
+	} {
+		if !strings.Contains(text84, required) {
+			t.Errorf("0084 retained-evidence hardening missing %q", required)
+		}
+	}
+
+	m87, err := os.ReadFile(filepath.Join(migrationDirectory(t), "0087_final_readiness_and_authority_fences.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text87 := string(m87)
+	for _, required := range []string{
+		"campaigns_frozen_authority_v87_check",
+		"CONTROL_SCHEMA_READINESS_HARDENING",
+		"source_migration=85",
+		"trg_platform_schema_capability_no_truncate",
+		"BEFORE TRUNCATE ON platform_schema_capabilities",
+		"campaign_pool_capacity_reservation_release_tombstones",
+		"trg_reservation_release_delete_tombstone",
+		"trg_reservation_release_tombstone_immutable",
+		"trg_meta_conversation_window_no_truncate",
+		"trg_meta_window_tombstone_no_truncate",
+		"trg_meta_window_quarantine_no_truncate",
+	} {
+		if !strings.Contains(text87, required) {
+			t.Errorf("0087 final readiness hardening missing %q", required)
+		}
+	}
+}

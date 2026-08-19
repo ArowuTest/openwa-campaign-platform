@@ -1,6 +1,7 @@
 package execution
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -100,5 +101,68 @@ func TestCapacityReservationRejectsHourlyOverbooking(t *testing.T) {
 	}
 	if reservationWouldOverbook(10, 5000, 0, 300, 0, route) {
 		t.Fatal("expected reservation at the hourly boundary to be accepted")
+	}
+}
+
+func TestRoutingPlanAcceptsEveryApprovedTransportSubset(t *testing.T) {
+	openwaWeb := PoolRoute{SenderPoolID: "pool-web", GatewayPoolID: "gw-web", Provider: "OPENWA", Engine: "WHATSAPP_WEB_JS", AllocationWeight: 1, MaximumRecipients: 1000, ReservedMessagesPerMinute: 20, ReservedHourlyUnits: 100, ReservedDailyUnits: 500}
+	baileys := PoolRoute{SenderPoolID: "pool-baileys", GatewayPoolID: "gw-baileys", Provider: "OPENWA", Engine: "BAILEYS", AllocationWeight: 1, MaximumRecipients: 1000, ReservedMessagesPerMinute: 20, ReservedHourlyUnits: 100, ReservedDailyUnits: 500}
+	meta := PoolRoute{SenderPoolID: "pool-meta", MetaSenderID: "meta-sender", Provider: "META", Engine: "CLOUD_API", AllocationWeight: 1, MaximumRecipients: 1000, ReservedMessagesPerMinute: 20, ReservedHourlyUnits: 100, ReservedDailyUnits: 500}
+	cases := [][]PoolRoute{{openwaWeb}, {baileys}, {meta}, {openwaWeb, baileys}, {openwaWeb, meta}, {baileys, meta}, {openwaWeb, baileys, meta}}
+	for i, routes := range cases {
+		p := RoutingPlan{CampaignID: "campaign-1", DistributionMode: DistributionWeighted, RoutingPolicyVersion: "rp1", CapacityEvidenceVersion: "cap1", PacingPolicyVersion: "pace1", FallbackMode: "NONE", ApprovedBy: "approver", IdempotencyKey: "routing-subset-test-1234", Routes: routes}
+		if err := p.Validate(1000); err != nil {
+			t.Fatalf("subset %d rejected: %v", i, err)
+		}
+	}
+}
+
+func TestRoutingPlanRejectsAmbiguousProviderEndpoint(t *testing.T) {
+	p := validPlan()
+	p.Routes[0].MetaSenderID = "meta-sender"
+	if p.Validate(1000) == nil {
+		t.Fatal("OpenWA route referencing both gateway and Meta endpoint accepted")
+	}
+	p = validPlan()
+	p.Routes = []PoolRoute{{SenderPoolID: "pool-meta", Provider: "META", Engine: "CLOUD_API", AllocationWeight: 1, MaximumRecipients: 1000, ReservedMessagesPerMinute: 20, ReservedHourlyUnits: 100, ReservedDailyUnits: 500}}
+	p.DistributionMode = DistributionAuto
+	if p.Validate(1000) == nil {
+		t.Fatal("Meta route without Meta sender endpoint accepted")
+	}
+}
+
+func TestR17MultiPoolAdmissionHoldsWhenWeightedFrozenRouteHasZeroThroughput(t *testing.T) {
+	now := time.Date(2026, 8, 17, 6, 30, 0, 0, time.UTC)
+	p := validPlan()
+	p.Routes[0].MaximumRecipients = 1000
+	p.Routes[1].MaximumRecipients = 1000
+	out, err := EvaluateMultiPoolAdmission(MultiPoolAdmissionInput{
+		CampaignID: "campaign-1", RemainingRecipients: 100, EffectiveStart: now, Deadline: now.Add(30 * time.Minute),
+		Plan: p, Now: now, Capacities: []PoolCapacity{
+			{SenderPoolID: "pool-a", GatewayPoolID: "gw-a", AvailableMessagesPerMinute: 60, AvailableHourlyUnits: 500, AvailableDailyUnits: 900, HealthySessions: 2, HealthyNodes: 1, MinimumHealthyNodes: 1},
+			{SenderPoolID: "pool-b", GatewayPoolID: "gw-b", AvailableMessagesPerMinute: 0, AvailableHourlyUnits: 0, AvailableDailyUnits: 0, HealthySessions: 2, HealthyNodes: 1, MinimumHealthyNodes: 1},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Decision != DecisionHold {
+		t.Fatalf("zero-throughput weighted route admitted campaign: decision=%s reasons=%#v", out.Decision, out.Reasons)
+	}
+	found := false
+	for _, reason := range out.Reasons {
+		if reason == "FROZEN_ROUTE_UNAVAILABLE" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("missing frozen-route-unavailable evidence: %#v", out.Reasons)
+	}
+}
+
+func TestR17AssignShardRejectsZeroTotalWeightWithoutPanic(t *testing.T) {
+	p := RoutingPlan{Routes: []PoolRoute{{SenderPoolID: "pool-zero", AllocationWeight: 0}}}
+	if _, err := p.AssignShard(0); !errors.Is(err, ErrRoutingPlanInvalid) {
+		t.Fatalf("zero-total-weight plan returned %v, want ErrRoutingPlanInvalid", err)
 	}
 }

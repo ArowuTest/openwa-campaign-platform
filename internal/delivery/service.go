@@ -2,14 +2,16 @@ package delivery
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"sync"
 	"time"
 )
 
 var (
-	ErrRecipientNotFound  = errors.New("campaign recipient not found")
-	ErrEventDedupMismatch = errors.New("delivery event deduplication key was reused with different content")
+	ErrRecipientNotFound       = errors.New("campaign recipient not found")
+	ErrEventDedupMismatch      = errors.New("delivery event deduplication key was reused with different content")
+	ErrCampaignNotDispatchable = errors.New("campaign is not dispatchable at submission boundary")
 )
 
 type Repository interface {
@@ -18,6 +20,13 @@ type Repository interface {
 	GetByProviderMessageID(context.Context, string) (Recipient, error)
 	ApplyEvent(context.Context, string, Event) (Recipient, bool, error)
 	ResolveReconciliation(context.Context, string, Status, string, string, string, string, time.Time) (Recipient, error)
+}
+type TransactionExecer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+type ReconciliationEvidenceWriter func(context.Context, TransactionExecer) error
+type ReconciliationAtomicEvidenceRepository interface {
+	ResolveReconciliationWithEvidence(context.Context, string, Status, string, string, string, string, time.Time, ReconciliationEvidenceWriter) (Recipient, error)
 }
 
 type Service struct{ repository Repository }
@@ -37,6 +46,14 @@ func (s *Service) ApplyEvent(ctx context.Context, id string, event Event) (Recip
 }
 func (s *Service) ResolveReconciliation(ctx context.Context, id string, expected Status, actor, action, evidence, reason string, now time.Time) (Recipient, error) {
 	return s.repository.ResolveReconciliation(ctx, id, expected, actor, action, evidence, reason, now)
+}
+func (s *Service) ResolveReconciliationWithEvidence(ctx context.Context, id string, expected Status, actor, action, evidence, reason string, now time.Time, writer ReconciliationEvidenceWriter) (Recipient, bool, error) {
+	if repository, ok := s.repository.(ReconciliationAtomicEvidenceRepository); ok {
+		value, err := repository.ResolveReconciliationWithEvidence(ctx, id, expected, actor, action, evidence, reason, now, writer)
+		return value, true, err
+	}
+	value, err := s.repository.ResolveReconciliation(ctx, id, expected, actor, action, evidence, reason, now)
+	return value, false, err
 }
 
 type eventIdentity struct {

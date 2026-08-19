@@ -16,7 +16,11 @@ func (r *CampaignRepository) Create(ctx context.Context, v campaign.Campaign) er
 	if r.DB == nil {
 		return errors.New("database is required")
 	}
-	capabilities, err := json.Marshal(v.Transport.RequiredCapabilities)
+	requiredCapabilities := v.Transport.RequiredCapabilities
+	if requiredCapabilities == nil {
+		requiredCapabilities = []string{}
+	}
+	capabilities, err := json.Marshal(requiredCapabilities)
 	if err != nil {
 		return fmt.Errorf("marshal campaign capabilities: %w", err)
 	}
@@ -26,11 +30,11 @@ func (r *CampaignRepository) Create(ctx context.Context, v campaign.Campaign) er
  sender_pool,transport_channel,transport_provider,transport_engine,transport_routing_mode,gateway_pool_id,gateway_pool_version,
  transport_session_id,transport_sender_pool_id,provider_adapter_version,provider_capability_definition_id,
  provider_capability_definition_version,required_capabilities,fallback_mode,routing_policy_version,
- capacity_evidence_version,created_by,created_at,updated_at,version
+ capacity_evidence_version,created_by,created_at,updated_at,version,meta_sender_id
 ) VALUES(
  $1::uuid,$2::uuid,$3,$4::uuid,$5::uuid,$6,$7,$8,$9,NULLIF($10,''),NULLIF($11,''),$12,$13,
- NULLIF($14,''),$15,$16,$17,$18,$19,NULLIF($20,0),NULLIF($21,'')::uuid,NULLIF($22,'')::uuid,$23,
- NULLIF($24,'')::uuid,NULLIF($25,0),$26,$27,$28,$29,NULLIF($30,'')::uuid,$31,$31,$32
+ NULLIF($14,''),NULLIF($15,''),NULLIF($16,''),NULLIF($17,''),NULLIF($18,''),NULLIF($19,''),NULLIF($20,0),NULLIF($21,'')::uuid,NULLIF($22,'')::uuid,NULLIF($23,''),
+ NULLIF($24,'')::uuid,NULLIF($25,0),$26,coalesce(NULLIF($27,''),'NONE'),NULLIF($28,''),NULLIF($29,''),NULLIF($30,'')::uuid,$31,$31,$32,NULLIF($33,'')::uuid
 )`
 	_, err = r.DB.ExecContext(ctx, q,
 		v.ID, v.OrganisationID, v.Name, v.PurposeID, v.ConsentReviewID, v.Status,
@@ -38,9 +42,9 @@ func (r *CampaignRepository) Create(ctx context.Context, v campaign.Campaign) er
 		v.MaximumUniqueRecipients, v.MaximumMessagesPerRecipient, v.SenderPool, v.Transport.Channel,
 		v.Transport.Provider, v.Transport.Engine, v.Transport.RoutingMode, v.Transport.GatewayPoolID,
 		v.Transport.GatewayPoolVersion, v.Transport.SessionID, v.Transport.SenderPoolID, v.Transport.AdapterVersion,
-		v.Transport.ProviderDefinitionID, v.Transport.ProviderDefinitionVersion, capabilities,
+		v.Transport.ProviderDefinitionID, v.Transport.ProviderDefinitionVersion, string(capabilities),
 		v.Transport.FallbackMode, v.Transport.RoutingPolicyVersion, v.Transport.CapacityEvidenceVersion,
-		v.CreatedBy, v.CreatedAt, v.Version,
+		v.CreatedBy, v.CreatedAt, v.Version, v.Transport.MetaSenderID,
 	)
 	if err != nil {
 		return fmt.Errorf("create campaign: %w", err)
@@ -48,11 +52,43 @@ func (r *CampaignRepository) Create(ctx context.Context, v campaign.Campaign) er
 	return nil
 }
 
+type campaignExecutor interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
 func (r *CampaignRepository) CompareAndSwap(ctx context.Context, v campaign.Campaign, expected int64) error {
-	if r.DB == nil {
+	if r == nil || r.DB == nil {
 		return errors.New("database is required")
 	}
-	capabilities, err := json.Marshal(v.Transport.RequiredCapabilities)
+	return r.compareAndSwapWith(ctx, r.DB, v, expected)
+}
+
+func (r *CampaignRepository) CompareAndSwapInTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	v campaign.Campaign,
+	expected int64,
+) error {
+	if r == nil || r.DB == nil || tx == nil {
+		return errors.New("database transaction is required")
+	}
+	return r.compareAndSwapWith(ctx, tx, v, expected)
+}
+
+func (r *CampaignRepository) compareAndSwapWith(
+	ctx context.Context,
+	executor campaignExecutor,
+	v campaign.Campaign,
+	expected int64,
+) error {
+	if executor == nil {
+		return errors.New("database executor is required")
+	}
+	requiredCapabilities := v.Transport.RequiredCapabilities
+	if requiredCapabilities == nil {
+		requiredCapabilities = []string{}
+	}
+	capabilities, err := json.Marshal(requiredCapabilities)
 	if err != nil {
 		return fmt.Errorf("marshal campaign capabilities: %w", err)
 	}
@@ -63,21 +99,21 @@ func (r *CampaignRepository) CompareAndSwap(ctx context.Context, v campaign.Camp
  final_approved_by=NULLIF($11,'')::uuid,
  final_approved_at=CASE WHEN NULLIF($11,'') IS NULL THEN NULL ELSE coalesce(final_approved_at,$12) END,
  sender_pool=NULLIF($13,''),pause_reason=NULLIF($14,''),commercial_approval_id=NULLIF($15,'')::uuid,
- transport_channel=$16,transport_provider=$17,transport_engine=$18,transport_routing_mode=$19,gateway_pool_id=$20,gateway_pool_version=NULLIF($21,0),
+ transport_channel=NULLIF($16,''),transport_provider=NULLIF($17,''),transport_engine=NULLIF($18,''),transport_routing_mode=NULLIF($19,''),gateway_pool_id=NULLIF($20,''),gateway_pool_version=NULLIF($21,0),
  transport_session_id=NULLIF($22,'')::uuid,transport_sender_pool_id=NULLIF($23,'')::uuid,
- provider_adapter_version=$24,provider_capability_definition_id=NULLIF($25,'')::uuid,
- provider_capability_definition_version=NULLIF($26,0),required_capabilities=$27,fallback_mode=$28,
- routing_policy_version=$29,capacity_evidence_version=$30,updated_at=$12,version=$31
+ provider_adapter_version=NULLIF($24,''),provider_capability_definition_id=NULLIF($25,'')::uuid,
+ provider_capability_definition_version=NULLIF($26,0),required_capabilities=$27,fallback_mode=coalesce(NULLIF($28,''),'NONE'),
+ routing_policy_version=NULLIF($29,''),capacity_evidence_version=NULLIF($30,''),updated_at=$12,version=$31,meta_sender_id=NULLIF($33,'')::uuid,maximum_messages_per_recipient=$34
 WHERE id=$1::uuid AND version=$32`
-	res, err := r.DB.ExecContext(ctx, q,
+	res, err := executor.ExecContext(ctx, q,
 		v.ID, v.Status, v.RequestedStartAt, v.CompletionDeadlineAt, v.Timezone, v.QuietHoursStart,
 		v.QuietHoursEnd, v.MaximumUniqueRecipients, v.AudienceSnapshotID, v.MessageVersionID,
 		v.FinalApprovedBy, v.UpdatedAt, v.SenderPool, v.PauseReason, v.CommercialApprovalID,
 		v.Transport.Channel, v.Transport.Provider, v.Transport.Engine, v.Transport.RoutingMode,
 		v.Transport.GatewayPoolID, v.Transport.GatewayPoolVersion, v.Transport.SessionID, v.Transport.SenderPoolID,
 		v.Transport.AdapterVersion, v.Transport.ProviderDefinitionID, v.Transport.ProviderDefinitionVersion,
-		capabilities, v.Transport.FallbackMode, v.Transport.RoutingPolicyVersion,
-		v.Transport.CapacityEvidenceVersion, v.Version, expected,
+		string(capabilities), v.Transport.FallbackMode, v.Transport.RoutingPolicyVersion,
+		v.Transport.CapacityEvidenceVersion, v.Version, expected, v.Transport.MetaSenderID, v.MaximumMessagesPerRecipient,
 	)
 	if err != nil {
 		return fmt.Errorf("update campaign: %w", err)
@@ -146,7 +182,7 @@ const campaignSelect = `SELECT
  coalesce(campaigns.provider_capability_definition_id::text,''),coalesce(campaigns.provider_capability_definition_version,0),
  coalesce(campaigns.required_capabilities,'[]'::jsonb),coalesce(campaigns.fallback_mode,'NONE'),coalesce(campaigns.routing_policy_version,''),
  coalesce(campaigns.capacity_evidence_version,''),coalesce(campaigns.created_by::text,''),coalesce(campaigns.final_approved_by::text,''),
- coalesce(campaigns.commercial_approval_id::text,''),campaigns.created_at,campaigns.updated_at,campaigns.version
+ coalesce(campaigns.commercial_approval_id::text,''),coalesce(campaigns.pause_reason,''),campaigns.created_at,campaigns.updated_at,campaigns.version,coalesce(campaigns.meta_sender_id::text,'')
 FROM campaigns
 LEFT JOIN audience_snapshots snapshot ON snapshot.id=campaigns.audience_snapshot_id
 LEFT JOIN message_versions message ON message.id=campaigns.approved_message_version_id`
@@ -166,7 +202,7 @@ func scanCampaign(row scanner) (campaign.Campaign, error) {
 		&v.Transport.AdapterVersion, &v.Transport.ProviderDefinitionID, &v.Transport.ProviderDefinitionVersion,
 		&caps, &v.Transport.FallbackMode, &v.Transport.RoutingPolicyVersion,
 		&v.Transport.CapacityEvidenceVersion, &v.CreatedBy, &v.FinalApprovedBy,
-		&v.CommercialApprovalID, &v.CreatedAt, &v.UpdatedAt, &v.Version,
+		&v.CommercialApprovalID, &v.PauseReason, &v.CreatedAt, &v.UpdatedAt, &v.Version, &v.Transport.MetaSenderID,
 	)
 	if err != nil {
 		return campaign.Campaign{}, err
@@ -190,7 +226,11 @@ func (r *CampaignRepository) AmendMaterial(ctx context.Context, v campaign.Campa
 	if r.DB == nil {
 		return errors.New("database is required")
 	}
-	capabilities, err := json.Marshal(v.Transport.RequiredCapabilities)
+	requiredCapabilities := v.Transport.RequiredCapabilities
+	if requiredCapabilities == nil {
+		requiredCapabilities = []string{}
+	}
+	capabilities, err := json.Marshal(requiredCapabilities)
 	if err != nil {
 		return fmt.Errorf("marshal campaign capabilities: %w", err)
 	}
@@ -208,11 +248,11 @@ func (r *CampaignRepository) AmendMaterial(ctx context.Context, v campaign.Campa
  quiet_hours_start=NULLIF($6,''),quiet_hours_end=NULLIF($7,''),maximum_unique_recipients=$8,
  audience_snapshot_id=NULLIF($9,'')::uuid,approved_message_version_id=NULLIF($10,'')::uuid,
  final_approved_by=NULL,final_approved_at=NULL,sender_pool=NULLIF($11,''),commercial_approval_id=NULLIF($12,'')::uuid,
- transport_channel=$13,transport_provider=$14,transport_engine=$15,transport_routing_mode=$16,gateway_pool_id=$17,gateway_pool_version=NULLIF($18,0),
+ transport_channel=NULLIF($13,''),transport_provider=NULLIF($14,''),transport_engine=NULLIF($15,''),transport_routing_mode=NULLIF($16,''),gateway_pool_id=NULLIF($17,''),gateway_pool_version=NULLIF($18,0),
  transport_session_id=NULLIF($19,'')::uuid,transport_sender_pool_id=NULLIF($20,'')::uuid,
- provider_adapter_version=$21,provider_capability_definition_id=NULLIF($22,'')::uuid,
- provider_capability_definition_version=NULLIF($23,0),required_capabilities=$24,fallback_mode=$25,
- routing_policy_version=$26,capacity_evidence_version=$27,updated_at=$28,version=$29
+ provider_adapter_version=NULLIF($21,''),provider_capability_definition_id=NULLIF($22,'')::uuid,
+ provider_capability_definition_version=NULLIF($23,0),required_capabilities=$24,fallback_mode=coalesce(NULLIF($25,''),'NONE'),
+ routing_policy_version=NULLIF($26,''),capacity_evidence_version=NULLIF($27,''),updated_at=$28,version=$29,meta_sender_id=NULLIF($31,'')::uuid,maximum_messages_per_recipient=$32
 WHERE id=$1::uuid AND version=$30`
 	res, err := tx.ExecContext(ctx, update,
 		v.ID, v.Status, v.RequestedStartAt, v.CompletionDeadlineAt, v.Timezone, v.QuietHoursStart,
@@ -220,9 +260,9 @@ WHERE id=$1::uuid AND version=$30`
 		v.SenderPool, v.CommercialApprovalID, v.Transport.Channel, v.Transport.Provider,
 		v.Transport.Engine, v.Transport.RoutingMode, v.Transport.GatewayPoolID, v.Transport.GatewayPoolVersion, v.Transport.SessionID,
 		v.Transport.SenderPoolID, v.Transport.AdapterVersion, v.Transport.ProviderDefinitionID,
-		v.Transport.ProviderDefinitionVersion, capabilities, v.Transport.FallbackMode,
+		v.Transport.ProviderDefinitionVersion, string(capabilities), v.Transport.FallbackMode,
 		v.Transport.RoutingPolicyVersion, v.Transport.CapacityEvidenceVersion, v.UpdatedAt,
-		v.Version, expected,
+		v.Version, expected, v.Transport.MetaSenderID, v.MaximumMessagesPerRecipient,
 	)
 	if err != nil {
 		return err
@@ -238,7 +278,7 @@ WHERE id=$1::uuid AND version=$30`
 	if err := tx.QueryRowContext(ctx, `SELECT coalesce(max(sequence),0)+1 FROM campaign_material_change_events WHERE campaign_id=$1::uuid`, v.ID).Scan(&seq); err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO campaign_material_change_events(id,campaign_id,sequence,actor_id,reason,changed_fields,previous_status,new_status,previous_version,new_version,created_at) VALUES($1::uuid,$2::uuid,$3,$4::uuid,$5,$6,$7,$8,$9,$10,$11)`, event.ID, event.CampaignID, seq, event.ActorID, event.Reason, changedFields, event.PreviousStatus, event.NewStatus, event.PreviousVersion, event.NewVersion, event.CreatedAt)
+	_, err = tx.ExecContext(ctx, `INSERT INTO campaign_material_change_events(id,campaign_id,sequence,actor_id,reason,changed_fields,previous_status,new_status,previous_version,new_version,created_at) VALUES($1::uuid,$2::uuid,$3,$4::uuid,$5,$6,$7,$8,$9,$10,$11)`, event.ID, event.CampaignID, seq, event.ActorID, event.Reason, string(changedFields), event.PreviousStatus, event.NewStatus, event.PreviousVersion, event.NewVersion, event.CreatedAt)
 	if err != nil {
 		return err
 	}

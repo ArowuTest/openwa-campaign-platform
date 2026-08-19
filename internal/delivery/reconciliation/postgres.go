@@ -91,7 +91,7 @@ SET status=$5,next_run_at=$4+$6::interval,lease_owner=NULL,lease_expires_at=NULL
     consecutive_drift_count=CASE WHEN $5='MATCH' THEN 0 ELSE consecutive_drift_count+1 END,
     updated_at=$4,last_error=NULL
 WHERE campaign_id=$1::uuid AND status='PROCESSING' AND lease_owner=$2
-  AND lease_version=$3 AND lease_expires_at>$4`, work.CampaignID, work.Lease.Owner, work.Lease.Version, now.UTC(), status, interval(next), canonical, stored)
+  AND lease_version=$3 AND lease_expires_at>$4`, work.CampaignID, work.Lease.Owner, work.Lease.Version, now.UTC(), status, interval(next), string(canonical), string(stored))
 }
 
 func (r *PostgreSQLRepository) Fail(ctx context.Context, work Work, now time.Time, cause error, retry time.Duration) error {

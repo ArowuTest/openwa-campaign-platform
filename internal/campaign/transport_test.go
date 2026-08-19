@@ -22,3 +22,46 @@ func TestTransportSelectionAllowsExplicitOpenWAEnginePool(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestTransportSelectionAllowsMetaCloudSenderPool(t *testing.T) {
+	v := TransportSelection{
+		Channel: "WHATSAPP", Provider: ProviderMeta, Engine: EngineMetaCloud,
+		RoutingMode: RoutingSenderPool, SenderPoolID: "11111111-1111-1111-1111-111111111111",
+		MetaSenderID:   "22222222-2222-2222-2222-222222222222",
+		AdapterVersion: "1.0.0", FallbackMode: FallbackNone,
+		RoutingPolicyVersion: "route-v2", CapacityEvidenceVersion: "cap-v2",
+		RequiredCapabilities: []string{"SEND_TEMPLATE"},
+	}
+	if err := v.Validate(); err != nil {
+		t.Fatalf("Meta Cloud transport rejected: %v", err)
+	}
+}
+
+func TestTransportSelectionRejectsProviderEngineMismatch(t *testing.T) {
+	v := validTransport()
+	v.Provider = ProviderMeta
+	if v.Validate() == nil {
+		t.Fatal("META with BAILEYS engine accepted")
+	}
+	v = validTransport()
+	v.Engine = EngineMetaCloud
+	if v.Validate() == nil {
+		t.Fatal("OPENWA with CLOUD_API engine accepted")
+	}
+}
+
+func TestTransportSelectionRejectsNonCanonicalProviderEngineOrChannel(t *testing.T) {
+	for name, mutate := range map[string]func(*TransportSelection){
+		"channel":  func(v *TransportSelection) { v.Channel = "whatsapp" },
+		"provider": func(v *TransportSelection) { v.Provider = Provider("openwa") },
+		"engine":   func(v *TransportSelection) { v.Engine = Engine("baileys") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			v := validTransport()
+			mutate(&v)
+			if err := v.Validate(); err == nil {
+				t.Fatalf("non-canonical %s was accepted: %+v", name, v)
+			}
+		})
+	}
+}

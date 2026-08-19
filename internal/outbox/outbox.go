@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"campaign-platform/internal/audit"
 	"campaign-platform/internal/dispatch"
 	"campaign-platform/internal/jobs"
 )
@@ -69,14 +70,32 @@ func (e QueueBackpressureError) Error() string {
 type Publisher struct {
 	Outbox                 Repository
 	Jobs                   *jobs.Service
+	Audit                  *audit.Recorder
 	Clock                  func() time.Time
 	QueueBackpressureLimit int
 	BackpressureRetryAfter time.Duration
 }
 
 func (p *Publisher) Publish(ctx context.Context, record Record) error {
-	if p == nil || p.Outbox == nil || p.Jobs == nil {
+	if p == nil || p.Outbox == nil {
 		return errors.New("publisher dependencies are required")
+	}
+	if record.EventType == audit.OutboxEventType {
+		if p.Audit == nil {
+			return errors.New("audit outbox publisher is not configured")
+		}
+		var event audit.Event
+		if err := json.Unmarshal(record.Payload, &event); err != nil {
+			return PermanentError{Err: fmt.Errorf("decode audit outbox payload: %w", err)}
+		}
+		if event.ID == "" || event.ID != record.AggregateID {
+			return PermanentError{Err: errors.New("audit outbox identity mismatch")}
+		}
+		_, err := p.Audit.RecordPrepared(ctx, event)
+		return err
+	}
+	if p.Jobs == nil {
+		return errors.New("job outbox publisher is not configured")
 	}
 	var payload map[string]any
 	if err := json.Unmarshal(record.Payload, &payload); err != nil {

@@ -3,6 +3,7 @@ package delivery
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -87,5 +88,37 @@ func TestPostgreSQLDeliveryEventUpdatesMetricsIncrementallyAndReplayIsIdempotent
 	}
 	if replayQueued != queued || replaySubmitted != submitted || eventCount != 1 {
 		t.Fatalf("replay changed metrics/events: before=(%d,%d) after=(%d,%d) events=%d", queued, submitted, replayQueued, replaySubmitted, eventCount)
+	}
+
+	conflict := event
+	conflict.Type = EventDelivered
+	conflict.ProviderMessageID = "different-provider-message"
+	_, changed, err = repository.ApplyEvent(ctx, recipientID, conflict)
+	if !errors.Is(err, ErrEventDedupMismatch) || changed {
+		t.Fatalf("mismatched replay changed=%v err=%v", changed, err)
+	}
+	var status string
+	if err = db.QueryRowContext(ctx,
+		`SELECT status FROM campaign_recipients WHERE id=$1::uuid`,
+		recipientID,
+	).Scan(&status); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.QueryRowContext(ctx,
+		`SELECT queued_total,submitted_total FROM campaign_metrics WHERE campaign_id=$1::uuid`,
+		campaignID,
+	).Scan(&replayQueued, &replaySubmitted); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.QueryRowContext(ctx,
+		`SELECT count(*) FROM delivery_events WHERE event_deduplication_key=$1`,
+		event.DeduplicationKey,
+	).Scan(&eventCount); err != nil {
+		t.Fatal(err)
+	}
+	if status != "SUBMITTING" || replayQueued != queued ||
+		replaySubmitted != submitted || eventCount != 1 {
+		t.Fatalf("mismatched replay mutated status=%s metrics=(%d,%d) events=%d",
+			status, replayQueued, replaySubmitted, eventCount)
 	}
 }

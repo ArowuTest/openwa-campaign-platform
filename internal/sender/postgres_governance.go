@@ -356,10 +356,15 @@ SELECT `+governedSessionColumns+` FROM updated`, id, e, status, "STATUS_"+string
 func (p *PostgreSQLGovernanceStore) HeartbeatSession(ctx context.Context, id string, e int64, v GovernedSession, now time.Time) (GovernedSession, error) {
 	row := p.DB.QueryRowContext(ctx, `UPDATE sender_sessions SET
 status=CASE WHEN status IN('QUARANTINED','RESTRICTED','RETIRED') THEN status WHEN sender_session_transition_allowed(status,$3) THEN $3 ELSE status END,
-engine_version=$4,safe_messages_per_minute=$5,safe_daily_capacity=$6,in_flight_limit=$7,sent_today=$8,last_heartbeat_at=$9,
+engine_version=$4,
+sent_today=CASE
+  WHEN last_heartbeat_at IS NULL OR (last_heartbeat_at AT TIME ZONE 'UTC')::date <> ($6::timestamptz AT TIME ZONE 'UTC')::date THEN GREATEST($5,0)
+  ELSE GREATEST(sent_today,$5,0)
+END,
+last_heartbeat_at=$6,
 governance_version=governance_version+1,updated_at=now()
 WHERE id=$1::uuid AND governance_version=$2
-RETURNING `+governedSessionColumns, id, e, v.Status, v.EngineVersion, v.SafeMessagesPerMinute, v.SafeDailyCapacity, v.InFlightLimit, v.SentToday, now)
+RETURNING `+governedSessionColumns, id, e, v.Status, v.EngineVersion, v.SentToday, now)
 	value, err := scanGovernedSession(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return GovernedSession{}, ErrSenderConflict

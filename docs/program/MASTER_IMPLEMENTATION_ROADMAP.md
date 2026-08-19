@@ -4,14 +4,18 @@
 
 This roadmap is the controlled programme view for taking the OpenWA Internal Campaign Platform from the current code checkpoint to a deployment-certified production release. It is subordinate to the authoritative SRS and UI/UX specification. It does not reclassify an unmet requirement as complete merely because supporting scaffolding exists.
 
+## 17 August 2026 execution-order override
+
+The numbered workstreams below are a scope taxonomy, **not the current execution sequence**. R19 is historical freeze evidence; infrastructure review deliberately reopened the source boundary to correct node-addressed OpenWA dispatch and the split production topology. I2 blind review produced four confirmed production-boundary defects; those are remediated in I3. I3 is locally re-gated and awaiting its fresh exact-source blind council. Current approved sequence remains: **infrastructure/platform engineering and production-like proof → separately authorised Railway/Hostinger deployment + real Baileys/WWebJS/Meta validation → production Next.js portal → UAT/accessibility → release certification**. Infrastructure/live-provider work therefore precedes production frontend work even though WS-7 is numbered before WS-8.
+
 ## Current baseline
 
-- Current repository version: `0.8.2`.
-- Current branch: `work/srs-phase1-2-governance`.
-- Authoritative traceability catalogue: 398 SRS requirements.
-- Deployment status: pre-production.
-- OpenWA live-network status: not yet validated with genuine WhatsApp sessions.
-- PostgreSQL production migration status: not yet validated on a live staging environment.
+- Historical release label remains `0.8.28`; the current backend/Meta candidate is a later intentional dirty worktree, not a new published version.
+- Current branch: `work/backend-production-engineering`; committed HEAD `786451d5616f5e179903fd9b61c5e26f6de76f77`.
+- Authoritative generated catalogue: 398 original SRS rows (168 IMPLEMENTED_TESTED / 181 PARTIAL / 32 NOT_STARTED / 17 BLOCKED_EXTERNAL) plus later approved Meta design/FREE_FORM addenda.
+- Local schema/test state: migrations 0001→0089 remain verified from zero on PostgreSQL 17 and 18; R18 daily-capacity/terminal-state PostgreSQL regressions are green on both; complete execution unit/integration/race gates and fresh exact-source complete Go test/vet/build are green; R19 blind review has no surviving source defect.
+- Deployment status: pre-production; R19 freeze was reopened after a real split-topology defect was found. I3 backend+infrastructure config is locally re-gated after the I2 council remediation and requires fresh exact-source blind review before a new freeze. Live-provider, scale, DR, security-assurance, operational and frontend acceptance remain open.
+- Genuine Baileys/WWebJS/Meta live-network and target-infrastructure acceptance remains external/not yet accepted.
 
 ## Delivery principles
 
@@ -161,7 +165,9 @@ Exit criteria:
 
 Scope:
 
-- Hostinger production topology.
+- Railway control-plane/API/worker/data-service topology and release configuration.
+- Hostinger isolated OpenWA gateway fleet/topology for Baileys and WWebJS/Chromium.
+- Direct Meta Cloud API ingress/egress, webhook and secret/network boundary as a sibling transport.
 - PostgreSQL primary/replica, PgBouncer and backups.
 - Redis persistence/HA decision and recovery.
 - Object storage and encrypted off-site backup.

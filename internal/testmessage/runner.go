@@ -80,7 +80,7 @@ func (p *Processor) Process(ctx context.Context, send Send) error {
 	material := dispatch.Material{
 		SenderPoolID: send.SenderPoolID, Provider: send.Provider, Engine: send.Engine,
 		GatewayPoolID: send.GatewayPoolID, GatewayPoolVersion: routeEvidence.GatewayPoolVersion,
-		GatewayAdapterVersion: routeEvidence.AdapterVersion, GatewayNodeID: routeEvidence.GatewayNodeID,
+		GatewayAdapterVersion: routeEvidence.AdapterVersion, GatewayNodeID: routeEvidence.GatewayNodeID, GatewayNodeURL: routeEvidence.GatewayNodeURL,
 		GatewayNodeVersion: routeEvidence.GatewayNodeVersion, SessionID: send.SenderSessionID,
 		SessionLeaseVersion: routeEvidence.SessionLeaseVersion, SessionConfigurationVersion: routeEvidence.SessionConfigurationVersion,
 		AuthorityExpiresAt: routeEvidence.AuthorityExpiresAt, RouteReference: send.RouteReference,
@@ -117,7 +117,7 @@ func (p *Processor) Process(ctx context.Context, send Send) error {
 	result, err := p.Gateway.Send(ctx, dispatch.GatewayRequest{
 		IdempotencyKey: "test:" + send.IdempotencyKey, Provider: send.Provider, Engine: send.Engine,
 		GatewayPoolID: send.GatewayPoolID, GatewayPoolVersion: routeEvidence.GatewayPoolVersion,
-		GatewayAdapterVersion: routeEvidence.AdapterVersion, GatewayNodeID: routeEvidence.GatewayNodeID,
+		GatewayAdapterVersion: routeEvidence.AdapterVersion, GatewayNodeID: routeEvidence.GatewayNodeID, GatewayNodeURL: routeEvidence.GatewayNodeURL,
 		GatewayNodeVersion: routeEvidence.GatewayNodeVersion, SessionID: send.SenderSessionID,
 		SessionLeaseVersion: routeEvidence.SessionLeaseVersion, SessionConfigurationVersion: routeEvidence.SessionConfigurationVersion,
 		AuthorityExpiresAt: routeEvidence.AuthorityExpiresAt, RouteReference: send.RouteReference,

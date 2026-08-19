@@ -81,15 +81,20 @@ func (s *PostgreSQLStore) Create(ctx context.Context, d Definition) (Definition,
 	}
 	return d, nil
 }
-func (s *PostgreSQLStore) CompareAndSwap(ctx context.Context, d Definition, expected int64) (Definition, error) {
+func (s *PostgreSQLStore) CompareAndSwap(ctx context.Context, d Definition, expected int64, actor, action string) (Definition, error) {
 	tx, err := s.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		return d, err
 	}
 	defer tx.Rollback()
+	actor = strings.TrimSpace(actor)
+	if actor == "" || strings.TrimSpace(action) == "" {
+		return d, errors.New("provider capability event actor and action are required")
+	}
 	if d.Status == StatusActive {
 		routeKey := d.Provider + "\x1f" + string(d.Channel) + "\x1f" + d.Engine
-		if _, err = tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, routeKey); err != nil {
+		var lockResult any
+		if err = tx.QueryRowContext(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, routeKey).Scan(&lockResult); err != nil {
 			return d, err
 		}
 		if strings.TrimSpace(d.ApprovedBy) == "" {
@@ -99,7 +104,7 @@ func (s *PostgreSQLStore) CompareAndSwap(ctx context.Context, d Definition, expe
   UPDATE provider_capability_definitions
   SET status=CASE WHEN effective_from >= $1 OR $1 <= $2 THEN 'RETIRED' ELSE status END,
       effective_to=CASE WHEN effective_from < $1 THEN $1 ELSE effective_to END,
-      approved_by=$3::uuid,reason=$4,version=version+1,updated_at=$2
+      reason=$4,version=version+1,updated_at=$2
   WHERE id<>$5::uuid AND provider=$6 AND channel=$7 AND engine=$8 AND status='ACTIVE'
     AND effective_from<$9 AND (effective_to IS NULL OR effective_to>$1)
   RETURNING id,version
@@ -120,10 +125,6 @@ SELECT id,'SUPERSEDED',$3::uuid,$4,version,$2 FROM superseded`, d.EffectiveFrom,
 	}
 	if n != 1 {
 		return d, ErrConflict
-	}
-	action, actor := string(d.Status), d.SubmittedBy
-	if d.Status == StatusActive || d.Status == StatusRejected || d.Status == StatusRetired {
-		actor = d.ApprovedBy
 	}
 	if err = insertProviderEvent(ctx, tx, d, action, actor); err != nil {
 		return d, err

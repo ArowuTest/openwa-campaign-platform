@@ -44,18 +44,33 @@ func TestPostgreSQLProviderDefinitionsPaginationContinuesWithoutSkipping(t *test
 		}
 		created = append(created, v)
 	}
-	first, err := service.ListPage(ctx, 2, "")
-	if err != nil {
-		t.Fatal(err)
+	want := map[string]int{created[2].ID: 0, created[1].ID: 1, created[0].ID: 2}
+	seen := make([]string, 0, 3)
+	cursor := ""
+	visited := map[string]struct{}{}
+	for pageNumber := 0; pageNumber < 1000 && len(seen) < len(want); pageNumber++ {
+		page, err := service.ListPage(ctx, 2, cursor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, item := range page.Items {
+			if _, duplicate := visited[item.ID]; duplicate {
+				t.Fatalf("provider pagination repeated definition %s", item.ID)
+			}
+			visited[item.ID] = struct{}{}
+			if _, expected := want[item.ID]; expected {
+				seen = append(seen, item.ID)
+			}
+		}
+		if page.NextCursor == "" {
+			break
+		}
+		if page.NextCursor == cursor {
+			t.Fatal("provider pagination cursor did not advance")
+		}
+		cursor = page.NextCursor
 	}
-	if len(first.Items) != 2 || first.NextCursor == "" || first.Items[0].ID != created[2].ID || first.Items[1].ID != created[1].ID {
-		t.Fatalf("unexpected first provider page: %#v", first)
-	}
-	second, err := service.ListPage(ctx, 2, first.NextCursor)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(second.Items) != 1 || second.NextCursor != "" || second.Items[0].ID != created[0].ID {
-		t.Fatalf("unexpected second provider page: %#v", second)
+	if len(seen) != 3 || seen[0] != created[2].ID || seen[1] != created[1].ID || seen[2] != created[0].ID {
+		t.Fatalf("provider pagination skipped or reordered test definitions: seen=%v want=%v", seen, []string{created[2].ID, created[1].ID, created[0].ID})
 	}
 }

@@ -13,6 +13,6 @@
     "typecheck:gateway": "npm --workspace @campaign-platform/openwa-gateway run typecheck"
   },
   "engines": {
-    "node": ">=22.16.0"
+    "node": ">=22.19.0"
   }
 }

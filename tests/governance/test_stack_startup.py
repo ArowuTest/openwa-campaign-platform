@@ -96,7 +96,7 @@ class StackStartupContractTests(unittest.TestCase):
         self.assertNotIn("openwa-dashboard", verifier)
         self.assertNotIn("SEC-EXC-001", verifier)
 
-    def test_openwa_recovery_bootstrap_is_configurable_in_both_compose_profiles(self):
+    def test_openwa_recovery_bootstrap_is_configurable_in_development_and_hostinger_profiles(self):
         required = (
             "OPENWA_RECONNECT_BASE_DELAY_MS",
             "OPENWA_RECONNECT_MAX_ATTEMPTS",
@@ -108,7 +108,7 @@ class StackStartupContractTests(unittest.TestCase):
         )
         for relative in (
             "infrastructure/compose/compose.yaml",
-            "infrastructure/compose/compose.production.yaml",
+            "infrastructure/compose/compose.hostinger-openwa-gateway.yaml",
         ):
             compose = (ROOT / relative).read_text()
             gateway = compose.split("  openwa-gateway:", 1)[1]
@@ -120,18 +120,12 @@ class StackStartupContractTests(unittest.TestCase):
                 f"Baileys native reconnect base must remain the fallback in {relative}",
             )
 
-    def test_openwa_media_fetch_allows_only_the_control_plane_internal_host(self):
-        for relative in (
-            "infrastructure/compose/compose.yaml",
-            "infrastructure/compose/compose.production.yaml",
-        ):
-            compose = (ROOT / relative).read_text()
-            match = re.search(
-                r"(?ms)^  openwa-gateway:\s*$\n(.*?)(?=^  [a-z0-9][a-z0-9_-]*:\s*$|^networks:|\Z)",
-                compose,
-            )
-            self.assertIsNotNone(match, relative)
-            self.assertIn("SSRF_ALLOWED_HOSTS: control-api", match.group(1), relative)
+    def test_openwa_media_fetch_allows_only_the_approved_control_host(self):
+        development = (ROOT / "infrastructure/compose/compose.yaml").read_text()
+        hostinger = (ROOT / "infrastructure/compose/compose.hostinger-openwa-gateway.yaml").read_text()
+        self.assertIn("SSRF_ALLOWED_HOSTS: control-api", development)
+        self.assertIn("SSRF_ALLOWED_HOSTS: ${SSRF_ALLOWED_HOSTS:?", hostinger)
+        self.assertNotIn("SSRF_ALLOWED_HOSTS: control-api", hostinger)
 
 
 if __name__ == "__main__":

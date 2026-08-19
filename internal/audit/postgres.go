@@ -27,7 +27,7 @@ func (r *PostgreSQLRepository) Append(ctx context.Context, event Event, expected
 	if r.DB == nil {
 		return Event{}, errors.New("database is required")
 	}
-	return pgretry.RetryValue(ctx, pgretry.DefaultRetryPolicy(), func() (Event, error) {
+	stored, err := pgretry.RetryValue(ctx, pgretry.DefaultRetryPolicy(), func() (Event, error) {
 		tx, err := r.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 		if err != nil {
 			return Event{}, err
@@ -90,6 +90,10 @@ func (r *PostgreSQLRepository) Append(ctx context.Context, event Event, expected
 		}
 		return event, nil
 	})
+	if pgretry.IsRetryableTransactionError(err) {
+		return Event{}, ErrChainConflict
+	}
+	return stored, err
 }
 
 const auditEventSelect = `SELECT id,sequence,actor_type,coalesce(actor_id::text,''),action,entity_type,coalesce(entity_id,''),coalesce(organisation_id::text,''),coalesce(outcome,''),coalesce(sensitivity,''),coalesce(before_state,'null'::jsonb)::text,coalesce(after_state,'null'::jsonb)::text,coalesce(reason_code,''),coalesce(reason,''),coalesce(host(source_ip),''),coalesce(user_agent,''),coalesce(correlation_id,request_id,''),created_at,coalesce(previous_hash,''),coalesce(event_hash,'') FROM audit_events`

@@ -1113,7 +1113,7 @@ paths:
   /campaigns/{id}/transition:
     post:
       operationId: transitionCampaign
-      summary: Apply a controlled campaign lifecycle transition
+      summary: Apply a governed approval/build transition; execution lifecycle actions use /campaigns/{id}/execution/{action}
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       requestBody:
@@ -1124,6 +1124,7 @@ paths:
       responses:
         '200': { description: Campaign transitioned }
         '404': { $ref: '#/components/responses/NotFound' }
+        '409': { description: Version conflict or execution lifecycle action requires the governed execution endpoint }
         '422': { $ref: '#/components/responses/ValidationError' }
   /campaigns/{id}/material-amendment:
     post:
@@ -2033,28 +2034,36 @@ paths:
         '400': { description: Invalid request }
         '401': { description: Authentication required }
         '403': { description: Permission denied }
-  /internal/sender-nodes/{id}/heartbeat:
-    post:
-      operationId: heartbeatSenderNode
-      summary: heartbeatSenderNode
-      parameters:
-        - { name: id, in: path, required: true, schema: { type: string } }
-      responses:
-        '200': { description: Request completed }
-        '400': { description: Invalid request }
-        '401': { description: Authentication required }
-        '403': { description: Permission denied }
   /internal/sender-sessions/{id}/heartbeat:
     post:
       operationId: heartbeatSenderSession
-      summary: heartbeatSenderSession
+      summary: Apply exact-body signed, replay-protected telemetry from the owning gateway node
+      security: []
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
+        - { name: X-Gateway-Runtime-Timestamp, in: header, required: true, schema: { type: string } }
+        - { name: X-Gateway-Runtime-Nonce, in: header, required: true, schema: { type: string } }
+        - { name: X-Gateway-Runtime-Signature, in: header, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [nodeId, sessionId, status, engineVersion, sentToday]
+              properties:
+                nodeId: { type: string }
+                sessionId: { type: string }
+                status: { type: string, enum: [PAIRING, CONNECTING, READY, BUSY, DRAINING, PAUSED, DISCONNECTED, RECOVERING, FAILED_RECOVERY, RESTRICTED] }
+                engineVersion: { type: string }
+                sentToday: { type: integer, format: int64, minimum: 0 }
       responses:
-        '200': { description: Request completed }
-        '400': { description: Invalid request }
-        '401': { description: Authentication required }
-        '403': { description: Permission denied }
+        '200': { description: Signed session telemetry accepted without changing governed capacity }
+        '400': { description: Malformed or unsupported telemetry }
+        '401': { description: Signature or timestamp invalid }
+        '404': { description: Governed sender session not found }
+        '409': { description: Replay, stale telemetry, or node/session identity mismatch }
   /message-versions/{id}/approve:
     post:
       operationId: approveMessageVersion
@@ -3282,6 +3291,228 @@ paths:
                   nextCursor: { type: string }
                   hasMore: { type: boolean }
         '400': { description: Invalid page limit or cursor }
+  /webhooks/meta/{credentialKey}:
+    get:
+      operationId: verifyMetaWebhook
+      summary: Complete Meta webhook endpoint verification
+      security: []
+      parameters:
+        - { name: credentialKey, in: path, required: true, schema: { type: string } }
+        - { name: hub.mode, in: query, required: true, schema: { type: string, enum: [subscribe] } }
+        - { name: hub.verify_token, in: query, required: true, schema: { type: string } }
+        - { name: hub.challenge, in: query, required: true, schema: { type: string, pattern: '^[0-9]{1,256}$' } }
+      responses:
+        '200':
+          description: Meta challenge echoed after constant-time token verification
+          content:
+            text/plain: { schema: { type: string } }
+        '403': { description: Verification token or challenge rejected }
+    post:
+      operationId: ingestMetaWebhook
+      summary: Authenticate and ingest Meta WhatsApp status and inbound callbacks
+      security: []
+      parameters:
+        - { name: credentialKey, in: path, required: true, schema: { type: string } }
+        - { name: X-Hub-Signature-256, in: header, required: true, schema: { type: string, pattern: '^sha256=[0-9a-fA-F]{64}$' } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        '200': { description: Authenticated webhook accepted and normalized }
+        '400': { description: Invalid webhook envelope or unreadable body }
+        '401': { description: X-Hub signature or credential key invalid }
+        '403': { description: WABA/phone sender is not bound to the credential endpoint }
+        '409': { description: Callback replay conflicts with immutable prior evidence }
+        '413': { description: Webhook exceeds the configured body limit }
+  /message-versions/{id}/meta-binding:
+    post:
+      operationId: createMetaMessageBinding
+      summary: Bind an approved message version to an approved Meta template
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MetaBindingRequest' }
+      responses:
+        '201':
+          description: Immutable Meta template binding created
+          content:
+            application/json: { schema: { $ref: '#/components/schemas/MetaBinding' } }
+        '404': { description: Sender, template, or message version not found }
+        '409': { description: Different immutable binding already exists }
+        '422': { description: Sender inactive or template/message binding incompatible }
+    get:
+      operationId: getMetaMessageBinding
+      summary: Get the immutable Meta binding for a message version
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Immutable Meta template binding
+          content:
+            application/json: { schema: { $ref: '#/components/schemas/MetaBinding' } }
+        '404': { description: Binding not found }
+  /admin/meta-senders:
+    get:
+      operationId: listMetaSenders
+      summary: List governed Meta Cloud API senders
+      responses:
+        '200':
+          description: Governed Meta sender list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/MetaSender' } }
+                  count: { type: integer, minimum: 0 }
+    post:
+      operationId: createMetaSender
+      summary: Create a draft governed Meta Cloud API sender
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/MetaSenderDraftRequest' }
+      responses:
+        '201':
+          description: Draft Meta sender created
+          content:
+            application/json: { schema: { $ref: '#/components/schemas/MetaSender' } }
+        '422': { description: Sender governance input invalid }
+  /admin/meta-senders/{id}:
+    get:
+      operationId: getMetaSender
+      summary: Get a governed Meta Cloud API sender
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Governed Meta sender detail; credentialKey is a reference and no secret material is serialized
+          content:
+            application/json: { schema: { $ref: '#/components/schemas/MetaSender' } }
+        '404': { description: Meta sender not found }
+  /admin/meta-senders/{id}/submit:
+    post:
+      operationId: submitMetaSender
+      summary: Submit a Meta sender for independent approval
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/VersionedReason' } }
+      responses:
+        '200':
+          description: Meta sender submitted for approval
+          content:
+            application/json: { schema: { $ref: '#/components/schemas/MetaSender' } }
+        '409': { description: Optimistic version conflict }
+        '422': { description: Governance transition rejected }
+  /admin/meta-senders/{id}/decision:
+    post:
+      operationId: decideMetaSender
+      summary: Approve or reject a pending Meta sender using an independent checker
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/MetaSenderDecisionRequest' } }
+      responses:
+        '200':
+          description: Independent decision recorded
+          content:
+            application/json: { schema: { $ref: '#/components/schemas/MetaSender' } }
+        '409': { description: Optimistic version conflict }
+        '422': { description: Maker/checker or lifecycle rule rejected the decision }
+  /admin/meta-senders/{id}/retire:
+    post:
+      operationId: retireMetaSender
+      summary: Retire an active governed Meta sender
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/VersionedReason' } }
+      responses:
+        '200':
+          description: Meta sender retired
+          content:
+            application/json: { schema: { $ref: '#/components/schemas/MetaSender' } }
+        '409': { description: Optimistic version conflict }
+        '422': { description: Sender is not eligible for retirement }
+  /admin/meta-senders/{id}/verify:
+    post:
+      operationId: verifyMetaSender
+      summary: Verify governed WABA and phone-number ownership through Meta Graph API
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/VersionedReason' } }
+      responses:
+        '200':
+          description: Exact WABA phone-number ID verified and sender health observed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sender, verification]
+                properties:
+                  sender: { $ref: '#/components/schemas/MetaSender' }
+                  verification: { $ref: '#/components/schemas/MetaSenderVerification' }
+        '409': { description: Optimistic version conflict }
+        '422': { description: Meta rejected the governed sender identity }
+        '502': { description: Meta verification was retryable or uncertain }
+  /admin/meta-senders/{id}/templates/sync:
+    post:
+      operationId: syncMetaSenderTemplates
+      summary: Synchronize approved Meta templates for a governed sender WABA
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json: { schema: { $ref: '#/components/schemas/VersionedReason' } }
+      responses:
+        '200':
+          description: Approved Meta template catalogue synchronized and sender health observed
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [sender, templates]
+                properties:
+                  sender: { $ref: '#/components/schemas/MetaSender' }
+                  templates: { type: array, items: { $ref: '#/components/schemas/MetaTemplate' } }
+        '409': { description: Optimistic sender version conflict }
+        '502': { description: Meta template synchronization failed upstream }
+  /admin/meta-senders/{id}/templates:
+    get:
+      operationId: listMetaSenderTemplates
+      summary: List locally synchronized approved Meta templates for a governed sender
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string } }
+      responses:
+        '200':
+          description: Approved Meta template list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/MetaTemplate' } }
+                  count: { type: integer, minimum: 0 }
+        '404': { description: Meta sender not found }
   /admin/gateway-pools:
     get:
       operationId: listGovernedGatewayPools
@@ -3699,6 +3930,116 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
   schemas:
+    MetaSenderDraftRequest:
+      type: object
+      required: [organisationId, senderPoolId, wabaId, phoneNumberId, displayName, businessPhoneDisplay, credentialKey, graphApiVersion, reason]
+      properties:
+        organisationId: { type: string }
+        senderPoolId: { type: string }
+        wabaId: { type: string, minLength: 1 }
+        phoneNumberId: { type: string, minLength: 1 }
+        displayName: { type: string, minLength: 1 }
+        businessPhoneDisplay: { type: string, minLength: 1 }
+        credentialKey: { type: string, pattern: '^[A-Za-z0-9][A-Za-z0-9._-]{2,127}$', description: Reference to mounted credentials; never contains the access token or app secret. }
+        graphApiVersion: { type: string, pattern: '^v[0-9]{1,3}\.[0-9]{1,2}$' }
+        reason: { type: string, minLength: 5 }
+    MetaSenderDecisionRequest:
+      type: object
+      required: [expectedVersion, approve, reason]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 1 }
+        approve: { type: boolean }
+        effectiveFrom: { type: string, format: date-time }
+        reason: { type: string, minLength: 5 }
+    MetaSender:
+      type: object
+      description: Governed Meta sender metadata. Secret credential values are never serialized.
+      required: [id, organisationId, senderPoolId, wabaId, phoneNumberId, displayName, businessPhoneDisplay, credentialKey, graphApiVersion, status, health, version, createdBy, reason, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        organisationId: { type: string }
+        senderPoolId: { type: string }
+        wabaId: { type: string }
+        phoneNumberId: { type: string }
+        displayName: { type: string }
+        businessPhoneDisplay: { type: string }
+        credentialKey: { type: string, description: Non-secret credential reference key. }
+        graphApiVersion: { type: string }
+        status: { type: string, enum: [DRAFT, PENDING_APPROVAL, ACTIVE, REJECTED, RETIRED] }
+        health: { type: string, enum: [HEALTH_UNKNOWN, HEALTHY, DEGRADED, UNAVAILABLE] }
+        healthObservedAt: { type: string, format: date-time }
+        effectiveFrom: { type: string, format: date-time }
+        effectiveTo: { type: string, format: date-time }
+        version: { type: integer, format: int64, minimum: 1 }
+        createdBy: { type: string }
+        submittedBy: { type: string }
+        approvedBy: { type: string }
+        reason: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    MetaSenderVerification:
+      type: object
+      required: [phoneNumberId, displayPhoneNumber, verifiedName, qualityRating]
+      properties:
+        phoneNumberId: { type: string }
+        displayPhoneNumber: { type: string }
+        verifiedName: { type: string }
+        qualityRating: { type: string }
+    MetaTemplate:
+      type: object
+      required: [organisationId, wabaId, metaTemplateId, name, language, category, status, components, componentHash, lastSyncedAt]
+      properties:
+        id: { type: string }
+        organisationId: { type: string }
+        wabaId: { type: string }
+        metaTemplateId: { type: string }
+        name: { type: string }
+        language: { type: string }
+        category: { type: string }
+        status: { type: string }
+        qualitySignal: { type: string }
+        components:
+          type: array
+          description: Structured Meta template components as synchronized from the Graph API.
+          items: { type: object, additionalProperties: true }
+        componentHash: { type: string, pattern: '^[0-9a-f]{64}$' }
+        lastSyncedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    MetaComponentBinding:
+      type: object
+      required: [type]
+      properties:
+        type: { type: string, enum: [HEADER, BODY] }
+        subType: { type: string, enum: [TEXT, IMAGE, VIDEO, DOCUMENT] }
+        index: { type: integer, minimum: 0 }
+        parameterNames: { type: array, items: { type: string, minLength: 1 } }
+    MetaBindingRequest:
+      type: object
+      required: [metaSenderId, templateName, language, componentBindings]
+      properties:
+        metaSenderId: { type: string }
+        templateName: { type: string, minLength: 1 }
+        language: { type: string, minLength: 1 }
+        componentBindings:
+          type: array
+          minItems: 1
+          items: { $ref: '#/components/schemas/MetaComponentBinding' }
+    MetaBinding:
+      type: object
+      required: [messageVersionId, templateName, language, bodyVariableNames, templateComponentHash, createdBy, createdAt]
+      properties:
+        messageVersionId: { type: string }
+        templateName: { type: string }
+        language: { type: string }
+        bodyVariableNames: { type: array, items: { type: string } }
+        mediaHeaderType: { type: string, enum: [IMAGE, VIDEO, DOCUMENT] }
+        componentBindings:
+          type: array
+          items: { $ref: '#/components/schemas/MetaComponentBinding' }
+        templateComponentHash: { type: string, pattern: '^[0-9a-f]{64}$' }
+        createdBy: { type: string }
+        createdAt: { type: string, format: date-time }
     VersionedReason:
       type: object
       required: [expectedVersion, reason]
@@ -4192,20 +4533,15 @@ components:
         reason: { type: string, minLength: 8, maxLength: 1000 }
     CampaignTransition:
       type: object
-      required: [action, actorId]
+      required: [action, expectedVersion]
       properties:
         action:
           type: string
           enum:
             [SUBMIT_CONSENT_REVIEW, APPROVE_CONSENT, START_AUDIENCE_BUILD, VALIDATE_AUDIENCE,
              SUBMIT_MESSAGE, APPROVE_MESSAGE, APPROVE_COMMERCIAL, REQUEST_FINAL_APPROVAL,
-             APPROVE_FINAL, START_DISPATCH, PAUSE, RESUME, COMPLETE, CANCEL]
-        actorId: { type: string, format: uuid }
+             APPROVE_FINAL]
         reason: { type: string }
         audienceSnapshotId: { type: string, format: uuid }
-        audienceSnapshotHash: { type: string }
-        eligibleAudienceCount: { type: integer, format: int64 }
         messageVersionId: { type: string, format: uuid }
-        messageBody: { type: string }
-        failedCount: { type: integer, format: int64 }
-        unknownCount: { type: integer, format: int64 }
+        expectedVersion: { type: integer, format: int64, minimum: 1 }

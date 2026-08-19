@@ -139,3 +139,20 @@ func TestRuntimeRegistrationAcceptsRepeatedHeartbeatsAtGovernedNodeVersion(t *te
 		t.Fatalf("unexpected repeated heartbeat evidence: %#v", events)
 	}
 }
+
+func TestValidateRuntimeReportRejectsNonProductionInternalURLs(t *testing.T) {
+	now := time.Now().UTC()
+	pool := GatewayPool{ID: "pool-1", Provider: GatewayProviderOpenWA, Engine: GatewayEngineBaileys, AdapterVersion: "adapter-1", Status: GatewayPoolActive, Capabilities: []Capability{CapabilitySendText}}
+	for _, rawURL := range []string{
+		"https://host.docker.internal:2785",
+		"https://bridge.docker.internal:2785",
+		"https://127.0.0.1:2785",
+		"https://[::1]:2785",
+		"https://169.254.10.20:2785",
+	} {
+		report := RuntimeReport{NodeID: "node-1", ExpectedNodeVersion: 1, GatewayPoolID: pool.ID, Provider: "OPENWA", Engine: "BAILEYS", AdapterVersion: "adapter-1", GatewayVersion: "v1", WorkerVersion: "w1", ConfigurationVersion: "cfg1", BootID: "boot-1", InternalURL: rawURL, Capabilities: []Capability{CapabilitySendText}, RuntimeState: RuntimeReady, Capacity: 1, ResourceHealth: completeRuntimeResourceHealth(), ObservedAt: now}
+		if err := validateRuntimeReport(&report, "node-1", pool, now); !errors.Is(err, ErrRuntimeDrift) {
+			t.Fatalf("runtime registration accepted non-production internal URL %q: %v", rawURL, err)
+		}
+	}
+}

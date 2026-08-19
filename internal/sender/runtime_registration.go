@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -266,7 +268,7 @@ func validateRuntimeReport(report *RuntimeReport, pathNodeID string, pool Gatewa
 	if pool.EffectiveTo != nil && !pool.EffectiveTo.After(now) {
 		return ErrRuntimeDrift
 	}
-	if !strings.HasPrefix(report.InternalURL, "https://") && !strings.HasPrefix(report.InternalURL, "http://") {
+	if !validRuntimeInternalURL(report.InternalURL) {
 		return ErrRuntimeDrift
 	}
 	switch report.RuntimeState {
@@ -348,4 +350,30 @@ func (s *RuntimeRegistrationService) Events(ctx context.Context, nodeID string, 
 		limit = 200
 	}
 	return s.Store.ListRuntimeEvents(ctx, strings.TrimSpace(nodeID), limit)
+}
+
+func validRuntimeInternalURL(raw string) bool {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return false
+	}
+	hostname := strings.ToLower(strings.Trim(parsed.Hostname(), "[]"))
+	if hostname == "control-api" || hostname == "openwa-gateway" || hostname == "localhost" ||
+		strings.HasSuffix(hostname, ".localhost") || hostname == "host.docker.internal" || strings.HasSuffix(hostname, ".docker.internal") {
+		return false
+	}
+	ip := net.ParseIP(hostname)
+	if ip != nil && (ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()) {
+		return false
+	}
+	if parsed.Scheme == "https" {
+		return true
+	}
+	if ip == nil {
+		return false
+	}
+	if v4 := ip.To4(); v4 != nil {
+		return v4[0] == 10 || (v4[0] == 172 && v4[1] >= 16 && v4[1] <= 31) || (v4[0] == 192 && v4[1] == 168)
+	}
+	return len(ip) == net.IPv6len && (ip[0]&0xfe) == 0xfc
 }

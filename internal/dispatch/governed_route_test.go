@@ -13,6 +13,7 @@ func validGovernedRouteEvidence() governedRouteEvidence {
 		SessionSenderPoolID:             "sender-pool-1",
 		SessionConfigurationVersion:     4,
 		GatewayNodeID:                   "node-1",
+		GatewayNodeURL:                  "http://10.20.30.40:2785",
 		GatewayNodeVersion:              9,
 		GatewayNodeStatus:               "READY",
 		SessionLeaseVersion:             12,
@@ -78,5 +79,14 @@ func TestValidateGovernedRouteEvidenceFailsClosed(t *testing.T) {
 				t.Fatalf("expected %q error, got %v", tc.want, err)
 			}
 		})
+	}
+}
+
+func TestValidateGovernedRouteEvidenceRejectsMissingSelectedNodeURL(t *testing.T) {
+	now := time.Date(2026, 8, 5, 12, 0, 0, 0, time.UTC)
+	value := validGovernedRouteEvidence()
+	value.GatewayNodeURL = ""
+	if err := validateGovernedRouteEvidence(value, "text", now); err == nil {
+		t.Fatal("governed route accepted selected node without a network destination")
 	}
 }

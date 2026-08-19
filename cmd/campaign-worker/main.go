@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"net"
 	"net/http"
@@ -10,17 +11,23 @@ import (
 	"syscall"
 	"time"
 
+	"campaign-platform/internal/audit"
 	"campaign-platform/internal/campaign"
+	"campaign-platform/internal/commercial"
+	"campaign-platform/internal/consent"
 	"campaign-platform/internal/delivery"
 	"campaign-platform/internal/dispatch"
 	"campaign-platform/internal/execution"
 	"campaign-platform/internal/jobs"
 	"campaign-platform/internal/message"
+	"campaign-platform/internal/metacloud"
 	"campaign-platform/internal/observability"
+	"campaign-platform/internal/organisation"
 	"campaign-platform/internal/outbox"
 	"campaign-platform/internal/persistence/database"
 	postgresrepo "campaign-platform/internal/persistence/postgres"
 	"campaign-platform/internal/platformpolicy"
+	"campaign-platform/internal/provider"
 	"campaign-platform/internal/sender"
 	sharedcrypto "campaign-platform/internal/shared/crypto"
 	"campaign-platform/internal/storage"
@@ -32,11 +39,9 @@ import (
 func main() {
 	if len(os.Args) == 3 && os.Args[1] == "healthcheck" {
 		client := &http.Client{Timeout: 3 * time.Second}
-		response, err := client.Get(os.Args[2])
-		if err != nil || response.StatusCode != http.StatusOK {
+		if !healthcheckOK(client, os.Args[2]) {
 			os.Exit(1)
 		}
-		_ = response.Body.Close()
 		return
 	}
 	logger := observability.NewLogger(os.Stdout, "campaign-worker", os.Getenv("APP_ENV"))
@@ -67,9 +72,10 @@ func main() {
 	jobRepository := &jobs.PostgreSQLRepository{DB: db}
 	jobService := jobs.NewService(jobRepository)
 	outboxRepository := &outbox.PostgreSQLRepository{DB: db}
+	auditRecorder := audit.NewRecorder(&audit.PostgreSQLRepository{DB: db})
 	outboxRunner := &outbox.Runner{
 		Repository: outboxRepository,
-		Publisher:  &outbox.Publisher{Outbox: outboxRepository, Jobs: jobService, QueueBackpressureLimit: cfg.DispatchQueueBackpressureLimit, BackpressureRetryAfter: cfg.DispatchQueueBackpressureRetry},
+		Publisher:  &outbox.Publisher{Outbox: outboxRepository, Jobs: jobService, Audit: auditRecorder, QueueBackpressureLimit: cfg.DispatchQueueBackpressureLimit, BackpressureRetryAfter: cfg.DispatchQueueBackpressureRetry},
 		Owner:      cfg.WorkerID + ":outbox", Lease: cfg.OutboxLease,
 		Batch: cfg.OutboxClaimBatch, Concurrency: cfg.OutboxConcurrency,
 		PollInterval: cfg.OutboxPollInterval, OperationTimeout: cfg.OperationTimeout,
@@ -91,6 +97,7 @@ func main() {
 	allocator := &sender.PostgreSQLAllocator{DB: db, HeartbeatTTL: cfg.SenderHeartbeatTTL}
 	materials := &dispatch.PostgreSQLMaterialLoader{
 		DB: db, Protector: protector, Allocator: allocator,
+		MetaHealthStaleAfter: cfg.MetaHealthStaleAfter, MetaConversationWindow: cfg.MetaConversationWindow,
 		Objects: dispatch.SignedObjectResolver{Signer: storage.URLSigner{
 			BaseURL: cfg.MediaDownloadBaseURL, Secret: []byte(cfg.MediaDownloadSecret),
 		}},
@@ -109,6 +116,11 @@ func main() {
 			ExpectContinueTimeout: time.Second,
 		},
 	}
+	transportRouter, err := buildCampaignTransportRouter(cfg, gatewayClient)
+	if err != nil {
+		logger.Error("campaign worker transport configuration is invalid", "error", err)
+		os.Exit(1)
+	}
 	testMessageRepository := &testmessage.PostgreSQLRepository{DB: db}
 	testMessageService := message.NewService(&message.PostgreSQLRepository{DB: db})
 	dispatchHandler := &dispatch.Handler{
@@ -117,10 +129,7 @@ func main() {
 		Eligibility: &dispatch.PostgreSQLFinalEligibility{DB: db},
 		Pacing:      &dispatch.PostgreSQLPacingController{DB: db, Policies: pacingPolicies},
 		Maintenance: maintenance,
-		Gateway: &dispatch.HTTPGateway{
-			BaseURL: cfg.GatewayURL, CommandSecret: cfg.GatewayCommandSecret,
-			Client: gatewayClient, MaximumResponseBytes: cfg.GatewayMaxResponse,
-		},
+		Gateway:     transportRouter,
 	}
 	testMessageRunner := &testmessage.Runner{
 		Repository: testMessageRepository,
@@ -130,16 +139,34 @@ func main() {
 			Messages:   testMessageService,
 			Routes:     testMessageRepository,
 			Pacing:     &dispatch.PostgreSQLPacingController{DB: db, Policies: pacingPolicies},
-			Gateway:    &dispatch.HTTPGateway{BaseURL: cfg.GatewayURL, CommandSecret: cfg.GatewayCommandSecret, Client: gatewayClient, MaximumResponseBytes: cfg.GatewayMaxResponse},
+			Gateway:    &dispatch.HTTPGateway{BaseURL: cfg.GatewayURL, CommandSecret: cfg.GatewayCommandSecret, RequireNodeURL: true, Client: gatewayClient, MaximumResponseBytes: cfg.GatewayMaxResponse},
 			Media:      dispatch.SignedObjectResolver{Signer: storage.URLSigner{BaseURL: cfg.MediaDownloadBaseURL, Secret: []byte(cfg.MediaDownloadSecret)}},
 		},
 		Owner: cfg.WorkerID + ":test-message", Lease: cfg.JobLease, PollInterval: cfg.JobPollInterval, Batch: 20,
 	}
 
-	campaignService := campaign.NewService(&postgresrepo.CampaignRepository{DB: db})
+	campaignOrganisations := organisation.NewService(&postgresrepo.OrganisationRepository{DB: db})
+	campaignPolicies := &organisation.PolicyAdministration{Store: &postgresrepo.OrganisationPolicyRepository{DB: db}, Organisations: campaignOrganisations}
+	campaignReviews := consent.NewService(&postgresrepo.ConsentRepository{DB: db}).WithOrganisationReader(campaignOrganisations)
+	campaignCommercial := &commercial.Service{Store: &postgresrepo.CommercialRepository{DB: db}}
+	campaignProviders := &provider.Service{Store: &provider.PostgreSQLStore{DB: db}}
+	campaignGatewayPools := &sender.GatewayPoolService{Store: senderStore}
+	campaignService := campaign.NewService(&postgresrepo.CampaignRepository{DB: db}).
+		WithOrganisationReader(campaignOrganisations).
+		WithOrganisationPolicies(campaignPolicies).
+		WithCommercialApprovals(campaignCommercial).
+		WithConsentReviews(campaignReviews).
+		WithProviderCapabilities(campaignProviders).
+		WithGatewayPools(campaignGatewayPools)
 	executionStore := &execution.PostgreSQLStore{DB: db}
-	routingPlans := &execution.RoutingAdministration{Store: &execution.PostgreSQLRoutingPlanStore{DB: db}, Campaigns: campaignService}
-	executionCoordinator := &execution.Coordinator{Campaigns: campaignService, Store: executionStore, SafetyMarginPercent: 15, RoutingPlans: routingPlans, Maintenance: maintenance}
+	executionCommitter := &execution.PostgreSQLLifecycleCommitter{
+		DB: db, Retry: postgresrepo.DefaultRetryPolicy(),
+	}
+	routingPlans := buildExecutionRoutingAdministration(db, campaignService, senderStore, cfg.MetaHealthStaleAfter)
+	executionCoordinator := &execution.Coordinator{
+		Campaigns: campaignService, Store: executionStore, Committer: executionCommitter,
+		SafetyMarginPercent: 15, RoutingPlans: routingPlans, Maintenance: maintenance,
+	}
 	executionRunner := &execution.Runner{Repository: executionStore, Coordinator: executionCoordinator, Owner: cfg.WorkerID + ":execution", Lease: cfg.JobLease, PollInterval: cfg.JobPollInterval, Batch: 20}
 	shardRunner := &execution.ShardRunner{Repository: &execution.PostgreSQLShardRepository{DB: db}, Owner: cfg.WorkerID + ":shards", TargetSize: cfg.DispatchShardTargetSize, DiscoveryBatch: 10, ClaimBatch: cfg.DispatchShardClaimBatch, Lease: cfg.JobLease, PollInterval: cfg.JobPollInterval}
 
@@ -227,4 +254,27 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info("campaign worker stopped", "activeDispatch", jobRunner.Active(), "activeOutbox", outboxRunner.Active())
+}
+
+func healthcheckOK(client *http.Client, url string) bool {
+	if client == nil {
+		return false
+	}
+	response, err := client.Get(url)
+	if response != nil && response.Body != nil {
+		defer response.Body.Close()
+	}
+	return err == nil && response != nil && response.StatusCode == http.StatusOK
+}
+func buildExecutionRoutingAdministration(db *sql.DB, campaigns execution.CampaignReader, senderStore *sender.PostgreSQLGovernanceStore, metaHealthStaleAfter time.Duration) *execution.RoutingAdministration {
+	if senderStore == nil {
+		senderStore = &sender.PostgreSQLGovernanceStore{DB: db}
+	}
+	return &execution.RoutingAdministration{
+		Store: &execution.PostgreSQLRoutingPlanStore{DB: db}, Campaigns: campaigns,
+		ProviderCapabilities: &provider.Service{Store: &provider.PostgreSQLStore{DB: db}},
+		GatewayPools:         &sender.GatewayPoolService{Store: senderStore},
+		MetaSenders:          &metacloud.PostgreSQLStore{DB: db}, MetaTemplates: &metacloud.PostgreSQLTemplateStore{DB: db},
+		MetaHealthStaleAfter: metaHealthStaleAfter,
+	}
 }

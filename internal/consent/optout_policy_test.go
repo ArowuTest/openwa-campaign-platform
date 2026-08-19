@@ -30,3 +30,23 @@ func TestGovernedOptOutPolicyMakerCheckerAndActivation(t *testing.T) {
 		t.Fatalf("status %s", active.Status)
 	}
 }
+
+func TestOptOutPolicyCreatorCannotApproveAfterIndependentSubmission(t *testing.T) {
+	ctx := context.Background()
+	admin := &OptOutPolicyAdministration{Store: NewMemoryOptOutPolicyStore(GovernedOptOutPolicy{})}
+	draft, err := admin.CreateDraft(ctx, []string{"STOP"}, time.Now().Add(time.Hour), "maker", "maker creates policy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := admin.Submit(ctx, draft.ID, draft.Version, "submitter", "submitter sends for review")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = admin.Decide(ctx, pending.ID, pending.Version, true, "maker", "maker self approves"); !errors.Is(err, ErrOptOutPolicyInvalid) {
+		t.Fatalf("creator approved own opt-out policy after another actor submitted it: %v", err)
+	}
+	stored, err := admin.Store.Get(ctx, pending.ID)
+	if err != nil || stored.Status != OptOutPolicyPending {
+		t.Fatalf("rejected decision mutated policy: status=%s err=%v", stored.Status, err)
+	}
+}

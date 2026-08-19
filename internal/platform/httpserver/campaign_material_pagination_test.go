@@ -16,14 +16,28 @@ type campaignMaterialPaginationRepository struct {
 	items []campaign.MaterialChangeEvent
 }
 
-func (*campaignMaterialPaginationRepository) Create(context.Context, campaign.Campaign) error { return nil }
-func (*campaignMaterialPaginationRepository) CompareAndSwap(context.Context, campaign.Campaign, int64) error { return nil }
-func (*campaignMaterialPaginationRepository) Get(_ context.Context, id string) (campaign.Campaign, error) { return campaign.Campaign{ID: id}, nil }
-func (*campaignMaterialPaginationRepository) ListPage(context.Context, int, *time.Time, string) ([]campaign.Campaign, error) { return nil, nil }
-func (*campaignMaterialPaginationRepository) AmendMaterial(context.Context, campaign.Campaign, campaign.MaterialChangeEvent, int64) error { return nil }
-func (*campaignMaterialPaginationRepository) ListMaterialChanges(context.Context, string) ([]campaign.MaterialChangeEvent, error) { return nil, nil }
+func (*campaignMaterialPaginationRepository) Create(context.Context, campaign.Campaign) error {
+	return nil
+}
+func (*campaignMaterialPaginationRepository) CompareAndSwap(context.Context, campaign.Campaign, int64) error {
+	return nil
+}
+func (*campaignMaterialPaginationRepository) Get(_ context.Context, id string) (campaign.Campaign, error) {
+	return campaign.Campaign{ID: id}, nil
+}
+func (*campaignMaterialPaginationRepository) ListPage(context.Context, int, *time.Time, string) ([]campaign.Campaign, error) {
+	return nil, nil
+}
+func (*campaignMaterialPaginationRepository) AmendMaterial(context.Context, campaign.Campaign, campaign.MaterialChangeEvent, int64) error {
+	return nil
+}
+func (*campaignMaterialPaginationRepository) ListMaterialChanges(context.Context, string) ([]campaign.MaterialChangeEvent, error) {
+	return nil, nil
+}
 func (r *campaignMaterialPaginationRepository) ListMaterialChangePage(_ context.Context, _ string, limit int, _ int64) ([]campaign.MaterialChangeEvent, error) {
-	if len(r.items) > limit { return append([]campaign.MaterialChangeEvent(nil), r.items[:limit]...), nil }
+	if len(r.items) > limit {
+		return append([]campaign.MaterialChangeEvent(nil), r.items[:limit]...), nil
+	}
 	return append([]campaign.MaterialChangeEvent(nil), r.items...), nil
 }
 

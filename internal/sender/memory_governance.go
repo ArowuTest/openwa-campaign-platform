@@ -319,14 +319,21 @@ func (m *MemoryGovernanceStore) HeartbeatSession(_ context.Context, id string, e
 	if cur.Version != e {
 		return GovernedSession{}, ErrSenderConflict
 	}
-	if cur.Status != StatusQuarantined && cur.Status != StatusRetired && cur.Status != StatusRestricted {
+	if cur.Status != StatusQuarantined && cur.Status != StatusRetired && cur.Status != StatusRestricted && AllowedSessionTransition(cur.Status, v.Status) {
 		cur.Status = v.Status
 	}
 	cur.EngineVersion = v.EngineVersion
-	cur.SafeMessagesPerMinute = v.SafeMessagesPerMinute
-	cur.SafeDailyCapacity = v.SafeDailyCapacity
-	cur.InFlightLimit = v.InFlightLimit
-	cur.SentToday = v.SentToday
+	sameDay := false
+	if cur.LastHeartbeatAt != nil {
+		previous := cur.LastHeartbeatAt.UTC()
+		current := now.UTC()
+		sameDay = previous.Year() == current.Year() && previous.YearDay() == current.YearDay()
+	}
+	if !sameDay {
+		cur.SentToday = v.SentToday
+	} else if v.SentToday > cur.SentToday {
+		cur.SentToday = v.SentToday
+	}
 	cur.LastHeartbeatAt = &now
 	cur.Version++
 	m.sessions[id] = cur

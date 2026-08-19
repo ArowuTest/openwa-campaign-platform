@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
+import { isIP } from 'node:net';
 import { readFile, readdir, statfs } from 'node:fs/promises';
 import { GatewayIdentityService } from './gateway-identity.service';
 import { GatewayObservabilityService } from './observability.service';
@@ -32,6 +33,10 @@ export class RuntimeRegistrationService implements OnModuleInit, OnModuleDestroy
   constructor(private readonly identity: GatewayIdentityService, private readonly observability: GatewayObservabilityService) {}
 
   async onModuleInit(): Promise<void> {
+    if (process.env.NODE_ENV === 'production') {
+      this.advertisedInternalURL();
+      this.validateProductionControlPlaneBoundary();
+    }
     if (!this.runtimeURL() || Buffer.byteLength(process.env.GATEWAY_RUNTIME_SECRET ?? '') < 32) {
       if (process.env.NODE_ENV === 'production') throw new Error('gateway runtime registration is not configured');
       return;
@@ -65,6 +70,7 @@ export class RuntimeRegistrationService implements OnModuleInit, OnModuleDestroy
           'x-gateway-runtime-signature': signature,
           ...(this.observability.traceparent() ? { traceparent: this.observability.traceparent()! } : {})
         },
+        redirect: 'manual',
         signal: AbortSignal.timeout(boundedInteger(process.env.GATEWAY_RUNTIME_TIMEOUT_MS, 5_000, 1_000, 30_000))
       });
       if (!response.ok) throw new Error(`control plane returned HTTP ${response.status}`);
@@ -84,6 +90,55 @@ export class RuntimeRegistrationService implements OnModuleInit, OnModuleDestroy
     if (explicit) return explicit;
     const base = String(process.env.CONTROL_API_INTERNAL_URL ?? '').trim().replace(/\/+$/u, '');
     return base ? `${base}/api/v1/internal/gateway-nodes/${encodeURIComponent(this.identity.nodeId)}/runtime` : '';
+  }
+
+  private validateProductionControlPlaneBoundary(): void {
+    const keys = ['CONTROL_API_INTERNAL_URL','CONTROL_API_CALLBACK_URL','CONTROL_API_INBOUND_URL','MEDIA_DOWNLOAD_BASE_URL'] as const;
+    let controlHost = '';
+    for (const key of keys) {
+      const raw = String(process.env[key] ?? '').trim();
+      let parsed: URL;
+      try { parsed = new URL(raw); }
+      catch { throw new Error(`${key} must be a valid HTTPS cross-provider URL in production`); }
+      if (parsed.protocol !== 'https:' || !parsed.hostname) {
+        throw new Error(`${key} must be a valid HTTPS cross-provider URL in production`);
+      }
+      const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/gu, '');
+      if (isDisallowedProductionEndpoint(hostname)) throw new Error(`${key} must not use a Docker-local, loopback, or link-local cross-provider hostname`);
+      if (!controlHost) controlHost = hostname;
+      else if (hostname !== controlHost) throw new Error(`${key} must use the approved Railway control hostname`);
+    }
+    const allowed = String(process.env.SSRF_ALLOWED_HOSTS ?? '').split(',').map(value => value.trim().toLowerCase()).filter(Boolean);
+    if (allowed.length !== 1 || allowed[0] !== controlHost) {
+      throw new Error('SSRF_ALLOWED_HOSTS must contain exactly the approved Railway control hostname');
+    }
+  }
+  private advertisedInternalURL(): string {
+    const explicit = String(process.env.GATEWAY_INTERNAL_URL ?? '').trim().replace(/\/+$/u, '');
+    if (!explicit) {
+      if (process.env.NODE_ENV === 'production') throw new Error('GATEWAY_INTERNAL_URL is required in production');
+      return `http://openwa-gateway:${process.env.PORT ?? '2785'}`;
+    }
+    let parsed: URL;
+    try { parsed = new URL(explicit); }
+    catch { throw new Error('GATEWAY_INTERNAL_URL must be a valid http or https URL'); }
+    if ((parsed.protocol !== 'http:' && parsed.protocol !== 'https:') || !parsed.hostname) {
+      throw new Error('GATEWAY_INTERNAL_URL must be a valid http or https URL');
+    }
+    const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/gu, '');
+    if (process.env.NODE_ENV === 'production') {
+      if (isDisallowedProductionEndpoint(hostname)) {
+        throw new Error('GATEWAY_INTERNAL_URL must not advertise a Docker-local, loopback, or link-local production endpoint');
+      }
+      if (parsed.protocol === 'http:') {
+        if (!isPrivateNetworkAddress(hostname)) throw new Error('production HTTP GATEWAY_INTERNAL_URL must use a private network address');
+        const bind = String(process.env.GATEWAY_BIND_ADDRESS ?? '').trim().toLowerCase().replace(/^\[|\]$/gu, '');
+        if (!bind || !isIP(bind) || bind !== hostname) {
+          throw new Error('production HTTP GATEWAY_INTERNAL_URL must match GATEWAY_BIND_ADDRESS');
+        }
+      }
+    }
+    return explicit;
   }
 
   private async report(): Promise<Record<string, unknown>> {
@@ -113,7 +168,7 @@ export class RuntimeRegistrationService implements OnModuleInit, OnModuleDestroy
       workerVersion: process.version,
       configurationVersion: String(process.env.GATEWAY_CONFIGURATION_VERSION ?? identity.gatewayPoolVersion),
       bootId: this.bootId,
-      internalUrl: String(process.env.GATEWAY_INTERNAL_URL ?? `http://openwa-gateway:${process.env.PORT ?? '2785'}`),
+      internalUrl: this.advertisedInternalURL(),
       capabilities: identity.capabilities,
       runtimeState: String(process.env.GATEWAY_RUNTIME_STATE ?? 'READY').toUpperCase(),
       capacity: boundedInteger(process.env.GATEWAY_CAPACITY, 1, 1, 100_000),
@@ -125,6 +180,33 @@ export class RuntimeRegistrationService implements OnModuleInit, OnModuleDestroy
       observedAt: new Date().toISOString()
     };
   }
+}
+
+function isDisallowedProductionEndpoint(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/gu, '');
+  if (
+    normalized === 'control-api' || normalized === 'openwa-gateway' ||
+    normalized === 'localhost' || normalized.endsWith('.localhost') ||
+    normalized === 'host.docker.internal' || normalized.endsWith('.docker.internal')
+  ) return true;
+  const family = isIP(normalized);
+  if (family === 4) {
+    const octets = normalized.split('.').map(value => Number.parseInt(value, 10));
+    return octets[0] === 0 || octets[0] === 127 || (octets[0] === 169 && octets[1] === 254);
+  }
+  return family === 6 && (normalized === '::' || normalized === '::1' || /^fe[89ab][0-9a-f]:/iu.test(normalized));
+}
+
+function isPrivateNetworkAddress(hostname: string): boolean {
+  const normalized = hostname.toLowerCase().replace(/^\[|\]$/gu, '');
+  const family = isIP(normalized);
+  if (family === 4) {
+    const octets = normalized.split('.').map(value => Number.parseInt(value, 10));
+    if (octets[0] === 10) return true;
+    if (octets[0] === 192 && octets[1] === 168) return true;
+    return octets[0] === 172 && octets[1] >= 16 && octets[1] <= 31;
+  }
+  return family === 6 && /^f[cd][0-9a-f]{2}:/iu.test(normalized);
 }
 
 function measuredInteger(value: bigint, name: string): number {

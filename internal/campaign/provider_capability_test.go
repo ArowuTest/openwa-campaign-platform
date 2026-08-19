@@ -41,7 +41,7 @@ func (s *singleGatewayPoolStore) GetGatewayPool(_ context.Context, id string) (s
 }
 
 func matchingGatewayPool(engine sender.GatewayEngine, adapter string, capabilities ...sender.Capability) campaignGatewayPools {
-	return campaignGatewayPools{pool: sender.GatewayPool{ID: "gateway-1", Provider: sender.GatewayProviderOpenWA, Engine: engine, AdapterVersion: adapter, Status: sender.GatewayPoolActive, Capabilities: capabilities}}
+	return campaignGatewayPools{pool: sender.GatewayPool{ID: "gateway-1", Provider: sender.GatewayProviderOpenWA, Engine: engine, AdapterVersion: adapter, Status: sender.GatewayPoolActive, Version: 1, Capabilities: capabilities}}
 }
 
 func activeProviderRegistry(t *testing.T, engine, adapter string, capabilities ...provider.Capability) *provider.Service {
@@ -106,6 +106,15 @@ func TestCampaignCreationRequiresCompatibleGatewayPool(t *testing.T) {
 	}
 }
 
+func TestCampaignCreationLowercaseOpenWAStillRequiresCompatibleGatewayPool(t *testing.T) {
+	registry := activeProviderRegistry(t, "BAILEYS", "0.13.0", provider.CapabilitySendText)
+	service := NewService(NewMemoryRepository()).WithProviderCapabilities(registry).WithGatewayPools(matchingGatewayPool(sender.GatewayEngineBaileys, "0.12.0", sender.CapabilitySendText))
+	input := providerCampaignInput(Engine("baileys"), "0.13.0", "SEND_TEXT")
+	input.Transport.Provider = Provider("openwa")
+	if _, err := service.Create(context.Background(), input); err == nil {
+		t.Fatal("lowercase OpenWA bypassed governed gateway-pool capability fence")
+	}
+}
 func TestCampaignCreationFreezesCompatibleGatewayAndProviderEvidence(t *testing.T) {
 	registry := activeProviderRegistry(t, "BAILEYS", "0.13.0", provider.CapabilitySendText)
 	service := NewService(NewMemoryRepository()).WithProviderCapabilities(registry).WithGatewayPools(matchingGatewayPool(sender.GatewayEngineBaileys, "0.13.0", sender.CapabilitySendText))
@@ -115,6 +124,32 @@ func TestCampaignCreationFreezesCompatibleGatewayAndProviderEvidence(t *testing.
 	}
 	if created.Transport.ProviderDefinitionID != "provider-definition" || created.Transport.ProviderDefinitionVersion != 1 {
 		t.Fatalf("unexpected provider binding %+v", created.Transport)
+	}
+}
+
+func TestCampaignCreationAllowsDirectMetaWithoutOpenWAGatewayPool(t *testing.T) {
+	store := provider.NewMemoryStore()
+	now := time.Now().UTC()
+	_, err := store.Create(context.Background(), provider.Definition{
+		ID: "meta-provider-definition", Provider: "META", Channel: provider.ChannelWhatsApp,
+		Engine: "CLOUD_API", AdapterVersion: "1.0.0", Capabilities: []provider.Capability{provider.CapabilitySendText, provider.CapabilitySendTemplate},
+		Status: provider.StatusActive, EffectiveFrom: now.Add(-time.Hour), Version: 1,
+		CreatedBy: "maker", ApprovedBy: "checker", Reason: "approved Meta Cloud route", CreatedAt: now, UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := providerCampaignInput(EngineMetaCloud, "1.0.0", "SEND_TEXT")
+	input.Transport.Provider = ProviderMeta
+	input.Transport.GatewayPoolID = ""
+	input.Transport.MetaSenderID = "22222222-2222-2222-2222-222222222222"
+	service := NewService(NewMemoryRepository()).WithProviderCapabilities(&provider.Service{Store: store, Clock: func() time.Time { return now }}).WithGatewayPools(matchingGatewayPool(sender.GatewayEngineBaileys, "0.13.0", sender.CapabilitySendText))
+	created, err := service.Create(context.Background(), input)
+	if err != nil {
+		t.Fatalf("direct Meta campaign must not require an OpenWA gateway pool: %v", err)
+	}
+	if created.Transport.Provider != ProviderMeta || created.Transport.GatewayPoolID != "" || created.Transport.GatewayPoolVersion != 0 {
+		t.Fatalf("unexpected direct Meta transport: %+v", created.Transport)
 	}
 }
 

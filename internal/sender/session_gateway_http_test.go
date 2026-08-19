@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -50,5 +51,38 @@ func TestHTTPSessionGatewayStartCarriesGovernedProxy(t *testing.T) {
 	}
 	if runtimeBody["reconnectMode"] != string(ReconnectBounded) || runtimeBody["configurationId"] != "config-1" || runtimeBody["scopeType"] != "SENDER_SESSION" {
 		t.Fatalf("runtime body=%#v", runtimeBody)
+	}
+}
+
+func TestHTTPSessionGatewayDoesNotFollowSignedRedirects(t *testing.T) {
+	redirectHits := 0
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		redirectHits++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"session-1","status":"ready"}`))
+	}))
+	defer target.Close()
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/capture", http.StatusTemporaryRedirect)
+	}))
+	defer origin.Close()
+	gateway := &HTTPSessionGateway{CommandSecret: "01234567890123456789012345678901"}
+	_, err := gateway.Start(context.Background(), Node{ID: "node-1", InternalURL: origin.URL, GatewayPoolID: "pool-1", Provider: "OPENWA", Engine: "BAILEYS", AdapterVersion: "0.13.0", Version: 7}, GovernedSession{ID: "session-1"}, nil, nil)
+	if err == nil {
+		t.Fatal("signed session command followed redirect and reported success")
+	}
+	if redirectHits != 0 {
+		t.Fatalf("signed session command reached redirect target %d time(s)", redirectHits)
+	}
+}
+
+func TestHTTPSessionGatewayRejectsNonHTTPNodeURL(t *testing.T) {
+	gateway := &HTTPSessionGateway{CommandSecret: "01234567890123456789012345678901"}
+	_, err := gateway.Health(context.Background(), Node{
+		ID: "node-1", InternalURL: "ftp://gateway.example", GatewayPoolID: "pool-1",
+		Provider: "OPENWA", Engine: "BAILEYS", AdapterVersion: "0.13.0", Version: 7,
+	}, GovernedSession{ID: "session-1"})
+	if err == nil || !strings.Contains(err.Error(), "valid governed gateway node URL") {
+		t.Fatalf("non-HTTP governed node URL was not rejected at validation: %v", err)
 	}
 }

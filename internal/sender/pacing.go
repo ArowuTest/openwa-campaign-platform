@@ -224,7 +224,7 @@ func (s *PacingAdministration) Decide(ctx context.Context, ident string, expecte
 	if p.Version != expected {
 		return PacingPolicy{}, ErrPacingConflict
 	}
-	if p.Status != PacingPending || actor == "" || actor == p.SubmittedBy || len(strings.TrimSpace(reason)) < 5 {
+	if p.Status != PacingPending || actor == "" || actor == p.CreatedBy || actor == p.SubmittedBy || len(strings.TrimSpace(reason)) < 5 {
 		return PacingPolicy{}, ErrPacingInvalid
 	}
 	if approve {

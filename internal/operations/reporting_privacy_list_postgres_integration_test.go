@@ -25,11 +25,14 @@ func TestPostgreSQLReportingPrivacyPaginationContinuesWithoutSkipping(t *testing
 	if err := db.PingContext(ctx); err != nil {
 		t.Fatal(err)
 	}
-	var actor string
-	if err := db.QueryRowContext(ctx, `SELECT gen_random_uuid()::text`).Scan(&actor); err != nil {
+	var actor, orgID string
+	if err := db.QueryRowContext(ctx, `SELECT gen_random_uuid()::text,gen_random_uuid()::text`).Scan(&actor, &orgID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.ExecContext(ctx, `INSERT INTO internal_users(id,email,display_name,status,mfa_required) VALUES($1::uuid,$2,'Reporting Pagination','DISABLED',false)`, actor, "reporting-pagination-"+actor+"@internal.invalid"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO organisations(id,legal_name,status) VALUES($1::uuid,$2,'ACTIVE')`, orgID, "Reporting pagination "+orgID); err != nil {
 		t.Fatal(err)
 	}
 	store := &PostgreSQLReportingPrivacyStore{DB: db}
@@ -39,20 +42,20 @@ func TestPostgreSQLReportingPrivacyPaginationContinuesWithoutSkipping(t *testing
 	for i := 0; i < 3; i++ {
 		at := base.Add(time.Duration(i) * time.Minute)
 		admin.Clock = func() time.Time { return at }
-		v, createErr := admin.Create(ctx, ReportingPrivacyPolicy{MinimumCohortSize: 10}, actor, "pagination integration", "")
+		v, createErr := admin.Create(ctx, ReportingPrivacyPolicy{OrganisationID: orgID, MinimumCohortSize: 10}, actor, "pagination integration", "")
 		if createErr != nil {
 			t.Fatal(createErr)
 		}
 		created = append(created, v)
 	}
-	first, err := admin.ListPage(ctx, "", 2, "")
+	first, err := admin.ListPage(ctx, orgID, 2, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(first.Items) != 2 || first.NextCursor == "" || first.Items[0].ID != created[2].ID || first.Items[1].ID != created[1].ID {
 		t.Fatalf("unexpected first reporting page: %#v", first)
 	}
-	second, err := admin.ListPage(ctx, "", 2, first.NextCursor)
+	second, err := admin.ListPage(ctx, orgID, 2, first.NextCursor)
 	if err != nil {
 		t.Fatal(err)
 	}

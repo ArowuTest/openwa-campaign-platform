@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 	"time"
@@ -176,7 +177,7 @@ func (r *PostgreSQLRepository) CreateSend(ctx context.Context, v Send) (Send, er
 	if err != nil {
 		return Send{}, fmt.Errorf("encode test-message variable values: %w", err)
 	}
-	_, err = r.DB.ExecContext(ctx, `INSERT INTO test_message_sends(id,campaign_id,message_version_id,message_content_hash,test_recipient_id,gateway_pool_id,gateway_pool_version,sender_pool_id,provider,engine,provider_adapter_version,provider_capability_definition_id,provider_capability_definition_version,sender_session_id,gateway_node_id,gateway_node_version,session_lease_version,session_configuration_version,authority_expires_at,route_reference,variable_values,status,created_by,reason,idempotency_key,created_at,updated_at) VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5::uuid,$6::uuid,$7,NULLIF($8,'')::uuid,$9,$10,$11,$12::uuid,$13,$14::uuid,$15::uuid,$16,$17,$18,$19,$20,$21::jsonb,$22,$23::uuid,$24,$25,$26,$26) ON CONFLICT (idempotency_key) DO NOTHING`, v.ID, v.CampaignID, v.MessageVersionID, v.MessageContentHash, v.TestRecipientID, v.GatewayPoolID, v.GatewayPoolVersion, v.SenderPoolID, v.Provider, v.Engine, v.ProviderAdapterVersion, v.ProviderDefinitionID, v.ProviderDefinitionVersion, v.SenderSessionID, v.GatewayNodeID, v.GatewayNodeVersion, v.SessionLeaseVersion, v.SessionConfigurationVersion, v.AuthorityExpiresAt, v.RouteReference, values, v.Status, v.CreatedBy, v.Reason, v.IdempotencyKey, v.CreatedAt)
+	_, err = r.DB.ExecContext(ctx, `INSERT INTO test_message_sends(id,campaign_id,message_version_id,message_content_hash,test_recipient_id,gateway_pool_id,gateway_pool_version,sender_pool_id,provider,engine,provider_adapter_version,provider_capability_definition_id,provider_capability_definition_version,sender_session_id,gateway_node_id,gateway_node_version,session_lease_version,session_configuration_version,authority_expires_at,route_reference,variable_values,status,created_by,reason,idempotency_key,created_at,updated_at) VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5::uuid,$6::uuid,$7,NULLIF($8,'')::uuid,$9,$10,$11,$12::uuid,$13,$14::uuid,$15::uuid,$16,$17,$18,$19,$20,$21::jsonb,$22,$23::uuid,$24,$25,$26,$26) ON CONFLICT (idempotency_key) DO NOTHING`, v.ID, v.CampaignID, v.MessageVersionID, v.MessageContentHash, v.TestRecipientID, v.GatewayPoolID, v.GatewayPoolVersion, v.SenderPoolID, v.Provider, v.Engine, v.ProviderAdapterVersion, v.ProviderDefinitionID, v.ProviderDefinitionVersion, v.SenderSessionID, v.GatewayNodeID, v.GatewayNodeVersion, v.SessionLeaseVersion, v.SessionConfigurationVersion, v.AuthorityExpiresAt, v.RouteReference, string(values), v.Status, v.CreatedBy, v.Reason, v.IdempotencyKey, v.CreatedAt)
 	if err != nil {
 		return Send{}, fmt.Errorf("create test-message send: %w", err)
 	}
@@ -340,14 +341,14 @@ func (r *PostgreSQLRepository) ValidateTestRoute(ctx context.Context, req RouteR
 		return RouteEvidence{}, ErrInvalid
 	}
 
-	var gatewayAdapter, definitionAdapter, definitionID, minimumGatewayVersion, gatewayNodeID string
+	var gatewayAdapter, definitionAdapter, definitionID, minimumGatewayVersion, gatewayNodeID, gatewayNodeURL string
 	var gatewayVersion, definitionVersion, gatewayNodeVersion, sessionLeaseVersion, sessionConfigurationVersion int64
 	var authorityExpiresAt time.Time
 	var gatewayCapsJSON, definitionCapsJSON []byte
 	err := r.DB.QueryRowContext(ctx, `
 SELECT g.version,g.adapter_version,g.capabilities,pd.adapter_version,pd.id::text,pd.version,
        coalesce(pd.minimum_gateway_version,''),to_json(pd.capabilities),
-       sn.id::text,sn.governance_version,s.governance_version,sl.version,sl.expires_at
+       sn.id::text,coalesce(sn.internal_url,''),sn.governance_version,s.governance_version,sl.version,sl.expires_at
 FROM campaigns c
 JOIN sender_sessions s ON s.id=$1::uuid
 JOIN sender_nodes sn ON sn.id=s.node_id
@@ -373,13 +374,13 @@ WHERE c.id=$2::uuid
   AND ($6='' OR sp.status='ACTIVE')
   AND g.provider=$4 AND g.engine=$5
   AND g.status='ACTIVE' AND s.status IN ('READY','BUSY')
-  AND sn.status='READY' AND NOT sn.draining AND sn.last_heartbeat_at > $7 - interval '90 seconds'
-  AND s.last_heartbeat_at > $7 - interval '90 seconds'
-  AND sl.expires_at > $7
+  AND sn.status='READY' AND NOT sn.draining AND sn.last_heartbeat_at > $7::timestamptz - interval '90 seconds'
+  AND s.last_heartbeat_at > $7::timestamptz - interval '90 seconds'
+  AND sl.expires_at > $7::timestamptz
   AND pd.provider=$4 AND pd.channel='WHATSAPP' AND pd.engine=$5
   AND pd.status='ACTIVE'
-  AND pd.effective_from <= $7
-  AND (pd.effective_to IS NULL OR pd.effective_to > $7)
+  AND pd.effective_from <= $7::timestamptz
+  AND (pd.effective_to IS NULL OR pd.effective_to > $7::timestamptz)
   AND (
     (route.routing_plan_id IS NOT NULL
       AND route.provider=$4 AND route.engine=$5
@@ -391,12 +392,12 @@ WHERE c.id=$2::uuid
       AND c.transport_provider=$4 AND c.transport_engine=$5
       AND c.provider_adapter_version=g.adapter_version
       AND c.gateway_pool_version=g.version
-      AND coalesce(c.gateway_pool_id,'')=$3)
+      AND coalesce(c.gateway_pool_id,'')=$3::text)
   )
   AND pd.adapter_version=g.adapter_version
 LIMIT 1`, req.SessionID, req.CampaignID, req.GatewayPoolID, req.Provider, req.Engine, req.SenderPoolID, req.At.UTC()).Scan(
 		&gatewayVersion, &gatewayAdapter, &gatewayCapsJSON, &definitionAdapter, &definitionID, &definitionVersion,
-		&minimumGatewayVersion, &definitionCapsJSON, &gatewayNodeID, &gatewayNodeVersion,
+		&minimumGatewayVersion, &definitionCapsJSON, &gatewayNodeID, &gatewayNodeURL, &gatewayNodeVersion,
 		&sessionConfigurationVersion, &sessionLeaseVersion, &authorityExpiresAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -408,9 +409,11 @@ LIMIT 1`, req.SessionID, req.CampaignID, req.GatewayPoolID, req.Provider, req.En
 	if gatewayVersion <= 0 || strings.TrimSpace(gatewayAdapter) == "" || gatewayAdapter != definitionAdapter || strings.TrimSpace(definitionID) == "" || definitionVersion <= 0 {
 		return RouteEvidence{}, ErrInvalid
 	}
-	compatible, err := provider.VersionAtLeast(gatewayAdapter, minimumGatewayVersion)
-	if err != nil || !compatible {
-		return RouteEvidence{}, ErrInvalid
+	if minimumGatewayVersion != "" {
+		compatible, err := provider.VersionAtLeast(gatewayAdapter, minimumGatewayVersion)
+		if err != nil || !compatible {
+			return RouteEvidence{}, ErrInvalid
+		}
 	}
 	var gatewayCapabilities, definitionCapabilities []string
 	if err := json.Unmarshal(gatewayCapsJSON, &gatewayCapabilities); err != nil {
@@ -422,13 +425,15 @@ LIMIT 1`, req.SessionID, req.CampaignID, req.GatewayPoolID, req.Provider, req.En
 	if !containsCapabilities(gatewayCapabilities, req.RequiredCapabilities) || !containsCapabilities(definitionCapabilities, req.RequiredCapabilities) {
 		return RouteEvidence{}, ErrInvalid
 	}
-	if strings.TrimSpace(gatewayNodeID) == "" || gatewayNodeVersion <= 0 || sessionConfigurationVersion <= 0 || sessionLeaseVersion <= 0 || !authorityExpiresAt.After(req.At) {
+	gatewayNodeURL = strings.TrimSpace(gatewayNodeURL)
+	parsedNodeURL, nodeURLErr := url.Parse(gatewayNodeURL)
+	if gatewayNodeURL == "" || nodeURLErr != nil || parsedNodeURL.Host == "" || (parsedNodeURL.Scheme != "http" && parsedNodeURL.Scheme != "https") || strings.TrimSpace(gatewayNodeID) == "" || gatewayNodeVersion <= 0 || sessionConfigurationVersion <= 0 || sessionLeaseVersion <= 0 || !authorityExpiresAt.After(req.At) {
 		return RouteEvidence{}, ErrInvalid
 	}
 	return RouteEvidence{
 		GatewayPoolVersion: gatewayVersion, AdapterVersion: gatewayAdapter,
 		ProviderDefinitionID: definitionID, ProviderDefinitionVersion: definitionVersion,
-		GatewayNodeID: gatewayNodeID, GatewayNodeVersion: gatewayNodeVersion,
+		GatewayNodeID: gatewayNodeID, GatewayNodeURL: gatewayNodeURL, GatewayNodeVersion: gatewayNodeVersion,
 		SessionLeaseVersion: sessionLeaseVersion, SessionConfigurationVersion: sessionConfigurationVersion,
 		AuthorityExpiresAt: authorityExpiresAt.UTC(),
 	}, nil

@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"testing"
+
+	"campaign-platform/internal/metacloud"
 )
 
 func TestNetworkPolicyDoesNotTrustSpoofedForwardingHeader(t *testing.T) {
@@ -39,5 +41,30 @@ func TestNetworkAdmissionLeavesHealthChecksAvailable(t *testing.T) {
 	handler.ServeHTTP(w, r)
 	if w.Code != http.StatusOK {
 		t.Fatalf("health check blocked: %d %s", w.Code, w.Body.String())
+	}
+}
+
+func TestNetworkAdmissionAllowsOnlyAuthenticatedMetaWebhookPublicBoundary(t *testing.T) {
+	credentials, err := metacloud.ParseCredentialSet(`[{"key":"meta-ng","accessToken":"token-value-abcdefghijklmnopqrstuvwxyz","appSecret":"meta-app-secret-0123456789","verifyToken":"verify-token-012345"}]`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := New(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		NetworkPolicy:   NetworkPolicy{AllowedCIDRs: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}},
+		MetaCredentials: credentials,
+	}).Handler()
+	webhook := httptest.NewRequest(http.MethodGet, "/api/v1/webhooks/meta/meta-ng?hub.mode=subscribe&hub.verify_token=verify-token-012345&hub.challenge=1158201444", nil)
+	webhook.RemoteAddr = "198.51.100.10:4567"
+	webhookResponse := httptest.NewRecorder()
+	handler.ServeHTTP(webhookResponse, webhook)
+	if webhookResponse.Code != http.StatusOK || webhookResponse.Body.String() != "1158201444" {
+		t.Fatalf("Meta webhook boundary blocked or unauthenticated: %d %s", webhookResponse.Code, webhookResponse.Body.String())
+	}
+	private := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	private.RemoteAddr = "198.51.100.10:4567"
+	privateResponse := httptest.NewRecorder()
+	handler.ServeHTTP(privateResponse, private)
+	if privateResponse.Code != http.StatusForbidden {
+		t.Fatalf("non-webhook route escaped network policy: %d %s", privateResponse.Code, privateResponse.Body.String())
 	}
 }

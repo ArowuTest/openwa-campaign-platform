@@ -1,0 +1,18 @@
+# Optional overlay for Meta WhatsApp Cloud API credentials.
+# The base production stack remains Meta-optional; enable this overlay only
+# when governed Meta senders/templates are required.
+services:
+  control-api:
+    environment:
+      META_CLOUD_CREDENTIALS_JSON_FILE: /run/secrets/meta_cloud_credentials
+    secrets:
+      - meta_cloud_credentials
+  campaign-worker:
+    environment:
+      META_CLOUD_CREDENTIALS_JSON_FILE: /run/secrets/meta_cloud_credentials
+    secrets:
+      - meta_cloud_credentials
+
+secrets:
+  meta_cloud_credentials:
+    file: "${META_CLOUD_CREDENTIALS_FILE:?required when the Meta Cloud overlay is enabled}"

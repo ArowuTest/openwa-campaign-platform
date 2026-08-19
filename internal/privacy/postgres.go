@@ -2,7 +2,9 @@ package privacy
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,6 +21,16 @@ const legalHoldSelect = `SELECT ` + legalHoldColumns + ` FROM privacy_legal_hold
 const privacyCaseSelect = `SELECT id::text,case_type,status,subject_lookup_hmac,subject_masked,coalesce(contact_id::text,''),coalesce(organisation_id::text,''),requested_at,due_at,coalesce(assigned_to::text,''),created_by::text,coalesce(submitted_by::text,''),coalesce(decided_by::text,''),coalesce(executed_by::text,''),request_reason,coalesce(decision_reason,''),coalesce(execution_reason,''),requested_changes,result_ciphertext,coalesce(result_key_version,''),coalesce(result_sha256,''),completed_at,rejected_at,cancelled_at,version,created_at,updated_at FROM privacy_cases`
 
 type sqlScanner interface{ Scan(...any) error }
+
+func privacySubjectLockKey(lookup []byte) int64 {
+	sum := sha256.Sum256(lookup)
+	return int64(binary.BigEndian.Uint64(sum[:8]))
+}
+
+func lockPrivacySubject(ctx context.Context, tx *sql.Tx, lookup []byte) error {
+	var ignored any
+	return tx.QueryRowContext(ctx, `SELECT pg_advisory_xact_lock($1)`, privacySubjectLockKey(lookup)).Scan(&ignored)
+}
 
 func scanLegalHold(scanner sqlScanner) (LegalHold, error) {
 	var hold LegalHold
@@ -397,6 +409,9 @@ func applyRectification(ctx context.Context, tx *sql.Tx, item Case, actor, reaso
 }
 
 func applyErasure(ctx context.Context, tx *sql.Tx, item Case, actor, reason, checksum string, now time.Time) error {
+	if err := lockPrivacySubject(ctx, tx, item.SubjectLookupHMAC); err != nil {
+		return fmt.Errorf("lock privacy subject for erasure: %w", err)
+	}
 	var blocked bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM privacy_legal_holds WHERE subject_lookup_hmac=$1 AND status='ACTIVE' AND released_at IS NULL AND (expires_at IS NULL OR expires_at>$2) AND scope IN ('ALL','CONTACT'))`, item.SubjectLookupHMAC, now).Scan(&blocked); err != nil {
 		return err
@@ -507,6 +522,11 @@ func (r *PostgreSQLRepository) DecideLegalHold(ctx context.Context, identifier s
 	if hold.Version != expected || hold.Status != HoldPendingApproval || hold.CreatedBy == actor || hold.SubmittedBy == actor {
 		return LegalHold{}, ErrConflict
 	}
+	if approve {
+		if err := lockPrivacySubject(ctx, tx, hold.SubjectLookupHMAC); err != nil {
+			return LegalHold{}, fmt.Errorf("lock privacy subject for legal hold activation: %w", err)
+		}
+	}
 	status := HoldRejected
 	activatedAt := (*time.Time)(nil)
 	rejectedAt := &now
@@ -610,7 +630,20 @@ func (r *PostgreSQLRepository) ReleaseLegalHold(ctx context.Context, identifier,
 		return LegalHold{}, err
 	}
 	defer tx.Rollback()
-	hold, err := scanLegalHold(tx.QueryRowContext(ctx, `UPDATE privacy_legal_holds SET status='RELEASED',released_at=$4,released_by=$3::uuid,release_reason=$5,version=version+1 WHERE id=$1::uuid AND version=$2 AND status='ACTIVE' AND released_at IS NULL RETURNING `+legalHoldColumns, identifier, expected, actor, now, reason))
+	hold, err := scanLegalHold(tx.QueryRowContext(ctx, legalHoldSelect+` WHERE id=$1::uuid FOR UPDATE`, identifier))
+	if errors.Is(err, sql.ErrNoRows) {
+		return LegalHold{}, ErrNotFound
+	}
+	if err != nil {
+		return LegalHold{}, err
+	}
+	if hold.Version != expected || hold.Status != HoldActive || hold.ReleasedAt != nil {
+		return LegalHold{}, ErrConflict
+	}
+	if err := lockPrivacySubject(ctx, tx, hold.SubjectLookupHMAC); err != nil {
+		return LegalHold{}, fmt.Errorf("lock privacy subject for legal hold release: %w", err)
+	}
+	hold, err = scanLegalHold(tx.QueryRowContext(ctx, `UPDATE privacy_legal_holds SET status='RELEASED',released_at=$4,released_by=$3::uuid,release_reason=$5,version=version+1 WHERE id=$1::uuid AND version=$2 AND status='ACTIVE' AND released_at IS NULL RETURNING `+legalHoldColumns, identifier, expected, actor, now, reason))
 	if errors.Is(err, sql.ErrNoRows) {
 		return LegalHold{}, ErrConflict
 	}

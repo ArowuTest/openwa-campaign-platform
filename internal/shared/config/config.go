@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/mail"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -56,6 +57,8 @@ type Config struct {
 	GatewayCommandPreviousSecret      string
 	GatewayRuntimeSecret              string
 	GatewayRuntimePreviousSecret      string
+	GatewayRuntimeAllowedHosts        []string
+	ControlAPIInternalURL             string
 	MetaCloudCredentialsJSON          string
 	MetaHealthStaleAfter              time.Duration
 	MetaConversationWindow            time.Duration
@@ -199,6 +202,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	gatewayRuntimeAllowedHosts, err := gatewayHostListEnv("GATEWAY_RUNTIME_ALLOWED_HOSTS", nil)
+	if err != nil {
+		return Config{}, err
+	}
 
 	cfg := Config{
 		Environment:                       environment,
@@ -239,6 +246,8 @@ func Load() (Config, error) {
 		GatewayCommandPreviousSecret:      commandPreviousSecret,
 		GatewayRuntimeSecret:              runtimeSecret,
 		GatewayRuntimePreviousSecret:      runtimePreviousSecret,
+		GatewayRuntimeAllowedHosts:        gatewayRuntimeAllowedHosts,
+		ControlAPIInternalURL:             strings.TrimSpace(os.Getenv("CONTROL_API_INTERNAL_URL")),
 		MetaCloudCredentialsJSON:          strings.TrimSpace(os.Getenv("META_CLOUD_CREDENTIALS_JSON")),
 		MetaHealthStaleAfter:              metaHealthStaleAfter,
 		MetaConversationWindow:            metaConversationWindow,
@@ -477,6 +486,32 @@ func (c Config) Validate() error {
 		if weakProductionGatewaySecret(c.GatewayRuntimeSecret) {
 			return errors.New("production requires a strong GATEWAY_RUNTIME_SECRET")
 		}
+		if len(c.GatewayRuntimeAllowedHosts) == 0 {
+			return errors.New("production requires GATEWAY_RUNTIME_ALLOWED_HOSTS")
+		}
+		controlURL, err := url.Parse(strings.TrimSpace(c.ControlAPIInternalURL))
+		if err != nil || !strings.EqualFold(controlURL.Scheme, "https") || controlURL.Host == "" || controlURL.User != nil || controlURL.Opaque != "" ||
+			(controlURL.Path != "" && controlURL.Path != "/") || controlURL.RawPath != "" || controlURL.RawQuery != "" || controlURL.ForceQuery || controlURL.Fragment != "" || strings.HasSuffix(controlURL.Host, ":") {
+			return errors.New("production requires CONTROL_API_INTERNAL_URL to be a valid HTTPS control URL")
+		}
+		if port := controlURL.Port(); port != "" {
+			portNumber, portErr := strconv.Atoi(port)
+			if portErr != nil || portNumber < 1 || portNumber > 65535 {
+				return errors.New("production requires CONTROL_API_INTERNAL_URL to use a valid port between 1 and 65535")
+			}
+		}
+		controlHost := normalizeInternalHostname(controlURL.Hostname())
+		if controlHost == "" {
+			return errors.New("production requires CONTROL_API_INTERNAL_URL to identify the control hostname")
+		}
+		if isDisallowedControlHostname(controlHost) {
+			return errors.New("production requires CONTROL_API_INTERNAL_URL to identify a non-local control hostname")
+		}
+		for _, gatewayHost := range c.GatewayRuntimeAllowedHosts {
+			if normalizeInternalHostname(gatewayHost) == controlHost {
+				return errors.New("GATEWAY_RUNTIME_ALLOWED_HOSTS must not contain the CONTROL_API_INTERNAL_URL control hostname")
+			}
+		}
 		if c.GatewayRuntimeSecret == c.GatewayCallbackSecret || c.GatewayRuntimeSecret == c.GatewayCommandSecret || c.GatewayCallbackSecret == c.GatewayCommandSecret {
 			return errors.New("gateway command, callback, and runtime secrets must be distinct")
 		}
@@ -504,7 +539,8 @@ func (c Config) Validate() error {
 				}
 			}
 		}
-		if len(c.MediaDownloadSecret) < 32 || strings.Contains(c.MediaDownloadSecret, "development-") || strings.Contains(strings.ToLower(c.MediaDownloadSecret), "change-me") {
+		mediaDownloadSecretLower := strings.ToLower(c.MediaDownloadSecret)
+		if len(c.MediaDownloadSecret) < 32 || strings.Contains(mediaDownloadSecretLower, "development-") || strings.Contains(mediaDownloadSecretLower, "change-me") {
 			return errors.New("production requires a strong MEDIA_DOWNLOAD_SECRET")
 		}
 		switch c.ObjectStoreDriver {
@@ -516,11 +552,74 @@ func (c Config) Validate() error {
 		default:
 			return errors.New("OBJECT_STORE_DRIVER must be filesystem, s3, or minio")
 		}
+		if len(c.AllowedNetworkCIDRs) == 0 {
+			return errors.New("production requires ALLOWED_NETWORK_CIDRS")
+		}
+		if len(c.TrustedProxyCIDRs) == 0 {
+			return errors.New("production requires TRUSTED_PROXY_CIDRS")
+		}
 		if c.ClamAVAddress == "" {
 			return errors.New("production requires CLAMAV_ADDRESS")
 		}
 	}
 	return nil
+}
+
+func normalizeInternalHostname(value string) string {
+	return strings.TrimSuffix(strings.ToLower(strings.Trim(strings.TrimSpace(value), "[]")), ".")
+}
+
+func isDisallowedControlHostname(value string) bool {
+	normalized := normalizeInternalHostname(value)
+	if normalized == "control-api" || normalized == "openwa-gateway" || normalized == "localhost" || strings.HasSuffix(normalized, ".localhost") || normalized == "host.docker.internal" || strings.HasSuffix(normalized, ".docker.internal") {
+		return true
+	}
+	// Staging/production control authority is DNS-only. Reject canonical IPs and
+	// legacy inet_aton-style numeric IPv4 spellings that libc may resolve as IPs.
+	return isIPLikeHostname(normalized)
+}
+
+func isIPLikeHostname(value string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(strings.Trim(value, "[]")))
+	if normalized == "" || strings.Contains(normalized, "%") {
+		return normalized != ""
+	}
+	if net.ParseIP(normalized) != nil {
+		return true
+	}
+	parts := strings.Split(normalized, ".")
+	if len(parts) == 0 || len(parts) > 4 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" {
+			return false
+		}
+		base := 10
+		digits := part
+		if strings.HasPrefix(part, "0x") {
+			base, digits = 16, part[2:]
+		} else if len(part) > 1 && part[0] == '0' {
+			base, digits = 8, part[1:]
+		}
+		if digits == "" {
+			return false
+		}
+		if _, err := strconv.ParseUint(digits, base, 32); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+// ControlAPIHostname returns the canonical control-plane authority after
+// configuration validation has established CONTROL_API_INTERNAL_URL.
+func (c Config) ControlAPIHostname() string {
+	parsed, err := url.Parse(strings.TrimSpace(c.ControlAPIInternalURL))
+	if err != nil {
+		return ""
+	}
+	return normalizeInternalHostname(parsed.Hostname())
 }
 
 func weakProductionGatewaySecret(value string) bool {
@@ -571,6 +670,64 @@ func validateKey(name, value string, exact int, minimum bool) error {
 		return fmt.Errorf("%s must decode to exactly %d bytes", name, exact)
 	}
 	return nil
+}
+
+func gatewayHostListEnv(key string, fallback []string) ([]string, error) {
+	raw, ok := os.LookupEnv(key)
+	if !ok || strings.TrimSpace(raw) == "" {
+		return append([]string(nil), fallback...), nil
+	}
+	parts := strings.Split(raw, ",")
+	if len(parts) > 100 {
+		return nil, fmt.Errorf("%s contains more than 100 hosts", key)
+	}
+	seen := map[string]struct{}{}
+	values := make([]string, 0, len(parts))
+	for _, part := range parts {
+		value := normalizeGatewayHostname(part)
+		if value == "" {
+			return nil, fmt.Errorf("%s contains an empty host", key)
+		}
+		if isDisallowedGatewayHostname(value) || len(value) > 253 || (net.ParseIP(value) == nil && !validGatewayDNSName(value)) {
+			return nil, fmt.Errorf("%s contains invalid host %q", key, value)
+		}
+		if _, exists := seen[value]; exists {
+			continue
+		}
+		seen[value] = struct{}{}
+		values = append(values, value)
+	}
+	return values, nil
+}
+
+func normalizeGatewayHostname(value string) string {
+	return strings.TrimSuffix(strings.ToLower(strings.Trim(strings.TrimSpace(value), "[]")), ".")
+}
+
+func isDisallowedGatewayHostname(value string) bool {
+	normalized := normalizeGatewayHostname(value)
+	if normalized == "control-api" || normalized == "openwa-gateway" || normalized == "localhost" || strings.HasSuffix(normalized, ".localhost") || normalized == "host.docker.internal" || strings.HasSuffix(normalized, ".docker.internal") {
+		return true
+	}
+	return isIPLikeHostname(normalized)
+}
+
+func validGatewayDNSName(value string) bool {
+	name := strings.TrimSuffix(value, ".")
+	if name == "" || len(name) > 253 {
+		return false
+	}
+	for _, label := range strings.Split(name, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return false
+		}
+		for _, r := range label {
+			if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func stringListEnv(key string, fallback []string) ([]string, error) {

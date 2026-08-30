@@ -12,14 +12,23 @@
         "identity",
         "gateway-control",
         "object-store",
-        "meta"
+        "meta",
+        "msisdn",
+        "inbound-content",
+        "privacy",
+        "sender-proxy",
+        "media-download",
+        "profiling"
       ],
       "required_environment": [
         "ALLOWED_NETWORK_CIDRS",
         "TRUSTED_PROXY_CIDRS",
         "CLAMAV_ADDRESS",
-        "MEDIA_DOWNLOAD_BASE_URL"
-      ]
+        "MEDIA_DOWNLOAD_BASE_URL",
+        "GATEWAY_RUNTIME_ALLOWED_HOSTS",
+        "CONTROL_API_INTERNAL_URL"
+      ],
+      "tls_required": true
     },
     "audience-worker": {
       "dockerfile": "infrastructure/docker/audience-worker.Dockerfile",
@@ -29,7 +38,8 @@
       "secret_classes": [
         "database",
         "object-store",
-        "msisdn"
+        "msisdn",
+        "profiling"
       ]
     },
     "campaign-worker": {
@@ -41,7 +51,9 @@
         "database",
         "gateway-control",
         "msisdn",
-        "meta"
+        "meta",
+        "profiling",
+        "media-download"
       ],
       "required_environment": [
         "MEDIA_DOWNLOAD_BASE_URL"
@@ -55,7 +67,8 @@
       "secret_classes": [
         "database",
         "object-store",
-        "privacy"
+        "privacy",
+        "profiling"
       ]
     },
     "inbound-governance-worker": {
@@ -65,7 +78,8 @@
       "public_ingress": false,
       "secret_classes": [
         "database",
-        "inbound-content"
+        "inbound-content",
+        "profiling"
       ]
     },
     "metrics-worker": {
@@ -74,7 +88,8 @@
       "health_path": "/readyz",
       "public_ingress": false,
       "secret_classes": [
-        "database"
+        "database",
+        "profiling"
       ]
     },
     "platform-governance-worker": {
@@ -84,7 +99,8 @@
       "public_ingress": false,
       "secret_classes": [
         "database",
-        "object-store"
+        "object-store",
+        "profiling"
       ]
     }
   },

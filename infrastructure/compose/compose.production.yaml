@@ -63,6 +63,8 @@ services:
       GATEWAY_RUNTIME_SECRET_FILE: /run/secrets/gateway_runtime_secret
       GATEWAY_RUNTIME_SECRET_PREVIOUS_FILE: /run/secrets/gateway_runtime_secret_previous
       GATEWAY_STALE_AFTER_SECONDS: ${GATEWAY_STALE_AFTER_SECONDS:-120}
+      GATEWAY_RUNTIME_ALLOWED_HOSTS: ${GATEWAY_RUNTIME_ALLOWED_HOSTS:?governed gateway runtime host authority is required}
+      CONTROL_API_INTERNAL_URL: ${CONTROL_API_INTERNAL_URL:?approved Railway HTTPS control URL is required}
       MEDIA_DOWNLOAD_SECRET_FILE: /run/secrets/media_download_secret
       PROFILING_TOKEN_FILE: /run/secrets/profiling_token
       SECURE_COOKIES: "true"
@@ -100,7 +102,7 @@ services:
       - s3_access_key_id
       - s3_secret_access_key
     healthcheck:
-      test: ["CMD", "/control-api", "healthcheck", "http://127.0.0.1:8080/healthz"]
+      test: ["CMD", "/control-api", "healthcheck", "http://127.0.0.1:8080/readyz"]
       interval: 15s
       timeout: 5s
       retries: 5

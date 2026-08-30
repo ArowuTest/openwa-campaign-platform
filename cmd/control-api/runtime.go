@@ -139,7 +139,7 @@ func buildMemoryRuntime(cfg config.Config, protector *sharedcrypto.MSISDNProtect
 		return nil, fmt.Errorf("bootstrap gateway pools: %w", err)
 	}
 	gatewayPoolAdministration := &sender.GatewayPoolAdministration{Store: senderStore}
-	gatewayRuntime := &sender.RuntimeRegistrationService{Store: senderStore, GatewayPools: senderStore, Secret: []byte(cfg.GatewayRuntimeSecret), PreviousSecrets: nonEmptySecrets(cfg.GatewayRuntimePreviousSecret), MaximumSkew: cfg.GatewayCallbackMaxSkew}
+	gatewayRuntime := &sender.RuntimeRegistrationService{Store: senderStore, GatewayPools: senderStore, Secret: []byte(cfg.GatewayRuntimeSecret), PreviousSecrets: nonEmptySecrets(cfg.GatewayRuntimePreviousSecret), AllowedInternalHosts: cfg.GatewayRuntimeAllowedHosts, ForbiddenInternalHosts: []string{cfg.ControlAPIHostname()}, RequireCanonicalRuntimeURL: cfg.Environment == "staging" || cfg.Environment == "production", MaximumSkew: cfg.GatewayCallbackMaxSkew}
 	platformPolicyStore := platformpolicy.NewMemoryStore()
 	configurations := &platformpolicy.ConfigurationAdministration{Store: platformPolicyStore}
 	maintenance := &platformpolicy.MaintenanceAdministration{Store: platformPolicyStore}
@@ -157,7 +157,7 @@ func buildMemoryRuntime(cfg config.Config, protector *sharedcrypto.MSISDNProtect
 	cohortExecution := cohort.NewExecutionService(filters.Compiler, &cohort.MemoryQueryRepository{})
 	materialisationService := &materialisation.MaterialisationService{Repository: materialisation.NewMemoryMaterialisationRepository()}
 	metrics := delivery.NewMetricsService(delivery.NewMemoryMetricsRepository())
-	senderGovernance := &sender.GovernanceService{Store: senderStore, HealthPolicies: &sender.PlatformHealthPolicyResolver{Configurations: configurations}}
+	senderGovernance := &sender.GovernanceService{Store: senderStore, HealthPolicies: &sender.PlatformHealthPolicyResolver{Configurations: configurations}, RequireCanonicalRuntimeURL: cfg.Environment == "staging" || cfg.Environment == "production", RuntimeAllowedInternalHosts: cfg.GatewayRuntimeAllowedHosts, RuntimeForbiddenHosts: []string{cfg.ControlAPIHostname()}}
 	senderSessionHeartbeat := &sender.SessionHeartbeatService{Governance: senderGovernance, Runtime: gatewayRuntime}
 	senderLifecycle := &sender.SessionLifecycleService{Governance: senderGovernance, Gateway: &sender.HTTPSessionGateway{CommandSecret: cfg.GatewayCommandSecret}, Proxies: senderProxies, ActiveWork: sender.StaticActiveSessionWorkChecker(false), TransportRuntime: &sender.PlatformTransportRuntimeResolver{Configurations: configurations}, Maintenance: maintenance}
 	pacingPolicies := &sender.PacingAdministration{Store: sender.NewMemoryPacingStore()}
@@ -292,7 +292,7 @@ func buildPostgreSQLRuntime(ctx context.Context, cfg config.Config, protector *s
 	senderProxies := &sender.SessionProxyAdministration{Store: senderStore, Keys: proxyKeys}
 	gatewayPools := &sender.GatewayPoolService{Store: senderStore}
 	gatewayPoolAdministration := &sender.GatewayPoolAdministration{Store: senderStore}
-	gatewayRuntime := &sender.RuntimeRegistrationService{Store: senderStore, GatewayPools: senderStore, Secret: []byte(cfg.GatewayRuntimeSecret), PreviousSecrets: nonEmptySecrets(cfg.GatewayRuntimePreviousSecret), MaximumSkew: cfg.GatewayCallbackMaxSkew}
+	gatewayRuntime := &sender.RuntimeRegistrationService{Store: senderStore, GatewayPools: senderStore, Secret: []byte(cfg.GatewayRuntimeSecret), PreviousSecrets: nonEmptySecrets(cfg.GatewayRuntimePreviousSecret), AllowedInternalHosts: cfg.GatewayRuntimeAllowedHosts, ForbiddenInternalHosts: []string{cfg.ControlAPIHostname()}, RequireCanonicalRuntimeURL: cfg.Environment == "staging" || cfg.Environment == "production", MaximumSkew: cfg.GatewayCallbackMaxSkew}
 	platformPolicyStore := &platformpolicy.PostgreSQLStore{DB: db}
 	configurations := &platformpolicy.ConfigurationAdministration{Store: platformPolicyStore}
 	maintenance := &platformpolicy.MaintenanceAdministration{Store: platformPolicyStore}
@@ -310,7 +310,7 @@ func buildPostgreSQLRuntime(ctx context.Context, cfg config.Config, protector *s
 	cohortExecution := cohort.NewExecutionService(filters.Compiler, &cohort.PostgreSQLQueryRepository{DB: db})
 	materialisationService := &materialisation.MaterialisationService{Repository: &materialisation.PostgreSQLRepository{DB: db}}
 	metrics := delivery.NewMetricsService(&delivery.PostgreSQLMetricsRepository{DB: db})
-	senderGovernance := &sender.GovernanceService{Store: senderStore, HealthPolicies: &sender.PlatformHealthPolicyResolver{Configurations: configurations}, HealthSignals: &sender.PostgreSQLHealthSignalSource{DB: db}}
+	senderGovernance := &sender.GovernanceService{Store: senderStore, HealthPolicies: &sender.PlatformHealthPolicyResolver{Configurations: configurations}, HealthSignals: &sender.PostgreSQLHealthSignalSource{DB: db}, RequireCanonicalRuntimeURL: cfg.Environment == "staging" || cfg.Environment == "production", RuntimeAllowedInternalHosts: cfg.GatewayRuntimeAllowedHosts, RuntimeForbiddenHosts: []string{cfg.ControlAPIHostname()}}
 	senderSessionHeartbeat := &sender.SessionHeartbeatService{Governance: senderGovernance, Runtime: gatewayRuntime}
 	senderLifecycle := &sender.SessionLifecycleService{Governance: senderGovernance, Gateway: &sender.HTTPSessionGateway{CommandSecret: cfg.GatewayCommandSecret}, Proxies: senderProxies, ActiveWork: sender.PostgreSQLActiveSessionWorkChecker{DB: db}, TransportRuntime: &sender.PlatformTransportRuntimeResolver{Configurations: configurations}, Maintenance: maintenance}
 	pacingPolicies := &sender.PacingAdministration{Store: &postgresrepo.PacingPolicyRepository{DB: db}}

@@ -61,6 +61,21 @@ func TestLoadProductionFailsClosedAndAcceptsStrongConfiguration(t *testing.T) {
 	}
 }
 
+func TestLoadProductionRejectsCaseVariantsOfDevelopmentMediaSecret(t *testing.T) {
+	for _, secret := range []string{
+		"Development-media-download-secret-not-for-production",
+		"DEVELOPMENT-media-download-secret-not-for-production",
+	} {
+		t.Run(secret[:11], func(t *testing.T) {
+			setProductionEnvironment(t)
+			t.Setenv("MEDIA_DOWNLOAD_SECRET", secret)
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), "MEDIA_DOWNLOAD_SECRET") {
+				t.Fatalf("production accepted development placeholder media secret %q: %v", secret, err)
+			}
+		})
+	}
+}
+
 func TestLoadGatewaySecretRotationRequiresDistinctStrongPreviousSecrets(t *testing.T) {
 	setProductionEnvironment(t)
 	t.Setenv("GATEWAY_CALLBACK_SECRET_PREVIOUS", "8a3487bb4f3241f4b122e6bd4bc55bdf9fe32fac")
@@ -113,6 +128,7 @@ func setDevelopmentEnvironment(t *testing.T) {
 		"GATEWAY_CALLBACK_SECRET": "development-gateway-callback-secret-change-me", "GATEWAY_COMMAND_SECRET": "development-gateway-command-secret-change-me", "GATEWAY_RUNTIME_SECRET": "development-gateway-runtime-secret-change-me", "GATEWAY_CALLBACK_MAX_SKEW": "5m", "MEDIA_DOWNLOAD_SECRET": "development-media-download-secret-change-me",
 		"OBJECT_STORE_ROOT": t.TempDir(), "MAX_IMPORT_FILE_BYTES": "536870912", "CLAMAV_ADDRESS": "",
 		"CLAMAV_DIAL_TIMEOUT": "5s", "CLAMAV_SCAN_TIMEOUT": "2m",
+		"ALLOWED_NETWORK_CIDRS": "10.0.0.0/8", "TRUSTED_PROXY_CIDRS": "10.0.0.0/8",
 	}
 	for key, value := range values {
 		t.Setenv(key, value)
@@ -130,12 +146,88 @@ func setProductionEnvironment(t *testing.T) {
 		"BOOTSTRAP_ADMIN_PASSWORD": "a-strong-bootstrap-password-12345", "BOOTSTRAP_ADMIN_TOTP_SECRET": "JBSWY3DPEHPK3PXPJBSWY3DPEHPK3PXP",
 		"SECURE_COOKIES": "true", "SESSION_IDLE_TIMEOUT": "30m", "SESSION_ABSOLUTE_TIMEOUT": "12h",
 		"MSISDN_ENCRYPTION_KEY_BASE64": key, "MSISDN_LOOKUP_KEY_BASE64": lookup, "IDENTITY_SECRET_KEY_BASE64": key, "INBOUND_CONTENT_KEY_BASE64": key, "INBOUND_CONTENT_KEYS_JSON": "", "INBOUND_CONTENT_ACTIVE_KEY_VERSION": "v1", "PRIVACY_EVIDENCE_KEY_BASE64": key, "PRIVACY_EVIDENCE_KEYS_JSON": "", "PRIVACY_EVIDENCE_ACTIVE_KEY_VERSION": "v1", "SENDER_PROXY_KEYS_JSON": `{"v1":"` + key + `"}`, "SENDER_PROXY_ACTIVE_KEY_VERSION": "v1", "INBOUND_CONTENT_RETENTION_DAYS": "90",
-		"GATEWAY_CALLBACK_SECRET": "c7c4d58cba7d4f03a2234cc45891d7f89c8247b4c80a4d01", "GATEWAY_COMMAND_SECRET": "f915536086184fa1b103e78b01abc0045cd1ed2c6cb442c0", "GATEWAY_RUNTIME_SECRET": "2de703d848e949c4a636050ec61f6441cfd0bf2ef1b443d9", "GATEWAY_CALLBACK_MAX_SKEW": "5m", "MEDIA_DOWNLOAD_SECRET": "9919af30f33e43db82bdc17c7e8323d1f5e6627f4eb44554",
+		"GATEWAY_RUNTIME_ALLOWED_HOSTS": "gateway.private.example",
+		"CONTROL_API_INTERNAL_URL":      "https://control.internal.example",
+		"GATEWAY_CALLBACK_SECRET":       "c7c4d58cba7d4f03a2234cc45891d7f89c8247b4c80a4d01", "GATEWAY_COMMAND_SECRET": "f915536086184fa1b103e78b01abc0045cd1ed2c6cb442c0", "GATEWAY_RUNTIME_SECRET": "2de703d848e949c4a636050ec61f6441cfd0bf2ef1b443d9", "GATEWAY_CALLBACK_MAX_SKEW": "5m", "MEDIA_DOWNLOAD_SECRET": "9919af30f33e43db82bdc17c7e8323d1f5e6627f4eb44554",
 		"OBJECT_STORE_ROOT": t.TempDir(), "MAX_IMPORT_FILE_BYTES": "536870912", "CLAMAV_ADDRESS": "clamav:3310",
 		"CLAMAV_DIAL_TIMEOUT": "5s", "CLAMAV_SCAN_TIMEOUT": "2m",
+		"ALLOWED_NETWORK_CIDRS": "10.0.0.0/8", "TRUSTED_PROXY_CIDRS": "10.0.0.0/8",
 	}
 	for key, value := range values {
 		t.Setenv(key, value)
+	}
+}
+
+func TestLoadProductionRequiresGatewayRuntimeAllowedHosts(t *testing.T) {
+	setProductionEnvironment(t)
+	t.Setenv("GATEWAY_RUNTIME_ALLOWED_HOSTS", "")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "GATEWAY_RUNTIME_ALLOWED_HOSTS") {
+		t.Fatalf("production accepted missing governed gateway runtime hosts: %v", err)
+	}
+}
+
+func TestLoadProductionRejectsGatewayControlHostnameAlias(t *testing.T) {
+	setProductionEnvironment(t)
+	t.Setenv("CONTROL_API_INTERNAL_URL", "https://control.internal.example")
+	t.Setenv("GATEWAY_RUNTIME_ALLOWED_HOSTS", "control.internal.example")
+	if _, err := Load(); err == nil || !strings.Contains(strings.ToLower(err.Error()), "control") {
+		t.Fatalf("production accepted control hostname as gateway runtime authority: %v", err)
+	}
+}
+
+func TestLoadDeployedRejectsNonAuthorityControlOrigin(t *testing.T) {
+	for _, environment := range []string{"staging", "production"} {
+		for _, raw := range []string{
+			"https://deploy:secret@control.internal.example",
+			"https://control.internal.example/api",
+			"https://control.internal.example?token=secret",
+			"https://control.internal.example#fragment",
+			"https://control.internal.example:0",
+			"https://control.internal.example:65536",
+		} {
+			t.Run(environment+"/"+raw, func(t *testing.T) {
+				setProductionEnvironment(t)
+				t.Setenv("APP_ENV", environment)
+				t.Setenv("CONTROL_API_INTERNAL_URL", raw)
+				if _, err := Load(); err == nil || !strings.Contains(err.Error(), "CONTROL_API_INTERNAL_URL") {
+					t.Fatalf("deployed config accepted non-authority control origin %q: %v", raw, err)
+				}
+			})
+		}
+	}
+}
+
+func TestLoadDeployedRejectsReservedControlAuthority(t *testing.T) {
+	for _, environment := range []string{"staging", "production"} {
+		for _, raw := range []string{
+			"https://localhost",
+			"https://localhost.",
+			"https://control-api",
+			"https://openwa-gateway",
+			"https://host.docker.internal",
+			"https://127.0.0.1",
+			"https://169.254.10.20",
+			"https://10.20.30.50",
+			"https://172.16.0.10",
+			"https://192.168.1.10",
+			"https://[::1]",
+			"https://[fe80::1]",
+			"https://[fd00::1]",
+			"https://[::ffff:10.20.30.50]",
+			"https://010.020.030.050",
+			"https://0x0a.0x14.0x1e.0x28",
+			"https://167772161",
+			"https://10.1",
+		} {
+			t.Run(environment+"/"+raw, func(t *testing.T) {
+				setProductionEnvironment(t)
+				t.Setenv("APP_ENV", environment)
+				t.Setenv("CONTROL_API_INTERNAL_URL", raw)
+				if _, err := Load(); err == nil || !strings.Contains(err.Error(), "CONTROL_API_INTERNAL_URL") {
+					t.Fatalf("deployed config accepted reserved/local control authority %q: %v", raw, err)
+				}
+			})
+		}
 	}
 }
 
@@ -232,5 +324,65 @@ func TestLoadGatewayPreviousSecretsFollowProductionTrustPolicy(t *testing.T) {
 	t.Setenv("GATEWAY_COMMAND_SECRET_PREVIOUS", sharedPrevious)
 	if _, err := Load(); err == nil || !strings.Contains(strings.ToLower(err.Error()), "distinct") {
 		t.Fatalf("expected cross-role previous secret rejection, got %v", err)
+	}
+}
+
+func TestLoadProductionRequiresNetworkBoundaries(t *testing.T) {
+	for _, name := range []string{"ALLOWED_NETWORK_CIDRS", "TRUSTED_PROXY_CIDRS"} {
+		t.Run(name, func(t *testing.T) {
+			setProductionEnvironment(t)
+			t.Setenv("ALLOWED_NETWORK_CIDRS", "10.0.0.0/8")
+			t.Setenv("TRUSTED_PROXY_CIDRS", "10.0.0.0/8")
+			t.Setenv(name, "")
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), name) {
+				t.Fatalf("production accepted missing %s: %v", name, err)
+			}
+		})
+	}
+}
+
+func TestLoadProductionAcceptsLongGovernedGatewayHostname(t *testing.T) {
+	setProductionEnvironment(t)
+	host := "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.example.com"
+	t.Setenv("GATEWAY_RUNTIME_ALLOWED_HOSTS", host)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("production rejected valid governed FQDN longer than 64 characters: %v", err)
+	}
+	if len(cfg.GatewayRuntimeAllowedHosts) != 1 || !strings.EqualFold(cfg.GatewayRuntimeAllowedHosts[0], host) {
+		t.Fatalf("unexpected governed gateway hosts: %#v", cfg.GatewayRuntimeAllowedHosts)
+	}
+}
+
+func TestLoadGatewayRuntimeHostsNormalizeFQDNAndRejectReservedNames(t *testing.T) {
+	setProductionEnvironment(t)
+	t.Setenv("GATEWAY_RUNTIME_ALLOWED_HOSTS", "Gateway.Private.Example.")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("valid dotted FQDN rejected: %v", err)
+	}
+	if len(cfg.GatewayRuntimeAllowedHosts) != 1 || cfg.GatewayRuntimeAllowedHosts[0] != "gateway.private.example" {
+		t.Fatalf("host not canonicalized: %#v", cfg.GatewayRuntimeAllowedHosts)
+	}
+	for _, host := range []string{"localhost.", "host.docker.internal."} {
+		setProductionEnvironment(t)
+		t.Setenv("GATEWAY_RUNTIME_ALLOWED_HOSTS", host)
+		if _, err := Load(); err == nil {
+			t.Fatalf("reserved governed host accepted: %s", host)
+		}
+	}
+}
+
+func TestLoadGatewayRuntimeHostsRejectIPAndLegacyNumericLiterals(t *testing.T) {
+	for _, host := range []string{
+		"8.8.8.8", "2001:4860:4860::8888",
+		"10.20.30.40", "172.16.0.40", "192.168.1.40", "fd00::1", "::ffff:10.20.30.40",
+		"010.020.030.050", "0x0a.0x14.0x1e.0x28", "167772161", "10.1",
+	} {
+		setProductionEnvironment(t)
+		t.Setenv("GATEWAY_RUNTIME_ALLOWED_HOSTS", host)
+		if _, err := Load(); err == nil {
+			t.Fatalf("IP-like governed gateway host accepted: %s", host)
+		}
 	}
 }

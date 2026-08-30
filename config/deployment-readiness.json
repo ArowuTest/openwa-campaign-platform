@@ -1,0 +1,288 @@
+{
+  "schema_version": 1,
+  "providers": {
+    "railway": {
+      "services": [
+        "control-api",
+        "audience-worker",
+        "campaign-worker",
+        "export-worker",
+        "inbound-governance-worker",
+        "metrics-worker",
+        "platform-governance-worker"
+      ]
+    },
+    "hostinger": {
+      "services": [
+        "openwa-gateway"
+      ]
+    }
+  },
+  "service_evidence_requirements": {
+    "railway": {
+      "control-api": {
+        "image": {
+          "immutable_digest_required": true,
+          "status": "PENDING_EXTERNAL"
+        },
+        "health": {
+          "port": 8080,
+          "path": "/readyz",
+          "status": "PENDING_EXTERNAL"
+        },
+        "secrets": {
+          "classes": [
+            "database",
+            "identity",
+            "gateway-control",
+            "object-store",
+            "meta",
+            "msisdn",
+            "inbound-content",
+            "privacy",
+            "sender-proxy",
+            "media-download",
+            "profiling"
+          ],
+          "status": "PENDING_EXTERNAL"
+        },
+        "network": {
+          "public_ingress": true,
+          "status": "PENDING_EXTERNAL",
+          "tls_required": true
+        }
+      },
+      "audience-worker": {
+        "image": {
+          "immutable_digest_required": true,
+          "status": "PENDING_EXTERNAL"
+        },
+        "health": {
+          "port": 8091,
+          "path": "/readyz",
+          "status": "PENDING_EXTERNAL"
+        },
+        "secrets": {
+          "classes": [
+            "database",
+            "object-store",
+            "msisdn",
+            "profiling"
+          ],
+          "status": "PENDING_EXTERNAL"
+        },
+        "network": {
+          "public_ingress": false,
+          "status": "PENDING_EXTERNAL"
+        }
+      },
+      "campaign-worker": {
+        "image": {
+          "immutable_digest_required": true,
+          "status": "PENDING_EXTERNAL"
+        },
+        "health": {
+          "port": 8092,
+          "path": "/readyz",
+          "status": "PENDING_EXTERNAL"
+        },
+        "secrets": {
+          "classes": [
+            "database",
+            "gateway-control",
+            "msisdn",
+            "meta",
+            "profiling",
+            "media-download"
+          ],
+          "status": "PENDING_EXTERNAL"
+        },
+        "network": {
+          "public_ingress": false,
+          "status": "PENDING_EXTERNAL"
+        }
+      },
+      "export-worker": {
+        "image": {
+          "immutable_digest_required": true,
+          "status": "PENDING_EXTERNAL"
+        },
+        "health": {
+          "port": 8093,
+          "path": "/readyz",
+          "status": "PENDING_EXTERNAL"
+        },
+        "secrets": {
+          "classes": [
+            "database",
+            "object-store",
+            "privacy",
+            "profiling"
+          ],
+          "status": "PENDING_EXTERNAL"
+        },
+        "network": {
+          "public_ingress": false,
+          "status": "PENDING_EXTERNAL"
+        }
+      },
+      "inbound-governance-worker": {
+        "image": {
+          "immutable_digest_required": true,
+          "status": "PENDING_EXTERNAL"
+        },
+        "health": {
+          "port": 8094,
+          "path": "/readyz",
+          "status": "PENDING_EXTERNAL"
+        },
+        "secrets": {
+          "classes": [
+            "database",
+            "inbound-content",
+            "profiling"
+          ],
+          "status": "PENDING_EXTERNAL"
+        },
+        "network": {
+          "public_ingress": false,
+          "status": "PENDING_EXTERNAL"
+        }
+      },
+      "metrics-worker": {
+        "image": {
+          "immutable_digest_required": true,
+          "status": "PENDING_EXTERNAL"
+        },
+        "health": {
+          "port": 8096,
+          "path": "/readyz",
+          "status": "PENDING_EXTERNAL"
+        },
+        "secrets": {
+          "classes": [
+            "database",
+            "profiling"
+          ],
+          "status": "PENDING_EXTERNAL"
+        },
+        "network": {
+          "public_ingress": false,
+          "status": "PENDING_EXTERNAL"
+        }
+      },
+      "platform-governance-worker": {
+        "image": {
+          "immutable_digest_required": true,
+          "status": "PENDING_EXTERNAL"
+        },
+        "health": {
+          "port": 8095,
+          "path": "/readyz",
+          "status": "PENDING_EXTERNAL"
+        },
+        "secrets": {
+          "classes": [
+            "database",
+            "object-store",
+            "profiling"
+          ],
+          "status": "PENDING_EXTERNAL"
+        },
+        "network": {
+          "public_ingress": false,
+          "status": "PENDING_EXTERNAL"
+        }
+      }
+    },
+    "hostinger": {
+      "openwa-gateway": {
+        "image": {
+          "immutable_digest_required": true,
+          "status": "PENDING_EXTERNAL"
+        },
+        "health": {
+          "port": 2785,
+          "path": "/healthz",
+          "status": "PENDING_EXTERNAL"
+        },
+        "secrets": {
+          "classes": [
+            "gateway-control"
+          ],
+          "status": "PENDING_EXTERNAL"
+        },
+        "network": {
+          "public_ingress": false,
+          "private_bind_required": true,
+          "private_bind_observed": false,
+          "cross_provider_tls_required": true,
+          "status": "PENDING_EXTERNAL"
+        }
+      }
+    }
+  },
+  "operational_evidence_requirements": {
+    "monitoring": {
+      "control-plane": {
+        "owner_required": true,
+        "status": "PENDING_EXTERNAL"
+      },
+      "openwa-gateway-fleet": {
+        "owner_required": true,
+        "status": "PENDING_EXTERNAL"
+      },
+      "postgresql": {
+        "owner_required": true,
+        "status": "PENDING_EXTERNAL"
+      },
+      "redis": {
+        "owner_required": true,
+        "status": "PENDING_EXTERNAL"
+      },
+      "object-storage": {
+        "owner_required": true,
+        "status": "PENDING_EXTERNAL"
+      },
+      "meta-cloud": {
+        "owner_required": true,
+        "status": "PENDING_EXTERNAL"
+      }
+    },
+    "recovery": {
+      "postgresql-pitr": {
+        "status": "BLOCKED_EXTERNAL",
+        "rpo_target_required": true,
+        "rto_target_required": true
+      },
+      "object-restore": {
+        "status": "BLOCKED_EXTERNAL",
+        "rpo_target_required": true,
+        "rto_target_required": true
+      },
+      "openwa-session-recovery": {
+        "status": "BLOCKED_EXTERNAL",
+        "rpo_target_required": true,
+        "rto_target_required": true
+      }
+    }
+  },
+  "runbook_requirements": {
+    "deployment-and-rollback": {
+      "path": "docs/runbooks/deployment-and-rollback.md",
+      "exercise_status": "PENDING_EXTERNAL"
+    },
+    "monitoring-and-incident-ownership": {
+      "path": "docs/runbooks/monitoring-and-incident-ownership.md",
+      "exercise_status": "PENDING_EXTERNAL"
+    },
+    "backup-and-restore-rehearsal": {
+      "path": "docs/runbooks/backup-and-restore-rehearsal.md",
+      "exercise_status": "PENDING_EXTERNAL"
+    },
+    "live-provider-validation": {
+      "path": "docs/runbooks/live-provider-validation.md",
+      "exercise_status": "PENDING_EXTERNAL"
+    }
+  }
+}

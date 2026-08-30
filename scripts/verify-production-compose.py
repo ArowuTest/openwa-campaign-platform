@@ -12,6 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT = ROOT / "infrastructure/compose/compose.production.yaml"
 DEFAULT_TOPOLOGY = ROOT / "config/deployment-topology.json"
+DEFAULT_RAILWAY_CONTRACT = ROOT / "infrastructure/railway/service-contracts.json"
 DEFAULT_SESSION_TOKEN_OVERLAY = ROOT / "infrastructure/compose/compose.production.s3-session-token.yaml"
 DEFAULT_META_OVERLAY = ROOT / "infrastructure/compose/compose.production.meta-cloud.yaml"
 DIGEST = re.compile(r"^[^\s@]+@sha256:[0-9a-fA-F]{64}$")
@@ -21,6 +22,17 @@ KEY_VALUE = re.compile(r"^      ([A-Z0-9_]+):\s*(.*?)\s*$")
 SENSITIVE_SUFFIXES = ("_SECRET", "_PASSWORD", "_TOKEN", "_KEY", "_DATABASE_URL")
 OBJECT_STORE_CONSUMERS = {"control-api", "audience-worker", "export-worker", "platform-governance-worker"}
 META_CONSUMERS = {"control-api", "campaign-worker"}
+SECRET_ENV_CLASSES = {
+    "DATABASE_URL_FILE": "database", "BOOTSTRAP_ADMIN_PASSWORD_FILE": "identity",
+    "BOOTSTRAP_ADMIN_TOTP_SECRET_FILE": "identity", "IDENTITY_SECRET_KEY_BASE64_FILE": "identity",
+    "MSISDN_ENCRYPTION_KEY_BASE64_FILE": "msisdn", "MSISDN_LOOKUP_KEY_BASE64_FILE": "msisdn",
+    "INBOUND_CONTENT_KEYS_JSON_FILE": "inbound-content", "PRIVACY_EVIDENCE_KEYS_JSON_FILE": "privacy",
+    "SENDER_PROXY_KEYS_JSON_FILE": "sender-proxy", "GATEWAY_CALLBACK_SECRET_FILE": "gateway-control",
+    "GATEWAY_CALLBACK_SECRET_PREVIOUS_FILE": "gateway-control", "GATEWAY_COMMAND_SECRET_FILE": "gateway-control",
+    "GATEWAY_COMMAND_SECRET_PREVIOUS_FILE": "gateway-control", "GATEWAY_RUNTIME_SECRET_FILE": "gateway-control",
+    "GATEWAY_RUNTIME_SECRET_PREVIOUS_FILE": "gateway-control", "MEDIA_DOWNLOAD_SECRET_FILE": "media-download",
+    "PROFILING_TOKEN_FILE": "profiling", "S3_ACCESS_KEY_ID_FILE": "object-store", "S3_SECRET_ACCESS_KEY_FILE": "object-store",
+}
 
 
 def service_blocks(text: str) -> dict[str, list[str]]:
@@ -70,6 +82,11 @@ def main() -> int:
         errors.append("cannot read canonical deployment topology")
     if expected_services and set(services) != expected_services:
         errors.append("production compose must contain exactly the Railway control-plane services")
+    try:
+        railway_contract = json.loads(DEFAULT_RAILWAY_CONTRACT.read_text(encoding="utf-8")).get("services", {})
+    except (OSError, json.JSONDecodeError, AttributeError):
+        railway_contract = {}
+        errors.append("cannot read authoritative Railway service-contract health definitions")
     if "OPENWA_GATEWAY_URL:" in text:
         errors.append("Railway control-plane services must use governed node-addressed OpenWA routing, not OPENWA_GATEWAY_URL")
     media_binding = "MEDIA_DOWNLOAD_BASE_URL: ${MEDIA_DOWNLOAD_BASE_URL:?"
@@ -78,12 +95,29 @@ def main() -> int:
     if re.search(r"MEDIA_DOWNLOAD_BASE_URL:\s*http://", text, re.IGNORECASE):
         errors.append("MEDIA_DOWNLOAD_BASE_URL must not use HTTP or Docker-internal production routing")
     control_block = "\n".join(services.get("control-api", []))
-    for required in ("ALLOWED_NETWORK_CIDRS: ${ALLOWED_NETWORK_CIDRS:?", "TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:?"):
+    for required in ("ALLOWED_NETWORK_CIDRS: ${ALLOWED_NETWORK_CIDRS:?", "TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:?", "GATEWAY_RUNTIME_ALLOWED_HOSTS: ${GATEWAY_RUNTIME_ALLOWED_HOSTS:?"):
         if required not in control_block:
             errors.append("public control-api must require Railway network allowlist and trusted proxy environment")
 
     for name, lines in services.items():
         block = "\n".join(lines)
+        contract = railway_contract.get(name) if isinstance(railway_contract, dict) else None
+        if not isinstance(contract, dict):
+            errors.append(f"service {name} has no authoritative Railway service-contract health definition")
+        else:
+            expected_port = contract.get("port")
+            expected_path = contract.get("health_path")
+            public_ingress = contract.get("public_ingress")
+            if not isinstance(public_ingress, bool):
+                errors.append(f"service {name} authoritative public ingress declaration must be boolean")
+            elif public_ingress is False and re.search(r"^    ports:\s*$", block, re.MULTILINE):
+                errors.append(f"service {name} must not publish host ports because authoritative public ingress is false")
+            health_block = re.search(r"^    healthcheck:\s*$\n((?:      .*(?:\n|$))*)", block, re.MULTILINE)
+            health_urls = re.findall(r"http://127\.0\.0\.1:(\d+)(/[A-Za-z0-9_./-]+)", health_block.group(1) if health_block else "")
+            if len(health_urls) != 1:
+                errors.append(f"service {name} healthcheck must contain exactly one Railway service-contract endpoint")
+            elif str(expected_port) != health_urls[0][0] or expected_path != health_urls[0][1]:
+                errors.append(f"service {name} healthcheck {health_urls[0][0]}{health_urls[0][1]} does not match Railway service-contract {expected_port}{expected_path}")
         if re.search(r"^    build:\s*", block, re.MULTILINE):
             errors.append(f"service {name} must use a prebuilt immutable image, not build")
         image_match = re.search(r"^    image:\s*(.*?)\s*$", block, re.MULTILINE)
@@ -120,6 +154,23 @@ def main() -> int:
                 match = KEY_VALUE.match(line)
                 if match:
                     environment[match.group(1)] = clean_scalar(match.group(2))
+        if isinstance(contract, dict):
+            for required_env in contract.get("required_environment", []):
+                if required_env not in environment:
+                    errors.append(f"service {name} must declare required Railway environment {required_env}")
+        contract_classes = set(contract.get("secret_classes", [])) if isinstance(contract, dict) else set()
+        required_classes: set[str] = set()
+        for key in environment:
+            if key.endswith("_FILE") and key not in SECRET_ENV_CLASSES:
+                errors.append(f"service {name} mounted secret environment {key} has no authoritative secret-class mapping")
+            mapped = SECRET_ENV_CLASSES.get(key)
+            if mapped:
+                required_classes.add(mapped)
+        if "<<: *go-worker-environment" in block:
+            required_classes.add("profiling")
+        missing_classes = sorted(required_classes - contract_classes)
+        if missing_classes:
+            errors.append(f"service {name} secret classes omit mounted domains: {', '.join(missing_classes)}")
         runtime_env = environment.get("APP_ENV", environment.get("NODE_ENV", "")).lower()
         if not runtime_env and "<<: *go-worker-environment" in block:
             runtime_env = "production"

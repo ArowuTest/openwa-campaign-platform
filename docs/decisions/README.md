@@ -7,6 +7,7 @@
 | [ADR-0003](ADR-0003-designer-html-as-reference.md) | Designer HTML is reference material, not production code | Accepted | Next.js implementation, accessibility and safeguards |
 | [ADR-0004](ADR-0004-bounded-import-preview.md) | Large import preview is bounded and streaming | Accepted | Memory safety and import UX |
 | [ADR-0005](ADR-0005-governed-sender-capacity.md) | Sender capacity is governed and evidence-based | Accepted | Admission, forecasting and session safety |
+| [ADR-0006](ADR-0006-campaign-scoped-sender-profile-identity.md) | Campaign-scoped WhatsApp profile identity is governed separately from the reusable account | Accepted | Reservation, profile verification, capability evidence and safe account reuse |
 
 ## Required ADR triggers
 

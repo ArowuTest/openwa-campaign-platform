@@ -1,4 +1,4 @@
-.PHONY: format fmt test race vet build frontend-syntax traceability governance-check governance-test deployment-topology release-gate check tree package bundle
+.PHONY: format fmt test race vet build frontend-syntax traceability governance-check governance-test deployment-topology deployment-readiness release-gate check tree package bundle
 
 VERSION := $(shell cat VERSION)
 
@@ -37,13 +37,16 @@ governance-check:
 deployment-topology:
 	python3 scripts/verify-deployment-topology.py
 
+deployment-readiness:
+	python3 scripts/verify-deployment-readiness.py
+
 governance-test:
 	python3 -m unittest discover -s tests/governance -p "test_*.py"
 
 release-gate:
 	python3 scripts/verify-release-readiness.py --production-candidate
 
-check: fmt test race vet build frontend-syntax traceability governance-check governance-test deployment-topology
+check: fmt test race vet build frontend-syntax traceability governance-check governance-test deployment-topology deployment-readiness
 
 tree:
 	find . -maxdepth 4 -type f | sort

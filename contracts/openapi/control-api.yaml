@@ -4329,7 +4329,7 @@ components:
     GatewayRuntimeReport:
       type: object
       additionalProperties: false
-      required: [nodeId, expectedNodeVersion, gatewayPoolId, provider, engine, adapterVersion, gatewayVersion, workerVersion, configurationVersion, bootId, internalUrl, capabilities, runtimeState, capacity, sessionCount, queueDepth, cpuPercent, memoryBytes, resourceHealth, observedAt]
+      required: [nodeId, expectedNodeVersion, gatewayPoolId, provider, engine, adapterVersion, gatewayVersion, workerVersion, configurationVersion, bootId, runtimeSequence, internalUrl, capabilities, runtimeState, capacity, sessionCount, queueDepth, cpuPercent, memoryBytes, resourceHealth, observedAt]
       properties:
         nodeId: { type: string, format: uuid }
         expectedNodeVersion: { type: integer, format: int64, minimum: 1 }
@@ -4341,6 +4341,8 @@ components:
         workerVersion: { type: string }
         configurationVersion: { type: string }
         bootId: { type: string }
+        bootStartedAt: { type: string, format: date-time, description: Stable process-start origin for bootId; when absent during rolling upgrade the control plane derives an equivalent origin from observedAt and signed process uptime. }
+        runtimeSequence: { type: integer, format: int64, minimum: 1, description: Strictly increasing sequence scoped to bootId; used for causal ordering independently of wall-clock corrections. }
         internalUrl: { type: string, format: uri }
         capabilities: { type: array, uniqueItems: true, items: { type: string } }
         runtimeState: { type: string, enum: [READY, DEGRADED, UNAVAILABLE, DRAINING] }

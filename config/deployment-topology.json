@@ -26,6 +26,12 @@
       "BAILEYS",
       "WHATSAPP_WEB_JS"
     ],
+    "service_contracts": {
+      "openwa-gateway": {
+        "port": 2785,
+        "health_path": "/healthz"
+      }
+    },
     "database_credentials_allowed": false,
     "object_store_credentials_allowed": false,
     "meta_credentials_allowed": false
@@ -52,6 +58,7 @@
       "bridge.docker.internal"
     ],
     "hostinger_bind_address_env": "GATEWAY_BIND_ADDRESS",
-    "hostinger_gateway_url_env": "GATEWAY_INTERNAL_URL"
+    "hostinger_gateway_url_env": "GATEWAY_INTERNAL_URL",
+    "gateway_runtime_allowed_hosts_env": "GATEWAY_RUNTIME_ALLOWED_HOSTS"
   }
 }

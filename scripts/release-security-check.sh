@@ -8,6 +8,7 @@ python3 scripts/generate-sbom.py --output artifacts/sbom.cdx.json
 
 if [ "${STRICT_RELEASE_SECURITY:-0}" = "1" ]; then
   python3 scripts/verify-production-compose.py --resolved
+  python3 scripts/verify-deployment-topology.py --resolved
   python3 scripts/verify-node-security.py --strict
   python3 scripts/generate-sbom.py --strict --output artifacts/sbom.cdx.json
   for tool in gitleaks trivy syft; do

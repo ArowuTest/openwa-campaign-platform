@@ -29,6 +29,7 @@ services:
       GATEWAY_CONFIGURATION_VERSION: ${GATEWAY_CONFIGURATION_VERSION:?required}
       GATEWAY_CAPABILITIES: ${GATEWAY_CAPABILITIES:?required}
       GATEWAY_INTERNAL_URL: ${GATEWAY_INTERNAL_URL:?approved private gateway command URL is required}
+      GATEWAY_RUNTIME_ALLOWED_HOSTS: ${GATEWAY_RUNTIME_ALLOWED_HOSTS:?governed gateway runtime host authority is required}
       CONTROL_API_INTERNAL_URL: ${CONTROL_API_INTERNAL_URL:?approved Railway control URL is required}
       CONTROL_API_CALLBACK_URL: ${CONTROL_API_CALLBACK_URL:?approved Railway callback URL is required}
       CONTROL_API_INBOUND_URL: ${CONTROL_API_INBOUND_URL:?approved Railway inbound URL is required}
@@ -36,6 +37,8 @@ services:
       SSRF_ALLOWED_HOSTS: ${SSRF_ALLOWED_HOSTS:?exact Railway control hostname is required}
       OPENWA_SESSION_REGISTRY_DIR: /data/openwa-session-registry
       OPENWA_SESSION_DATA_DIR: /app/session-data
+      GATEWAY_RESOURCE_FILESYSTEM_PATH: /app/session-data
+      GATEWAY_CAPACITY: ${GATEWAY_CAPACITY:?required}
       OPENWA_MAX_CONCURRENT_SESSIONS: ${OPENWA_MAX_CONCURRENT_SESSIONS:?required}
       OPENWA_RECONNECT_BASE_DELAY_MS: ${OPENWA_RECONNECT_BASE_DELAY_MS:-}
       OPENWA_RECONNECT_MAX_ATTEMPTS: ${OPENWA_RECONNECT_MAX_ATTEMPTS:-}

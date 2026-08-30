@@ -155,9 +155,12 @@ type HealthPolicyResolver interface {
 }
 
 type GovernanceService struct {
-	Store          GovernanceStore
-	HealthPolicies HealthPolicyResolver
-	HealthSignals  HealthSignalSource
+	Store                       GovernanceStore
+	HealthPolicies              HealthPolicyResolver
+	HealthSignals               HealthSignalSource
+	RequireCanonicalRuntimeURL  bool
+	RuntimeAllowedInternalHosts []string
+	RuntimeForbiddenHosts       []string
 }
 
 func (s *GovernanceService) CreatePool(ctx context.Context, value Pool, actor, reason string) (Pool, error) {
@@ -217,8 +220,20 @@ func (s *GovernanceService) RegisterNode(ctx context.Context, value Node, actor,
 	if value.Status != "READY" && value.Status != "DRAINING" && value.Status != "UNHEALTHY" && value.Status != "OFFLINE" {
 		return Node{}, errors.New("invalid node status")
 	}
-	if value.InternalURL != "" && !strings.HasPrefix(value.InternalURL, "https://") && !strings.HasPrefix(value.InternalURL, "http://") {
-		return Node{}, errors.New("node internal URL must be HTTP or HTTPS")
+	if value.InternalURL != "" {
+		if s.RequireCanonicalRuntimeURL {
+			canonical, valid := canonicalRuntimeInternalURL(value.InternalURL, s.RuntimeAllowedInternalHosts, s.RuntimeForbiddenHosts)
+			if !valid {
+				return Node{}, errors.New("node internal URL must be a governed canonical HTTPS authority")
+			}
+			value.InternalURL = canonical
+		} else {
+			canonical, valid := canonicalRuntimeInternalURLForMode(value.InternalURL, s.RuntimeAllowedInternalHosts, s.RuntimeForbiddenHosts, true)
+			if !valid {
+				return Node{}, errors.New("node internal URL must be a governed HTTP or HTTPS authority")
+			}
+			value.InternalURL = canonical
+		}
 	}
 	if value.Provider != "" && value.Provider != "OPENWA" {
 		return Node{}, errors.New("initial release supports OPENWA sender nodes")

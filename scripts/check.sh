@@ -15,6 +15,7 @@ node scripts/check-typescript-syntax.js
 node scripts/test-gateway-durability.js
 python3 scripts/verify_openapi_routes.py
 python3 scripts/verify-deployment-topology.py
+python3 scripts/verify-deployment-readiness.py
 ./scripts/release-security-check.sh
 python3 scripts/generate-traceability.py
 git diff --exit-code -- docs/requirements/TRACEABILITY.md docs/requirements/traceability.json

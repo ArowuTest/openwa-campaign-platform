@@ -44,7 +44,7 @@ func TestRuntimeRegistrationPersistsContainerResourceHealth(t *testing.T) {
 		NodeID: node.ID, ExpectedNodeVersion: node.Version, GatewayPoolID: pool.ID,
 		Provider: "OPENWA", Engine: "BAILEYS", AdapterVersion: "adapter-1",
 		GatewayVersion: "0.13.0", WorkerVersion: "node-22", ConfigurationVersion: "cfg-1",
-		BootID: "boot-health", InternalURL: "https://gateway.internal",
+		BootID: "boot-health", RuntimeSequence: 1, InternalURL: "https://gateway.internal",
 		Capabilities: []Capability{CapabilitySendText}, RuntimeState: RuntimeReady,
 		Capacity: 3, ResourceHealth: completeRuntimeResourceHealth(), ObservedAt: now,
 	}
@@ -79,7 +79,7 @@ func TestRuntimeReportRejectsHostScopedResourceClaims(t *testing.T) {
 		NodeID: "node-1", ExpectedNodeVersion: 1, GatewayPoolID: "pool-1",
 		Provider: "OPENWA", Engine: "BAILEYS", AdapterVersion: "adapter-1",
 		GatewayVersion: "v", WorkerVersion: "w", ConfigurationVersion: "c",
-		BootID: "boot", InternalURL: "https://gateway.internal",
+		BootID: "boot", RuntimeSequence: 1, InternalURL: "https://gateway.internal",
 		Capabilities: []Capability{CapabilitySendText}, RuntimeState: RuntimeReady,
 		ResourceHealth: health,
 	}
@@ -88,7 +88,7 @@ func TestRuntimeReportRejectsHostScopedResourceClaims(t *testing.T) {
 		AdapterVersion: "adapter-1", Status: GatewayPoolActive,
 		Capabilities: []Capability{CapabilitySendText},
 	}
-	if err := validateRuntimeReport(&report, "node-1", pool, time.Now().UTC()); !errors.Is(err, ErrRuntimeDrift) {
+	if err := validateRuntimeReport(&report, "node-1", pool, time.Now().UTC(), nil, nil); !errors.Is(err, ErrRuntimeDrift) {
 		t.Fatalf("host-scoped runtime claim was accepted: %v", err)
 	}
 }

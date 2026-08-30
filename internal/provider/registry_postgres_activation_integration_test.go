@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,6 +30,7 @@ func TestPostgreSQLProviderCapabilityActivationUsesGovernedTransaction(t *testin
 	if err := db.QueryRowContext(ctx, `SELECT gen_random_uuid()::text,gen_random_uuid()::text`).Scan(&creatorID, &approverID); err != nil {
 		t.Fatal(err)
 	}
+	providerName := "OPENWA_TEST_" + strings.ToUpper(creatorID[:8])
 	for _, user := range []struct{ id, email string }{
 		{creatorID, "provider-creator-" + creatorID + "@internal.invalid"},
 		{approverID, "provider-approver-" + approverID + "@internal.invalid"},
@@ -43,7 +45,7 @@ func TestPostgreSQLProviderCapabilityActivationUsesGovernedTransaction(t *testin
 		Clock: func() time.Time { return now },
 	}
 	created, err := service.CreateDraft(ctx, Definition{
-		Provider: "OPENWA", Channel: ChannelWhatsApp, Engine: "BAILEYS",
+		Provider: providerName, Channel: ChannelWhatsApp, Engine: "BAILEYS",
 		AdapterVersion: "0.13.0+task6", Capabilities: []Capability{CapabilitySendText},
 	}, creatorID, "task six provider capability draft")
 	if err != nil {
@@ -62,7 +64,7 @@ func TestPostgreSQLProviderCapabilityActivationUsesGovernedTransaction(t *testin
 	if activated.Status != StatusActive || activated.ApprovedBy != approverID {
 		t.Fatalf("unexpected activated definition: %#v", activated)
 	}
-	resolved, err := service.Store.Active(ctx, "OPENWA", ChannelWhatsApp, "BAILEYS", now)
+	resolved, err := service.Store.Active(ctx, providerName, ChannelWhatsApp, "BAILEYS", now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +80,7 @@ func TestPostgreSQLProviderCapabilityActivationUsesGovernedTransaction(t *testin
 	}
 	now = now.Add(time.Minute)
 	rejectDraft, err := service.CreateDraft(ctx, Definition{
-		Provider: "OPENWA", Channel: ChannelWhatsApp, Engine: "WHATSAPP_WEB_JS",
+		Provider: providerName, Channel: ChannelWhatsApp, Engine: "WHATSAPP_WEB_JS",
 		AdapterVersion: "0.13.0+task6-reject", Capabilities: []Capability{CapabilitySendText},
 		SubmittedBy: "forged", ApprovedBy: "forged",
 	}, creatorID, "task six provider rejection draft")

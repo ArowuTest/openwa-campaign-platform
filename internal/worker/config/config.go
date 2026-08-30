@@ -538,6 +538,9 @@ func (c CampaignConfig) Validate() error {
 			if err != nil || gateway.Scheme == "" || gateway.Host == "" || (gateway.Scheme != "http" && gateway.Scheme != "https") {
 				return errors.New("OPENWA_GATEWAY_URL must be a valid http or https URL when configured")
 			}
+			if c.Environment == "staging" || c.Environment == "production" {
+				return errors.New("deployed campaign workers must not configure OPENWA_GATEWAY_URL; use governed node-addressed runtime URLs")
+			}
 		}
 		if len(c.GatewayCommandSecret) < 32 {
 			return errors.New("GATEWAY_COMMAND_SECRET must contain at least 32 characters when OpenWA is configured")
@@ -652,7 +655,7 @@ func LoadMetrics() (MetricsConfig, error) {
 	}
 	cfg := MetricsConfig{
 		Environment:    environment,
-		HealthAddr:     strings.TrimSpace(env("WORKER_HEALTH_ADDR", ":8093")),
+		HealthAddr:     strings.TrimSpace(env("WORKER_HEALTH_ADDR", ":8096")),
 		DatabaseDriver: strings.TrimSpace(env("POSTGRES_DRIVER", "postgres")),
 		DatabaseURL:    strings.TrimSpace(os.Getenv("DATABASE_URL")),
 		WorkerID:       strings.TrimSpace(env("WORKER_ID", hostname("metrics-worker"))),

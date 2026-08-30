@@ -15,13 +15,16 @@ type runtimePageStore struct {
 	events []sender.RuntimeEvent
 }
 
+func (f *runtimePageStore) GetNode(context.Context, string) (sender.Node, error) {
+	return sender.Node{}, nil
+}
 func (f *runtimePageStore) UseRuntimeNonce(context.Context, string, string, string, time.Time) error {
 	return nil
 }
-func (f *runtimePageStore) ApplyRuntimeReport(context.Context, string, int64, sender.RuntimeReport, string, time.Time) (sender.Node, error) {
+func (f *runtimePageStore) ApplyRuntimeReport(context.Context, string, int64, sender.RuntimeReport, string, string, time.Time, time.Time) (sender.Node, error) {
 	return sender.Node{}, nil
 }
-func (f *runtimePageStore) RecordRuntimeRejection(context.Context, string, sender.RuntimeReport, string, string, time.Time) error {
+func (f *runtimePageStore) RecordRuntimeRejection(context.Context, string, sender.RuntimeReport, string, string, string, time.Time, time.Time) error {
 	return nil
 }
 func (f *runtimePageStore) ListRuntimeEvents(context.Context, string, int) ([]sender.RuntimeEvent, error) {

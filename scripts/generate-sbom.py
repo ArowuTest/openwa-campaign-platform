@@ -77,6 +77,16 @@ def native_components() -> list[dict[str, Any]]:
     })
     return result
 
+def required_npm_lockfiles(manifests: list[Path]) -> list[Path]:
+    dependency_keys = ("dependencies", "devDependencies", "optionalDependencies")
+    required: list[Path] = []
+    for manifest in manifests:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+        if any(data.get(key) for key in dependency_keys):
+            required.append(manifest.with_name("package-lock.json"))
+    return required
+
+
 def image_components(compose_path: Path, strict: bool) -> list[dict[str, Any]]:
     text = compose_path.read_text(encoding="utf-8")
     result: list[dict[str, Any]] = []
@@ -119,8 +129,9 @@ def main() -> int:
     parser.add_argument("--output", type=Path, default=ROOT / "artifacts/sbom.cdx.json")
     parser.add_argument("--strict", action="store_true")
     args = parser.parse_args()
+    npm_manifests = [ROOT / "package.json", ROOT / "apps/admin-web/package.json", ROOT / "services/openwa-gateway/package.json"]
     if args.strict:
-        missing = [str(path.relative_to(ROOT)) for path in (ROOT / "package-lock.json", ROOT / "apps/admin-web/package-lock.json", ROOT / "services/openwa-gateway/package-lock.json") if not path.is_file()]
+        missing = [str(path.relative_to(ROOT)) for path in required_npm_lockfiles(npm_manifests) if not path.is_file()]
         if missing:
             raise RuntimeError("strict SBOM requires reproducible lockfiles: " + ", ".join(missing))
 
@@ -131,6 +142,7 @@ def main() -> int:
     for relative in ("package.json", "apps/admin-web/package.json", "services/openwa-gateway/package.json"):
         components.extend(npm_components(ROOT / relative, relative))
     components.extend(image_components(ROOT / "infrastructure/compose/compose.production.yaml", args.strict))
+    components.extend(image_components(ROOT / "infrastructure/compose/compose.hostinger-openwa-gateway.yaml", args.strict))
     components = sorted({component_key(item): item for item in components}.values(), key=component_key)
 
     fingerprint = hashlib.sha256(json.dumps(components, sort_keys=True, separators=(",", ":")).encode()).hexdigest()

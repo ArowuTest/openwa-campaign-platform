@@ -63,7 +63,10 @@ type RuntimeReport struct {
 	WorkerVersion        string                `json:"workerVersion"`
 	ConfigurationVersion string                `json:"configurationVersion"`
 	BootID               string                `json:"bootId"`
+	BootStartedAt        time.Time             `json:"bootStartedAt,omitempty"`
+	RuntimeSequence      int64                 `json:"runtimeSequence"`
 	InternalURL          string                `json:"internalUrl"`
+	DeclaredInternalURL  string                `json:"-"`
 	Capabilities         []Capability          `json:"capabilities"`
 	RuntimeState         RuntimeState          `json:"runtimeState"`
 	Capacity             int                   `json:"capacity"`
@@ -89,19 +92,23 @@ type RuntimeEvent struct {
 }
 
 type RuntimeRegistrationStore interface {
+	GetNode(context.Context, string) (Node, error)
 	UseRuntimeNonce(context.Context, string, string, string, time.Time) error
-	ApplyRuntimeReport(context.Context, string, int64, RuntimeReport, string, time.Time) (Node, error)
-	RecordRuntimeRejection(context.Context, string, RuntimeReport, string, string, time.Time) error
+	ApplyRuntimeReport(context.Context, string, int64, RuntimeReport, string, string, time.Time, time.Time) (Node, error)
+	RecordRuntimeRejection(context.Context, string, RuntimeReport, string, string, string, time.Time, time.Time) error
 	ListRuntimeEvents(context.Context, string, int) ([]RuntimeEvent, error)
 }
 
 type RuntimeRegistrationService struct {
-	Store           RuntimeRegistrationStore
-	GatewayPools    GatewayPoolStore
-	Secret          []byte
-	PreviousSecrets [][]byte
-	MaximumSkew     time.Duration
-	Clock           func() time.Time
+	Store                      RuntimeRegistrationStore
+	GatewayPools               GatewayPoolStore
+	Secret                     []byte
+	PreviousSecrets            [][]byte
+	AllowedInternalHosts       []string
+	ForbiddenInternalHosts     []string
+	RequireCanonicalRuntimeURL bool
+	MaximumSkew                time.Duration
+	Clock                      func() time.Time
 }
 
 func (s *RuntimeRegistrationService) now() time.Time {
@@ -245,7 +252,21 @@ func validateRuntimeResourceHealth(health *RuntimeResourceHealth) error {
 	}
 	return nil
 }
-func validateRuntimeReport(report *RuntimeReport, pathNodeID string, pool GatewayPool, now time.Time) error {
+func runtimeBootStartedAt(report RuntimeReport) time.Time {
+	if !report.BootStartedAt.IsZero() {
+		return report.BootStartedAt.UTC()
+	}
+	if report.ObservedAt.IsZero() || report.ResourceHealth.ProcessUptimeSeconds < 0 {
+		return time.Time{}
+	}
+	return report.ObservedAt.UTC().Add(-time.Duration(report.ResourceHealth.ProcessUptimeSeconds) * time.Second)
+}
+
+func validateRuntimeReport(report *RuntimeReport, pathNodeID string, pool GatewayPool, now time.Time, allowedInternalHosts, forbiddenInternalHosts []string) error {
+	return validateRuntimeReportForMode(report, pathNodeID, pool, now, allowedInternalHosts, forbiddenInternalHosts, false)
+}
+
+func validateRuntimeReportForMode(report *RuntimeReport, pathNodeID string, pool GatewayPool, now time.Time, allowedInternalHosts, forbiddenInternalHosts []string, allowDevelopmentHTTP bool) error {
 	report.NodeID = strings.TrimSpace(report.NodeID)
 	report.GatewayPoolID = strings.TrimSpace(report.GatewayPoolID)
 	report.Provider = strings.ToUpper(strings.TrimSpace(report.Provider))
@@ -255,8 +276,9 @@ func validateRuntimeReport(report *RuntimeReport, pathNodeID string, pool Gatewa
 	report.WorkerVersion = strings.TrimSpace(report.WorkerVersion)
 	report.ConfigurationVersion = strings.TrimSpace(report.ConfigurationVersion)
 	report.BootID = strings.TrimSpace(report.BootID)
-	report.InternalURL = strings.TrimRight(strings.TrimSpace(report.InternalURL), "/")
-	if report.NodeID == "" || report.NodeID != strings.TrimSpace(pathNodeID) || report.ExpectedNodeVersion <= 0 || report.GatewayPoolID == "" || report.BootID == "" || report.GatewayVersion == "" || report.WorkerVersion == "" || report.ConfigurationVersion == "" || report.InternalURL == "" {
+	canonicalInternalURL, validInternalURL := canonicalRuntimeInternalURLForMode(report.InternalURL, allowedInternalHosts, forbiddenInternalHosts, allowDevelopmentHTTP)
+	report.InternalURL = canonicalInternalURL
+	if report.NodeID == "" || report.NodeID != strings.TrimSpace(pathNodeID) || report.ExpectedNodeVersion <= 0 || report.GatewayPoolID == "" || report.BootID == "" || report.RuntimeSequence <= 0 || report.GatewayVersion == "" || report.WorkerVersion == "" || report.ConfigurationVersion == "" || report.InternalURL == "" {
 		return ErrRuntimeDrift
 	}
 	if pool.ID != report.GatewayPoolID || pool.Status != GatewayPoolActive || pool.Provider != GatewayProvider(report.Provider) || pool.Engine != GatewayEngine(report.Engine) || pool.AdapterVersion != report.AdapterVersion {
@@ -268,7 +290,7 @@ func validateRuntimeReport(report *RuntimeReport, pathNodeID string, pool Gatewa
 	if pool.EffectiveTo != nil && !pool.EffectiveTo.After(now) {
 		return ErrRuntimeDrift
 	}
-	if !validRuntimeInternalURL(report.InternalURL) {
+	if !validInternalURL {
 		return ErrRuntimeDrift
 	}
 	switch report.RuntimeState {
@@ -287,6 +309,19 @@ func validateRuntimeReport(report *RuntimeReport, pathNodeID string, pool Gatewa
 	} else {
 		report.ObservedAt = report.ObservedAt.UTC()
 		if report.ObservedAt.After(now.Add(5*time.Minute)) || report.ObservedAt.Before(now.Add(-15*time.Minute)) {
+			return ErrRuntimeDrift
+		}
+	}
+	derivedBootStartedAt := report.ObservedAt.Add(-time.Duration(report.ResourceHealth.ProcessUptimeSeconds) * time.Second)
+	if report.BootStartedAt.IsZero() {
+		report.BootStartedAt = derivedBootStartedAt
+	} else {
+		report.BootStartedAt = report.BootStartedAt.UTC()
+		delta := report.BootStartedAt.Sub(derivedBootStartedAt)
+		if delta < 0 {
+			delta = -delta
+		}
+		if report.BootStartedAt.After(report.ObservedAt) || delta > 5*time.Second {
 			return ErrRuntimeDrift
 		}
 	}
@@ -324,25 +359,48 @@ func (s *RuntimeRegistrationService) Register(ctx context.Context, pathNodeID, t
 	if err != nil {
 		return Node{}, err
 	}
+	report.DeclaredInternalURL = strings.TrimSpace(report.InternalURL)
+	report.NodeID = strings.TrimSpace(report.NodeID)
+	if report.NodeID == "" || report.NodeID != strings.TrimSpace(pathNodeID) {
+		return Node{}, ErrRuntimeDrift
+	}
+	governedNode, err := s.Store.GetNode(ctx, report.NodeID)
+	if err != nil {
+		return Node{}, err
+	}
+	canonicalInternalURL, validInternalURL := canonicalRuntimeInternalURLForMode(report.InternalURL, s.AllowedInternalHosts, s.ForbiddenInternalHosts, !s.RequireCanonicalRuntimeURL)
+	if validInternalURL {
+		report.InternalURL = canonicalInternalURL
+	} else {
+		report.InternalURL = ""
+	}
 	pool, err := s.GatewayPools.GetGatewayPool(ctx, strings.TrimSpace(report.GatewayPoolID))
 	if err != nil {
-		recordErr := s.Store.RecordRuntimeRejection(ctx, strings.TrimSpace(pathNodeID), report, requestHash, "gateway pool unavailable", now)
+		if !errors.Is(err, ErrSenderNotFound) {
+			return Node{}, err
+		}
+		recordErr := s.Store.RecordRuntimeRejection(ctx, strings.TrimSpace(pathNodeID), report, nonce, requestHash, "gateway pool unavailable", now.Add(maximumSkew), now)
 		if recordErr != nil {
 			return Node{}, errors.Join(err, fmt.Errorf("record gateway runtime rejection: %w", recordErr))
 		}
 		return Node{}, err
 	}
-	if err = validateRuntimeReport(&report, pathNodeID, pool, now); err != nil {
-		recordErr := s.Store.RecordRuntimeRejection(ctx, strings.TrimSpace(pathNodeID), report, requestHash, err.Error(), now)
+	if err = validateRuntimeReportForMode(&report, pathNodeID, pool, now, s.AllowedInternalHosts, s.ForbiddenInternalHosts, !s.RequireCanonicalRuntimeURL); err != nil {
+		recordErr := s.Store.RecordRuntimeRejection(ctx, strings.TrimSpace(pathNodeID), report, nonce, requestHash, err.Error(), now.Add(maximumSkew), now)
 		if recordErr != nil {
 			return Node{}, errors.Join(err, fmt.Errorf("record gateway runtime rejection: %w", recordErr))
 		}
 		return Node{}, err
 	}
-	if err = s.Store.UseRuntimeNonce(ctx, report.NodeID, nonce, requestHash, now.Add(maximumSkew)); err != nil {
+	if !governedRuntimeAuthorityMatches(governedNode, report) {
+		err = ErrRuntimeDrift
+		recordErr := s.Store.RecordRuntimeRejection(ctx, strings.TrimSpace(pathNodeID), report, nonce, requestHash, err.Error(), now.Add(maximumSkew), now)
+		if recordErr != nil {
+			return Node{}, errors.Join(err, fmt.Errorf("record gateway runtime rejection: %w", recordErr))
+		}
 		return Node{}, err
 	}
-	return s.Store.ApplyRuntimeReport(ctx, report.NodeID, report.ExpectedNodeVersion, report, requestHash, now)
+	return s.Store.ApplyRuntimeReport(ctx, report.NodeID, report.ExpectedNodeVersion, report, nonce, requestHash, now.Add(maximumSkew), now)
 }
 
 func (s *RuntimeRegistrationService) Events(ctx context.Context, nodeID string, limit int) ([]RuntimeEvent, error) {
@@ -352,28 +410,141 @@ func (s *RuntimeRegistrationService) Events(ctx context.Context, nodeID string, 
 	return s.Store.ListRuntimeEvents(ctx, strings.TrimSpace(nodeID), limit)
 }
 
-func validRuntimeInternalURL(raw string) bool {
+func normalizeRuntimeHostname(value string) string {
+	return strings.TrimSuffix(strings.ToLower(strings.Trim(strings.TrimSpace(value), "[]")), ".")
+}
+
+func validRuntimeInternalURL(raw string, allowedInternalHosts, forbiddenInternalHosts []string) bool {
+	_, valid := canonicalRuntimeInternalURL(raw, allowedInternalHosts, forbiddenInternalHosts)
+	return valid
+}
+
+func canonicalRuntimeInternalURL(raw string, allowedInternalHosts, forbiddenInternalHosts []string) (string, bool) {
+	return canonicalRuntimeInternalURLForMode(raw, allowedInternalHosts, forbiddenInternalHosts, false)
+}
+
+func canonicalRuntimeInternalURLForMode(raw string, allowedInternalHosts, forbiddenInternalHosts []string, allowDevelopmentHTTP bool) (string, bool) {
 	parsed, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-		return false
+	if err != nil || parsed == nil {
+		return "", false
 	}
-	hostname := strings.ToLower(strings.Trim(parsed.Hostname(), "[]"))
-	if hostname == "control-api" || hostname == "openwa-gateway" || hostname == "localhost" ||
-		strings.HasSuffix(hostname, ".localhost") || hostname == "host.docker.internal" || strings.HasSuffix(hostname, ".docker.internal") {
-		return false
+	scheme := strings.ToLower(strings.TrimSpace(parsed.Scheme))
+	if parsed.Host == "" || (scheme != "https" && !(allowDevelopmentHTTP && scheme == "http")) || parsed.User != nil || parsed.Opaque != "" ||
+		(parsed.Path != "" && parsed.Path != "/") || parsed.RawPath != "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
+		return "", false
+	}
+	hostname := normalizeRuntimeHostname(parsed.Hostname())
+	if hostname == "" || strings.Contains(hostname, "%") {
+		return "", false
+	}
+	if hostname == "control-api" || hostname == "localhost" || strings.HasSuffix(hostname, ".localhost") {
+		return "", false
+	}
+	if !allowDevelopmentHTTP && (hostname == "openwa-gateway" || hostname == "host.docker.internal" || strings.HasSuffix(hostname, ".docker.internal")) {
+		return "", false
+	}
+	for _, candidate := range forbiddenInternalHosts {
+		if forbidden := normalizeRuntimeHostname(candidate); forbidden != "" && forbidden == hostname {
+			return "", false
+		}
+	}
+	if allowedInternalHosts != nil {
+		approved := false
+		for _, candidate := range allowedInternalHosts {
+			if normalizeRuntimeHostname(candidate) == hostname {
+				approved = true
+				break
+			}
+		}
+		if !approved {
+			return "", false
+		}
 	}
 	ip := net.ParseIP(hostname)
-	if ip != nil && (ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified()) {
-		return false
+	if isRuntimeIPLikeHostname(hostname) {
+		// Deployed runtime authority is DNS-only. Development HTTP may still use
+		// canonical private literals for local container/network plumbing, but
+		// legacy numeric IPv4 spellings are never accepted as DNS names.
+		if ip == nil || !allowDevelopmentHTTP || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+			return "", false
+		}
+		if v4 := ip.To4(); v4 != nil {
+			if !(v4[0] == 10 || (v4[0] == 172 && v4[1] >= 16 && v4[1] <= 31) || (v4[0] == 192 && v4[1] == 168)) {
+				return "", false
+			}
+		} else if len(ip) != net.IPv6len || (ip[0]&0xfe) != 0xfc {
+			return "", false
+		}
 	}
-	if parsed.Scheme == "https" {
+	authority := hostname
+	if strings.Contains(hostname, ":") {
+		authority = "[" + hostname + "]"
+	}
+	port := parsed.Port()
+	if strings.HasSuffix(parsed.Host, ":") {
+		return "", false
+	}
+	if port != "" {
+		portNumber, portErr := strconv.Atoi(port)
+		if portErr != nil || portNumber < 1 || portNumber > 65535 {
+			return "", false
+		}
+		defaultPort := 443
+		if scheme == "http" {
+			defaultPort = 80
+		}
+		if portNumber != defaultPort {
+			authority = net.JoinHostPort(hostname, strconv.Itoa(portNumber))
+		}
+	}
+	return (&url.URL{Scheme: scheme, Host: authority}).String(), true
+}
+
+func isRuntimeIPLikeHostname(value string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(strings.Trim(value, "[]")))
+	if normalized == "" || strings.Contains(normalized, "%") {
+		return normalized != ""
+	}
+	if net.ParseIP(normalized) != nil {
 		return true
 	}
-	if ip == nil {
+	parts := strings.Split(normalized, ".")
+	if len(parts) == 0 || len(parts) > 4 {
 		return false
 	}
-	if v4 := ip.To4(); v4 != nil {
-		return v4[0] == 10 || (v4[0] == 172 && v4[1] >= 16 && v4[1] <= 31) || (v4[0] == 192 && v4[1] == 168)
+	for _, part := range parts {
+		if part == "" {
+			return false
+		}
+		base := 10
+		digits := part
+		if strings.HasPrefix(part, "0x") {
+			base, digits = 16, part[2:]
+		} else if len(part) > 1 && part[0] == '0' {
+			base, digits = 8, part[1:]
+		}
+		if digits == "" {
+			return false
+		}
+		if _, err := strconv.ParseUint(digits, base, 32); err != nil {
+			return false
+		}
 	}
-	return len(ip) == net.IPv6len && (ip[0]&0xfe) == 0xfc
+	return true
+}
+
+func governedRuntimeAuthorityMatches(current Node, report RuntimeReport) bool {
+	if strings.TrimSpace(current.GatewayPoolID) == "" || strings.TrimSpace(current.GatewayPoolID) != report.GatewayPoolID ||
+		(strings.TrimSpace(current.Provider) != "" && strings.ToUpper(strings.TrimSpace(current.Provider)) != report.Provider) ||
+		(strings.TrimSpace(current.Engine) != "" && strings.ToUpper(strings.TrimSpace(current.Engine)) != report.Engine) ||
+		(strings.TrimSpace(current.AdapterVersion) != "" && strings.TrimSpace(current.AdapterVersion) != report.AdapterVersion) {
+		return false
+	}
+	if strings.TrimSpace(current.InternalURL) == "" {
+		return true
+	}
+	parsed, err := url.Parse(report.InternalURL)
+	allowDevelopmentHTTP := err == nil && strings.EqualFold(parsed.Scheme, "http")
+	canonical, valid := canonicalRuntimeInternalURLForMode(current.InternalURL, nil, nil, allowDevelopmentHTTP)
+	return valid && canonical == report.InternalURL
 }

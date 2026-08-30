@@ -3,7 +3,9 @@ package sender
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -500,6 +502,13 @@ func (m *MemoryGovernanceStore) ListGatewayPoolEventPage(_ context.Context, pool
 func (m *MemoryGovernanceStore) UseRuntimeNonce(_ context.Context, nodeID, nonce, _ string, expiresAt time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.useRuntimeNonceLocked(nodeID, nonce, expiresAt)
+}
+
+func (m *MemoryGovernanceStore) useRuntimeNonceLocked(nodeID, nonce string, expiresAt time.Time) error {
+	if strings.TrimSpace(nonce) == "" {
+		return nil
+	}
 	now := time.Now().UTC()
 	for key, expiry := range m.runtimeNonces {
 		if !expiry.After(now) {
@@ -514,6 +523,24 @@ func (m *MemoryGovernanceStore) UseRuntimeNonce(_ context.Context, nodeID, nonce
 	return nil
 }
 
+func runtimeIdentityTimestamp(value any) (time.Time, bool) {
+	switch typed := value.(type) {
+	case time.Time:
+		if typed.IsZero() {
+			return time.Time{}, false
+		}
+		return typed.UTC(), true
+	case string:
+		parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(typed))
+		if err != nil || parsed.IsZero() {
+			return time.Time{}, false
+		}
+		return parsed.UTC(), true
+	default:
+		return time.Time{}, false
+	}
+}
+
 func cloneRuntimeEvent(value RuntimeEvent) RuntimeEvent {
 	if value.RuntimeIdentity != nil {
 		copyValue := map[string]any{}
@@ -525,15 +552,72 @@ func cloneRuntimeEvent(value RuntimeEvent) RuntimeEvent {
 	return value
 }
 
-func (m *MemoryGovernanceStore) ApplyRuntimeReport(_ context.Context, nodeID string, expected int64, report RuntimeReport, requestHash string, now time.Time) (Node, error) {
+func (m *MemoryGovernanceStore) ApplyRuntimeReport(_ context.Context, nodeID string, expected int64, report RuntimeReport, nonce, requestHash string, nonceExpiresAt, now time.Time) (Node, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	current, ok := m.nodes[nodeID]
 	if !ok {
 		return Node{}, ErrSenderNotFound
 	}
+	if err := m.useRuntimeNonceLocked(nodeID, nonce, nonceExpiresAt); err != nil {
+		return Node{}, err
+	}
+	reject := func(reason string) (Node, error) {
+		m.seq++
+		event := RuntimeEvent{ID: m.next("runtime"), NodeID: nodeID, GatewayPoolID: current.GatewayPoolID, EventType: "REJECTED", NodeVersion: report.ExpectedNodeVersion, BootID: report.BootID, RuntimeIdentity: runtimeIdentity(report), RequestHash: requestHash, Reason: reason, OccurredAt: now}
+		m.runtimeEvents[nodeID] = append(m.runtimeEvents[nodeID], event)
+		return Node{}, ErrRuntimeDrift
+	}
 	if current.Version != expected {
-		return Node{}, ErrSenderConflict
+		return reject("gateway governance version conflict")
+	}
+	if !governedRuntimeAuthorityMatches(current, report) {
+		return reject("governed runtime authority changed before report application")
+	}
+	var lastSequence int64
+	seenIncomingBoot := false
+	seenIncomingBeforeActiveBoot := false
+	seenDrainingBoot := false
+	var activeBootStartedAt time.Time
+	for _, event := range m.runtimeEvents[nodeID] {
+		if event.BootID == current.BootID && (event.EventType == "REGISTERED" || event.EventType == "HEARTBEAT") {
+			if startedAt, ok := runtimeIdentityTimestamp(event.RuntimeIdentity["bootStartedAt"]); ok && (activeBootStartedAt.IsZero() || startedAt.Before(activeBootStartedAt)) {
+				activeBootStartedAt = startedAt
+			}
+		}
+		if event.BootID != report.BootID {
+			continue
+		}
+		if current.RegisteredAt != nil && !event.OccurredAt.After(*current.RegisteredAt) {
+			seenIncomingBeforeActiveBoot = true
+		}
+		if strings.EqualFold(strings.TrimSpace(fmt.Sprint(event.RuntimeIdentity["runtimeState"])), string(RuntimeDraining)) {
+			seenDrainingBoot = true
+		}
+		if event.EventType == "REGISTERED" || event.EventType == "HEARTBEAT" {
+			seenIncomingBoot = true
+			if sequence, ok := event.RuntimeIdentity["runtimeSequence"].(int64); ok && sequence > lastSequence {
+				lastSequence = sequence
+			}
+		}
+	}
+	incomingObservedBeforeActiveBoot := current.RegisteredAt != nil && !report.ObservedAt.UTC().After(current.RegisteredAt.UTC())
+	incomingBootStartedAt := runtimeBootStartedAt(report)
+	incomingBootNotNewer := !activeBootStartedAt.IsZero() && !incomingBootStartedAt.IsZero() && !incomingBootStartedAt.After(activeBootStartedAt)
+	if current.BootID != "" && current.BootID != report.BootID && (seenIncomingBoot || seenIncomingBeforeActiveBoot || incomingObservedBeforeActiveBoot || incomingBootNotNewer) {
+		return reject("retired boot cannot publish runtime state after replacement boot is active")
+	}
+	if current.BootID != "" && current.BootID != report.BootID && report.RuntimeState == RuntimeDraining {
+		return reject("replacement boot cannot begin in DRAINING state")
+	}
+	if seenDrainingBoot && report.RuntimeState != RuntimeDraining {
+		return reject("runtime state cannot leave DRAINING without a new boot ID")
+	}
+	if current.BootID == report.BootID && report.RuntimeSequence <= lastSequence {
+		return reject("runtime sequence is not newer than accepted state for this boot")
+	}
+	if current.RuntimeState == RuntimeDraining && current.BootID == report.BootID && report.RuntimeState != RuntimeDraining {
+		return reject("runtime state cannot leave DRAINING without a new boot ID")
 	}
 	previousBootID := current.BootID
 	wasRegistered := current.RegisteredAt != nil
@@ -574,16 +658,29 @@ func (m *MemoryGovernanceStore) ApplyRuntimeReport(_ context.Context, nodeID str
 		eventType = "REGISTERED"
 	}
 	m.seq++
-	event := RuntimeEvent{ID: m.next("runtime"), NodeID: nodeID, GatewayPoolID: report.GatewayPoolID, EventType: eventType, NodeVersion: current.Version, BootID: report.BootID, RuntimeIdentity: map[string]any{"provider": report.Provider, "engine": report.Engine, "adapterVersion": report.AdapterVersion, "gatewayVersion": report.GatewayVersion, "workerVersion": report.WorkerVersion, "configurationVersion": report.ConfigurationVersion, "capabilities": report.Capabilities, "runtimeState": report.RuntimeState}, RequestHash: requestHash, Reason: "signed gateway runtime report accepted", OccurredAt: now}
+	event := RuntimeEvent{ID: m.next("runtime"), NodeID: nodeID, GatewayPoolID: report.GatewayPoolID, EventType: eventType, NodeVersion: current.Version, BootID: report.BootID, RuntimeIdentity: runtimeIdentity(report), RequestHash: requestHash, Reason: "signed gateway runtime report accepted", OccurredAt: now}
 	m.runtimeEvents[nodeID] = append(m.runtimeEvents[nodeID], event)
 	return current, nil
 }
 
-func (m *MemoryGovernanceStore) RecordRuntimeRejection(_ context.Context, nodeID string, report RuntimeReport, requestHash, reason string, now time.Time) error {
+func (m *MemoryGovernanceStore) RecordRuntimeRejection(_ context.Context, nodeID string, report RuntimeReport, nonce, requestHash, reason string, nonceExpiresAt, now time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	governed, ok := m.nodes[nodeID]
+	if !ok {
+		return ErrSenderNotFound
+	}
+	eventPoolID := strings.TrimSpace(governed.GatewayPoolID)
+	if eventPoolID != "" {
+		if _, exists := m.gatewayPools[eventPoolID]; !exists {
+			return errors.New("gateway runtime rejection governed pool evidence anchor is unavailable")
+		}
+	}
+	if err := m.useRuntimeNonceLocked(nodeID, nonce, nonceExpiresAt); err != nil {
+		return err
+	}
 	m.seq++
-	event := RuntimeEvent{ID: m.next("runtime"), NodeID: nodeID, GatewayPoolID: report.GatewayPoolID, EventType: "REJECTED", NodeVersion: report.ExpectedNodeVersion, BootID: report.BootID, RuntimeIdentity: map[string]any{"provider": report.Provider, "engine": report.Engine, "adapterVersion": report.AdapterVersion, "gatewayVersion": report.GatewayVersion, "workerVersion": report.WorkerVersion, "configurationVersion": report.ConfigurationVersion, "capabilities": report.Capabilities, "runtimeState": report.RuntimeState}, RequestHash: requestHash, Reason: reason, OccurredAt: now}
+	event := RuntimeEvent{ID: m.next("runtime"), NodeID: nodeID, GatewayPoolID: eventPoolID, EventType: "REJECTED", NodeVersion: report.ExpectedNodeVersion, BootID: report.BootID, RuntimeIdentity: runtimeIdentity(report), RequestHash: requestHash, Reason: reason, OccurredAt: now}
 	m.runtimeEvents[nodeID] = append(m.runtimeEvents[nodeID], event)
 	return nil
 }

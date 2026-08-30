@@ -14,6 +14,22 @@ import (
 
 type PostgreSQLGovernanceStore struct{ DB *sql.DB }
 
+func canonicalUUIDText(value string) bool {
+	value = strings.TrimSpace(value)
+	if len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' {
+		return false
+	}
+	for index, ch := range value {
+		if index == 8 || index == 13 || index == 18 || index == 23 {
+			continue
+		}
+		if !((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f') || (ch >= 'A' && ch <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
 const poolColumns = `id::text,name,coalesce(organisation_id::text,''),status,max_messages_per_minute,daily_capacity,reserved_capacity,version,created_at,updated_at`
 
 func (p *PostgreSQLGovernanceStore) ListPools(ctx context.Context) ([]Pool, error) {
@@ -469,6 +485,10 @@ func (p *PostgreSQLGovernanceStore) ListGatewayPoolPage(ctx context.Context, lim
 }
 
 func (p *PostgreSQLGovernanceStore) GetGatewayPool(ctx context.Context, poolID string) (GatewayPool, error) {
+	poolID = strings.TrimSpace(poolID)
+	if !canonicalUUIDText(poolID) {
+		return GatewayPool{}, ErrSenderNotFound
+	}
 	value, err := scanGatewayPool(p.DB.QueryRowContext(ctx, `SELECT `+gatewayPoolColumns+` FROM gateway_pools WHERE id=$1::uuid`, poolID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return GatewayPool{}, ErrSenderNotFound
@@ -540,7 +560,17 @@ func (p *PostgreSQLGovernanceStore) UseRuntimeNonce(ctx context.Context, nodeID,
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, `DELETE FROM gateway_runtime_nonces WHERE expires_at<=now()`); err != nil {
+	if err = useRuntimeNonceTx(ctx, tx, nodeID, nonce, requestHash, expiresAt); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func useRuntimeNonceTx(ctx context.Context, tx *sql.Tx, nodeID, nonce, requestHash string, expiresAt time.Time) error {
+	if strings.TrimSpace(nonce) == "" {
+		return nil
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM gateway_runtime_nonces WHERE expires_at<=now()`); err != nil {
 		return err
 	}
 	result, err := tx.ExecContext(ctx, `INSERT INTO gateway_runtime_nonces(nonce,node_id,request_hash,expires_at) VALUES($1,$2::uuid,$3,$4) ON CONFLICT (nonce) DO NOTHING`, nonce, nodeID, requestHash, expiresAt)
@@ -554,7 +584,7 @@ func (p *PostgreSQLGovernanceStore) UseRuntimeNonce(ctx context.Context, nodeID,
 	if affected != 1 {
 		return ErrRuntimeReplay
 	}
-	return tx.Commit()
+	return nil
 }
 
 func runtimeIdentity(report RuntimeReport) map[string]any {
@@ -562,10 +592,13 @@ func runtimeIdentity(report RuntimeReport) map[string]any {
 		"provider": report.Provider, "engine": report.Engine, "adapterVersion": report.AdapterVersion,
 		"gatewayVersion": report.GatewayVersion, "workerVersion": report.WorkerVersion,
 		"configurationVersion": report.ConfigurationVersion, "capabilities": report.Capabilities,
-		"runtimeState": report.RuntimeState, "internalUrl": report.InternalURL,
+		"runtimeState": report.RuntimeState, "internalUrl": report.InternalURL, "declaredInternalUrl": report.DeclaredInternalURL,
 		"capacity": report.Capacity, "sessionCount": report.SessionCount,
 		"queueDepth": report.QueueDepth, "cpuPercent": report.CPUPercent, "memoryBytes": report.MemoryBytes,
-		"resourceHealth": report.ResourceHealth,
+		"resourceHealth": report.ResourceHealth, "declaredGatewayPoolId": report.GatewayPoolID,
+		"runtimeSequence": report.RuntimeSequence,
+		"bootStartedAt":   runtimeBootStartedAt(report),
+		"observedAt":      report.ObservedAt.UTC(),
 	}
 }
 
@@ -581,11 +614,11 @@ func insertRuntimeEvent(ctx context.Context, tx *sql.Tx, event RuntimeEvent) err
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO gateway_runtime_events(id,node_id,gateway_pool_id,event_type,node_version,boot_id,runtime_identity,request_hash,reason,occurred_at) VALUES($1::uuid,$2::uuid,$3::uuid,$4,$5,$6,$7::jsonb,NULLIF($8,''),$9,$10)`, event.ID, event.NodeID, event.GatewayPoolID, event.EventType, event.NodeVersion, event.BootID, string(raw), event.RequestHash, event.Reason, event.OccurredAt)
+	_, err = tx.ExecContext(ctx, `INSERT INTO gateway_runtime_events(id,node_id,gateway_pool_id,event_type,node_version,boot_id,runtime_identity,request_hash,reason,occurred_at) VALUES($1::uuid,$2::uuid,NULLIF($3,'')::uuid,$4,$5,$6,$7::jsonb,NULLIF($8,''),$9,$10)`, event.ID, event.NodeID, event.GatewayPoolID, event.EventType, event.NodeVersion, event.BootID, string(raw), event.RequestHash, event.Reason, event.OccurredAt)
 	return err
 }
 
-func (p *PostgreSQLGovernanceStore) ApplyRuntimeReport(ctx context.Context, nodeID string, expected int64, report RuntimeReport, requestHash string, now time.Time) (Node, error) {
+func (p *PostgreSQLGovernanceStore) ApplyRuntimeReport(ctx context.Context, nodeID string, expected int64, report RuntimeReport, nonce, requestHash string, nonceExpiresAt, now time.Time) (Node, error) {
 	tx, err := p.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		return Node{}, err
@@ -594,14 +627,77 @@ func (p *PostgreSQLGovernanceStore) ApplyRuntimeReport(ctx context.Context, node
 	var oldBoot string
 	var oldRegistered sql.NullTime
 	var currentVersion int64
-	if err = tx.QueryRowContext(ctx, `SELECT coalesce(boot_id,''),registered_at,governance_version FROM sender_nodes WHERE id=$1::uuid FOR UPDATE`, nodeID).Scan(&oldBoot, &oldRegistered, &currentVersion); err != nil {
+	var currentRuntimeState, currentPoolID, currentInternalURL, currentProvider, currentEngine, currentAdapterVersion string
+	if err = tx.QueryRowContext(ctx, `SELECT coalesce(boot_id,''),registered_at,governance_version,coalesce(runtime_state,''),coalesce(gateway_pool_id::text,''),coalesce(internal_url,''),coalesce(provider,''),coalesce(engine,''),coalesce(adapter_version,'') FROM sender_nodes WHERE id=$1::uuid FOR UPDATE`, nodeID).Scan(&oldBoot, &oldRegistered, &currentVersion, &currentRuntimeState, &currentPoolID, &currentInternalURL, &currentProvider, &currentEngine, &currentAdapterVersion); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Node{}, ErrSenderNotFound
 		}
 		return Node{}, err
 	}
+	if err = useRuntimeNonceTx(ctx, tx, nodeID, nonce, requestHash, nonceExpiresAt); err != nil {
+		return Node{}, err
+	}
+	reject := func(reason string) (Node, error) {
+		if insertErr := insertRuntimeEvent(ctx, tx, RuntimeEvent{NodeID: nodeID, GatewayPoolID: currentPoolID, EventType: "REJECTED", NodeVersion: report.ExpectedNodeVersion, BootID: report.BootID, RuntimeIdentity: runtimeIdentity(report), RequestHash: requestHash, Reason: reason, OccurredAt: now}); insertErr != nil {
+			return Node{}, insertErr
+		}
+		if commitErr := tx.Commit(); commitErr != nil {
+			return Node{}, commitErr
+		}
+		return Node{}, ErrRuntimeDrift
+	}
 	if currentVersion != expected {
-		return Node{}, ErrSenderConflict
+		return reject("gateway governance version conflict")
+	}
+	if !governedRuntimeAuthorityMatches(Node{
+		GatewayPoolID: currentPoolID, InternalURL: currentInternalURL, Provider: currentProvider,
+		Engine: currentEngine, AdapterVersion: currentAdapterVersion,
+	}, report) {
+		return reject("governed runtime authority changed before report application")
+	}
+	var seenIncomingBoot, seenIncomingBeforeActiveBoot, seenDrainingBoot bool
+	var activeRegisteredAt any
+	if oldRegistered.Valid {
+		activeRegisteredAt = oldRegistered.Time.UTC()
+	}
+	if err = tx.QueryRowContext(ctx, `SELECT
+EXISTS(SELECT 1 FROM gateway_runtime_events WHERE node_id=$1::uuid AND boot_id=$2 AND event_type IN ('REGISTERED','HEARTBEAT')),
+EXISTS(SELECT 1 FROM gateway_runtime_events WHERE node_id=$1::uuid AND boot_id=$2 AND $3::timestamptz IS NOT NULL AND occurred_at <= $3::timestamptz),
+EXISTS(SELECT 1 FROM gateway_runtime_events WHERE node_id=$1::uuid AND boot_id=$2 AND runtime_identity->>'runtimeState'='DRAINING')`, nodeID, report.BootID, activeRegisteredAt).Scan(&seenIncomingBoot, &seenIncomingBeforeActiveBoot, &seenDrainingBoot); err != nil {
+		return Node{}, err
+	}
+	var activeBootStartedAt sql.NullTime
+	if oldBoot != "" {
+		if err = tx.QueryRowContext(ctx, `SELECT min(COALESCE(
+NULLIF(runtime_identity->>'bootStartedAt','')::timestamptz,
+NULLIF(runtime_identity->>'observedAt','')::timestamptz - (COALESCE(NULLIF(runtime_identity#>>'{resourceHealth,processUptimeSeconds}','')::double precision,0) * interval '1 second')
+)) FROM gateway_runtime_events WHERE node_id=$1::uuid AND boot_id=$2 AND event_type IN ('REGISTERED','HEARTBEAT')`, nodeID, oldBoot).Scan(&activeBootStartedAt); err != nil {
+			return Node{}, err
+		}
+	}
+	incomingObservedBeforeActiveBoot := oldRegistered.Valid && !report.ObservedAt.UTC().After(oldRegistered.Time.UTC())
+	incomingBootStartedAt := runtimeBootStartedAt(report)
+	incomingBootNotNewer := activeBootStartedAt.Valid && !incomingBootStartedAt.IsZero() && !incomingBootStartedAt.After(activeBootStartedAt.Time.UTC())
+	if oldBoot != "" && oldBoot != report.BootID && (seenIncomingBoot || seenIncomingBeforeActiveBoot || incomingObservedBeforeActiveBoot || incomingBootNotNewer) {
+		return reject("retired boot cannot publish runtime state after replacement boot is active")
+	}
+	if oldBoot != "" && oldBoot != report.BootID && report.RuntimeState == RuntimeDraining {
+		return reject("replacement boot cannot begin in DRAINING state")
+	}
+	if seenDrainingBoot && report.RuntimeState != RuntimeDraining {
+		return reject("runtime state cannot leave DRAINING without a new boot ID")
+	}
+	if oldBoot == report.BootID {
+		var lastSequence sql.NullInt64
+		if err = tx.QueryRowContext(ctx, `SELECT max(NULLIF(runtime_identity->>'runtimeSequence','')::bigint) FROM gateway_runtime_events WHERE node_id=$1::uuid AND boot_id=$2 AND event_type IN ('REGISTERED','HEARTBEAT')`, nodeID, report.BootID).Scan(&lastSequence); err != nil {
+			return Node{}, err
+		}
+		if lastSequence.Valid && report.RuntimeSequence <= lastSequence.Int64 {
+			return reject("runtime sequence is not newer than accepted state for this boot")
+		}
+	}
+	if RuntimeState(currentRuntimeState) == RuntimeDraining && oldBoot == report.BootID && report.RuntimeState != RuntimeDraining {
+		return reject("runtime state cannot leave DRAINING without a new boot ID")
 	}
 	capabilities, err := encodeCapabilities(report.Capabilities)
 	if err != nil {
@@ -644,26 +740,45 @@ func (p *PostgreSQLGovernanceStore) ApplyRuntimeReport(ctx context.Context, node
 	return out, nil
 }
 
-func (p *PostgreSQLGovernanceStore) RecordRuntimeRejection(ctx context.Context, nodeID string, report RuntimeReport, requestHash, reason string, now time.Time) error {
-	// Rejections are recorded only where the governed node and pool both exist;
-	// authentication failures must not create arbitrary evidence rows.
-	var exists bool
-	if err := p.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sender_nodes n JOIN gateway_pools gp ON gp.id=$2::uuid WHERE n.id=$1::uuid)`, nodeID, report.GatewayPoolID).Scan(&exists); err != nil || !exists {
-		return err
-	}
-	tx, err := p.DB.BeginTx(ctx, nil)
+func (p *PostgreSQLGovernanceStore) RecordRuntimeRejection(ctx context.Context, nodeID string, report RuntimeReport, nonce, requestHash, reason string, nonceExpiresAt, now time.Time) error {
+	// Only authenticated reports reach this boundary. Anchor rejection evidence to
+	// the node's governed pool so a nonexistent declared pool cannot erase audit.
+	tx, err := p.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if err = insertRuntimeEvent(ctx, tx, RuntimeEvent{NodeID: nodeID, GatewayPoolID: report.GatewayPoolID, EventType: "REJECTED", NodeVersion: report.ExpectedNodeVersion, BootID: report.BootID, RuntimeIdentity: runtimeIdentity(report), RequestHash: requestHash, Reason: reason, OccurredAt: now}); err != nil {
+	var governedPoolID sql.NullString
+	if err := tx.QueryRowContext(ctx, `SELECT gateway_pool_id::text FROM sender_nodes WHERE id=$1::uuid FOR UPDATE`, nodeID).Scan(&governedPoolID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrSenderNotFound
+		}
+		return err
+	}
+	eventPoolID := ""
+	if governedPoolID.Valid && strings.TrimSpace(governedPoolID.String) != "" {
+		eventPoolID = strings.TrimSpace(governedPoolID.String)
+	}
+	if eventPoolID != "" {
+		var poolExists bool
+		if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM gateway_pools WHERE id=$1::uuid)`, eventPoolID).Scan(&poolExists); err != nil {
+			return err
+		}
+		if !poolExists {
+			return errors.New("gateway runtime rejection governed pool evidence anchor is unavailable")
+		}
+	}
+	if err = useRuntimeNonceTx(ctx, tx, nodeID, nonce, requestHash, nonceExpiresAt); err != nil {
+		return err
+	}
+	if err = insertRuntimeEvent(ctx, tx, RuntimeEvent{NodeID: nodeID, GatewayPoolID: eventPoolID, EventType: "REJECTED", NodeVersion: report.ExpectedNodeVersion, BootID: report.BootID, RuntimeIdentity: runtimeIdentity(report), RequestHash: requestHash, Reason: reason, OccurredAt: now}); err != nil {
 		return err
 	}
 	return tx.Commit()
 }
 
 func (p *PostgreSQLGovernanceStore) ListRuntimeEvents(ctx context.Context, nodeID string, limit int) ([]RuntimeEvent, error) {
-	rows, err := p.DB.QueryContext(ctx, `SELECT id::text,node_id::text,gateway_pool_id::text,event_type,node_version,boot_id,runtime_identity,coalesce(request_hash,''),reason,occurred_at FROM gateway_runtime_events WHERE node_id=$1::uuid ORDER BY occurred_at DESC,id DESC LIMIT $2`, nodeID, limit)
+	rows, err := p.DB.QueryContext(ctx, `SELECT id::text,node_id::text,coalesce(gateway_pool_id::text,''),event_type,node_version,boot_id,runtime_identity,coalesce(request_hash,''),reason,occurred_at FROM gateway_runtime_events WHERE node_id=$1::uuid ORDER BY occurred_at DESC,id DESC LIMIT $2`, nodeID, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -684,7 +799,7 @@ func (p *PostgreSQLGovernanceStore) ListRuntimeEvents(ctx context.Context, nodeI
 }
 
 func (p *PostgreSQLGovernanceStore) ListRuntimeEventPage(ctx context.Context, nodeID string, limit int, before *time.Time, beforeID string) ([]RuntimeEvent, error) {
-	rows, err := p.DB.QueryContext(ctx, `SELECT id::text,node_id::text,gateway_pool_id::text,event_type,node_version,boot_id,runtime_identity,coalesce(request_hash,''),reason,occurred_at
+	rows, err := p.DB.QueryContext(ctx, `SELECT id::text,node_id::text,coalesce(gateway_pool_id::text,''),event_type,node_version,boot_id,runtime_identity,coalesce(request_hash,''),reason,occurred_at
 FROM gateway_runtime_events
 WHERE node_id=$1::uuid AND ($3::timestamptz IS NULL OR occurred_at<$3 OR (occurred_at=$3 AND id<nullif($4,'')::uuid))
 ORDER BY occurred_at DESC,id DESC LIMIT $2`, nodeID, limit, before, beforeID)

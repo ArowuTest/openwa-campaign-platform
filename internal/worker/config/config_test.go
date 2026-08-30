@@ -327,3 +327,36 @@ func TestLoadCampaignProductionRejectsSpecialDockerHostnameMediaDownloadURL(t *t
 		}
 	}
 }
+
+func TestLoadMetricsDefaultHealthAddressMatchesRailwayServiceContract(t *testing.T) {
+	previous, hadPrevious := os.LookupEnv("WORKER_HEALTH_ADDR")
+	if err := os.Unsetenv("WORKER_HEALTH_ADDR"); err != nil {
+		t.Fatalf("unset WORKER_HEALTH_ADDR: %v", err)
+	}
+	t.Cleanup(func() {
+		if hadPrevious {
+			_ = os.Setenv("WORKER_HEALTH_ADDR", previous)
+			return
+		}
+		_ = os.Unsetenv("WORKER_HEALTH_ADDR")
+	})
+	validMetricsEnv(t)
+
+	cfg, err := LoadMetrics()
+	if err != nil {
+		t.Fatalf("LoadMetrics() error = %v", err)
+	}
+	if cfg.HealthAddr != ":8096" {
+		t.Fatalf("LoadMetrics() default HealthAddr = %q, want %q", cfg.HealthAddr, ":8096")
+	}
+}
+
+func TestLoadCampaignProductionRejectsStaticGatewayURL(t *testing.T) {
+	validCampaignEnv(t)
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("OPENWA_GATEWAY_URL", "https://gateway.example.internal")
+	t.Setenv("MEDIA_DOWNLOAD_BASE_URL", "https://media.example.internal/api/v1/internal/media")
+	if _, err := LoadCampaign(); err == nil {
+		t.Fatal("production campaign worker accepted residual static OPENWA_GATEWAY_URL")
+	}
+}

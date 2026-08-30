@@ -24,3 +24,4 @@ artifacts/
 
 *.tsbuildinfo
 services/openwa-gateway/src/retained-openwa/
+.agent/

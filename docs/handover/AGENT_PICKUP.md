@@ -25,6 +25,19 @@ Do not use `git reset`, `git clean`, `git stash`, `git checkout --`, rebase, ame
 
 The user wants the backend completed to a best-in-class production standard, followed by infrastructure and then frontend UI. Work directly in this local repository so it remains the live authority. Use sizeable engineering chunks; do not stop for review at every file change and do not convene a council after a small patch set.
 
+### V2B engineering methodology authority
+
+This project does **not** depend on a special `openwa-continuous-engineering` skill. That prior session-level label is obsolete for project continuation. Replacement agents must use the governed **V2B skills and engineering capabilities directly**:
+
+- discover the live V2B registry with `list_skills` and load task-relevant skills with `read_skill`;
+- use `agent:tdd-workflow` for feature/bugfix/refactor RED -> GREEN work;
+- use `agent:superpowers-systematic-debugging` for failures and unexpected behavior before proposing fixes;
+- use `agent:superpowers-verification-before-completion` before any acceptance, completion, commit or delivery claim;
+- load additional V2B skills such as backend, API, security, testing or deployment methods when the active tranche requires them;
+- use V2B missions, evidence, checkpoints, Git, database, workers, browser and runtime operations as the governed execution/control plane.
+
+A project is not a skill. Repository/runtime evidence and the durable project handover remain authoritative; V2B skills provide the task methodology. Never block continuation because an OpenWA-specific skill name is unavailable.
+
 The established acceptance workflow is:
 
 1. Collect a coherent set of related defects or requirements into one sizeable engineering chunk.

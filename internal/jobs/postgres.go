@@ -60,6 +60,17 @@ WITH candidates AS (
  SELECT id FROM durable_jobs
  WHERE available_at <= $1
    AND (status='PENDING' OR (status='PROCESSING' AND lease_expires_at <= $1))
+   AND (
+     job_type <> 'DISPATCH_CAMPAIGN_RECIPIENT'
+     OR EXISTS (
+       SELECT 1
+       FROM campaign_recipients cr
+       JOIN campaigns c ON c.id=cr.campaign_id
+       WHERE cr.id::text=durable_jobs.payload->>'campaignRecipientId'
+         AND c.status='DISPATCHING'
+         AND cr.status IN ('AUTHORISED','QUEUED','FAILED_RETRYABLE')
+     )
+   )
  ORDER BY priority DESC, available_at, created_at
  FOR UPDATE SKIP LOCKED
  LIMIT $2
@@ -77,6 +88,17 @@ WITH candidates AS (
  SELECT id FROM durable_jobs
  WHERE job_type=$2 AND available_at <= $1
    AND (status='PENDING' OR (status='PROCESSING' AND lease_expires_at <= $1))
+   AND (
+     job_type <> 'DISPATCH_CAMPAIGN_RECIPIENT'
+     OR EXISTS (
+       SELECT 1
+       FROM campaign_recipients cr
+       JOIN campaigns c ON c.id=cr.campaign_id
+       WHERE cr.id::text=durable_jobs.payload->>'campaignRecipientId'
+         AND c.status='DISPATCHING'
+         AND cr.status IN ('AUTHORISED','QUEUED','FAILED_RETRYABLE')
+     )
+   )
  ORDER BY priority DESC, available_at, created_at
  FOR UPDATE SKIP LOCKED
  LIMIT $3
@@ -95,6 +117,17 @@ WITH candidates AS (
  WHERE available_at <= $1
    AND (status='PENDING' OR (status='PROCESSING' AND lease_expires_at <= $1))
    AND job_type IN (SELECT jsonb_array_elements_text($2::jsonb))
+   AND (
+     job_type <> 'DISPATCH_CAMPAIGN_RECIPIENT'
+     OR EXISTS (
+       SELECT 1
+       FROM campaign_recipients cr
+       JOIN campaigns c ON c.id=cr.campaign_id
+       WHERE cr.id::text=durable_jobs.payload->>'campaignRecipientId'
+         AND c.status='DISPATCHING'
+         AND cr.status IN ('AUTHORISED','QUEUED','FAILED_RETRYABLE')
+     )
+   )
  ORDER BY priority DESC, available_at, created_at
  FOR UPDATE SKIP LOCKED
  LIMIT $3

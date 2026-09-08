@@ -3159,45 +3159,59 @@
     "requirement": "Support campaign pause that stops new claims while allowing controlled treatment of in-flight jobs.",
     "priority": "Must",
     "acceptance": "Pause semantics are tested.",
-    "status": "PARTIAL",
+    "status": "IMPLEMENTED_TESTED",
     "evidence": [
       "internal/campaign/model.go",
       "internal/execution/service.go",
       "internal/execution/service_test.go",
+      "internal/jobs/postgres.go",
+      "internal/dispatch/dlv_pause_claim_postgres_integration_test.go",
       "internal/dispatch/final_eligibility_postgres_integration_test.go",
       "internal/dispatch/handler.go"
     ],
-    "notes": "Campaign pause/resume is modelled, audited by execution events, and PAUSED is detected at the final pre-send check. New durable-job claims are not campaign-gated, and already queued paused work is currently terminally suppressed rather than held for controlled in-flight treatment, so pause semantics are incomplete."
+    "notes": "Campaign pause/resume is governed and audited, final eligibility remains fail-closed, and PostgreSQL job claiming now excludes DISPATCH_CAMPAIGN_RECIPIENT work unless the authoritative recipient belongs to a DISPATCHING campaign. The acceptance test proves a PAUSED job stays PENDING with attempt_count unchanged and becomes claimable once the campaign resumes."
   },
   {
     "id": "DLV-018",
     "requirement": "Support campaign cancellation that marks undispatched obligations cancelled and preserves attempts.",
     "priority": "Must",
     "acceptance": "Counts reconcile after cancellation.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": "No campaign-cancellation workflow currently marks all undispatched obligations CANCELLED while preserving attempts and reconciling counts."
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/execution/lifecycle_postgres.go",
+      "internal/execution/dlv_cancellation_postgres_integration_test.go",
+      "internal/dispatch/handler.go",
+      "internal/delivery/model.go"
+    ],
+    "notes": "Campaign cancellation now atomically marks only undispatched AUTHORIZED/QUEUED/CLAIMED/FAILED_RETRYABLE obligations CANCELLED inside the serializable lifecycle transaction, preserves attempt counts, records immutable cancellation evidence, cancels still-pending dispatch jobs and reconciles aggregate counters. UNKNOWN and provider-accepted outcomes remain unchanged."
   },
   {
     "id": "DLV-019",
     "requirement": "Recover expired claims without losing or duplicating obligations.",
     "priority": "Must",
     "acceptance": "Worker-kill test passes.",
-    "status": "PARTIAL",
+    "status": "IMPLEMENTED_TESTED",
     "evidence": [
       "internal/jobs/postgres.go",
-      "internal/jobs/postgres_claim_integration_test.go"
+      "internal/jobs/postgres_claim_integration_test.go",
+      "internal/jobs/dlv_worker_kill_postgres_integration_test.go"
     ],
-    "notes": "PostgreSQL evidence proves an abandoned processing claim is recoverable after lease expiry, lease fencing advances, and the stale owner cannot complete the recovered job. The acceptance asks for an actual worker-kill/restart test, which has not been demonstrated."
+    "notes": "A subprocess worker-kill acceptance test proves a separately running worker can claim then exit without completion; after lease expiry exactly one replacement worker reclaims the same obligation, attempt_count and lease_version advance monotonically, and the dead owner is fenced from completion."
   },
   {
     "id": "DLV-020",
     "requirement": "Reconstruct missing queue jobs from authoritative eligible states.",
     "priority": "Must",
     "acceptance": "Queue-loss recovery test returns expected count.",
-    "status": "NOT_STARTED",
-    "evidence": [],
-    "notes": "No authoritative reconstruction workflow recreates missing queue jobs after queue loss for obligations whose outbox publication has already completed."
+    "status": "IMPLEMENTED_TESTED",
+    "evidence": [
+      "internal/dispatch/recovery.go",
+      "internal/dispatch/recovery_postgres.go",
+      "internal/dispatch/dlv_queue_loss_recovery_postgres_integration_test.go",
+      "internal/dispatch/task6_queue_repair_unknown_postgres_integration_test.go",
+      "cmd/campaign-worker/main.go"
+    ],
+    "notes": "The campaign worker continuously runs PostgreSQL queue repair. An explicit queue-loss test deletes a durable dispatch job after its authoritative outbox event is already PUBLISHED and proves exactly one job is reconstructed with the original deduplication key; a second repair creates zero. UNKNOWN/terminal recipients are not reconstructed."
   },
   {
     "id": "DLV-021",

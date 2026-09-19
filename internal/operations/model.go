@@ -278,9 +278,10 @@ type DownloadAuthorization struct {
 }
 
 var (
-	ErrNotFound = errors.New("operations record not found")
-	ErrConflict = errors.New("operations version conflict")
-	ErrInvalid  = errors.New("invalid operations request")
+	ErrNotFound         = errors.New("operations record not found")
+	ErrConflict         = errors.New("operations version conflict")
+	ErrInvalid          = errors.New("invalid operations request")
+	ErrApprovalRequired = errors.New("explicit duplicate-risk approval is required")
 )
 
 func ValidateIncident(in Incident) error {

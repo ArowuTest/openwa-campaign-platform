@@ -89,12 +89,47 @@ func main() {
 
 	workerErrors := make(chan error, 1)
 	go func() { workerErrors <- worker.Run(rootCtx) }()
-	health.SetReady(true)
-	logger.Info("metrics reconciliation worker started",
-		"workerId", cfg.WorkerID,
-		"concurrency", cfg.Concurrency,
-		"claimBatch", cfg.ClaimBatch,
-		"lease", cfg.Lease.String())
+	outcomeWorker := &reconciliation.OutcomeWorker{
+		Repository:           &reconciliation.PostgreSQLOutcomeRepository{DB: db},
+		ReconciliationWindow: cfg.OutcomeReconcileWindow, FinalUnknownWindow: cfg.FinalUnknownWindow,
+		BatchSize: cfg.OutcomeReconcileBatch,
+	}
+	outcomeErrors := make(chan error, 1)
+	if n, err := drainOutcomeWorker(rootCtx, outcomeWorker, cfg.OutcomeReconcileBatch); err != nil {
+		logger.Error("initial delivery outcome reconciliation failed", "error", err)
+		outcomeErrors <- err
+	} else {
+		if n > 0 {
+			logger.Warn("delivery outcomes reconciled before readiness", "count", n)
+		}
+		go func() {
+			ticker := time.NewTicker(cfg.OutcomeReconcileInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-rootCtx.Done():
+					return
+				case <-ticker.C:
+					n, err := drainOutcomeWorker(rootCtx, outcomeWorker, cfg.OutcomeReconcileBatch)
+					if err != nil {
+						logger.Error("delivery outcome reconciliation failed", "error", err)
+						outcomeErrors <- err
+						return
+					}
+					if n > 0 {
+						logger.Warn("delivery outcomes reconciled", "count", n)
+					}
+				}
+			}
+		}()
+		health.SetReady(true)
+		logger.Info("metrics reconciliation worker started",
+			"workerId", cfg.WorkerID,
+			"concurrency", cfg.Concurrency,
+			"claimBatch", cfg.ClaimBatch,
+			"outcomeBatch", cfg.OutcomeReconcileBatch,
+			"lease", cfg.Lease.String())
+	}
 
 	var runErr error
 	workerStopped := false
@@ -102,6 +137,8 @@ func main() {
 	case <-rootCtx.Done():
 	case runErr = <-workerErrors:
 		workerStopped = true
+		stop()
+	case runErr = <-outcomeErrors:
 		stop()
 	case runErr = <-healthErrors:
 		stop()

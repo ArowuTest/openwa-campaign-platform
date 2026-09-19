@@ -146,8 +146,16 @@ func TestLoadMetricsAcceptsBoundedConfiguration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Concurrency != 2 || cfg.ClaimBatch != 2 || cfg.DriftInterval > cfg.MatchInterval {
+	if cfg.Concurrency != 2 || cfg.ClaimBatch != 2 || cfg.OutcomeReconcileBatch != 500 || cfg.DriftInterval > cfg.MatchInterval {
 		t.Fatalf("unexpected defaults: %+v", cfg)
+	}
+}
+
+func TestLoadMetricsRejectsInvalidOutcomeReconcileBatch(t *testing.T) {
+	validMetricsEnv(t)
+	t.Setenv("DELIVERY_OUTCOME_RECONCILE_BATCH", "5001")
+	if _, err := LoadMetrics(); err == nil {
+		t.Fatal("expected delivery outcome reconciliation batch bound error")
 	}
 }
 

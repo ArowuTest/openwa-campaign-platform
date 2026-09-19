@@ -50,6 +50,11 @@ func main() {
 		logger.Error("campaign worker configuration is invalid", "error", err)
 		os.Exit(1)
 	}
+	retryCategories, err := jobs.ParseRetryCategoryPolicy(cfg.JobRetryCategoryPolicy)
+	if err != nil {
+		logger.Error("campaign retry category policy is invalid", "error", err)
+		os.Exit(1)
+	}
 	rootCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	db, err := database.Open(rootCtx, database.PoolConfig{
@@ -178,7 +183,8 @@ func main() {
 		Concurrency: cfg.JobConcurrency, ClaimBatch: cfg.JobClaimBatch,
 		Lease: cfg.JobLease, PollInterval: cfg.JobPollInterval,
 		OperationTimeout: cfg.OperationTimeout, ShutdownGrace: cfg.ShutdownTimeout,
-		Handler: dispatchHandler.Handle,
+		RetryPolicy: jobs.RetryPolicy{BaseDelay: cfg.JobRetryBaseDelay, MaxDelay: cfg.JobRetryMaxDelay, Jitter: jobs.DeterministicJitter(cfg.JobRetryJitterPercent), ByCode: retryCategories},
+		Handler:     dispatchHandler.Handle,
 	}
 
 	health := workerruntime.NewHealth("campaign-worker", db, func() int64 {

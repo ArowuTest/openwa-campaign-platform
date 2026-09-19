@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 )
@@ -19,14 +20,14 @@ type Repository interface {
 	Get(context.Context, string) (Recipient, error)
 	GetByProviderMessageID(context.Context, string) (Recipient, error)
 	ApplyEvent(context.Context, string, Event) (Recipient, bool, error)
-	ResolveReconciliation(context.Context, string, Status, string, string, string, string, time.Time) (Recipient, error)
+	ResolveReconciliation(context.Context, string, Status, Status, string, string, string, string, time.Time) (Recipient, error)
 }
 type TransactionExecer interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }
 type ReconciliationEvidenceWriter func(context.Context, TransactionExecer) error
 type ReconciliationAtomicEvidenceRepository interface {
-	ResolveReconciliationWithEvidence(context.Context, string, Status, string, string, string, string, time.Time, ReconciliationEvidenceWriter) (Recipient, error)
+	ResolveReconciliationWithEvidence(context.Context, string, Status, Status, string, string, string, string, time.Time, ReconciliationEvidenceWriter) (Recipient, error)
 }
 
 type Service struct{ repository Repository }
@@ -44,15 +45,50 @@ func (s *Service) GetByProviderMessageID(ctx context.Context, providerMessageID 
 func (s *Service) ApplyEvent(ctx context.Context, id string, event Event) (Recipient, bool, error) {
 	return s.repository.ApplyEvent(ctx, id, event)
 }
-func (s *Service) ResolveReconciliation(ctx context.Context, id string, expected Status, actor, action, evidence, reason string, now time.Time) (Recipient, error) {
-	return s.repository.ResolveReconciliation(ctx, id, expected, actor, action, evidence, reason, now)
+func (s *Service) ResolveReconciliation(ctx context.Context, id string, expected, resolved Status, actor, action, evidence, reason string, now time.Time) (Recipient, error) {
+	return s.repository.ResolveReconciliation(ctx, id, expected, resolved, actor, action, evidence, reason, now)
 }
-func (s *Service) ResolveReconciliationWithEvidence(ctx context.Context, id string, expected Status, actor, action, evidence, reason string, now time.Time, writer ReconciliationEvidenceWriter) (Recipient, bool, error) {
+
+func validateReconciliationResolution(current Recipient, expected, resolved Status, action string) error {
+	if current.Status != expected {
+		return errors.New("recipient status changed during reconciliation")
+	}
+	if !current.ReconciliationRequired {
+		return errors.New("recipient is not awaiting reconciliation")
+	}
+	action = strings.TrimSpace(action)
+	switch action {
+	case "CONFIRM_SENT":
+		if acknowledgementRank(resolved) < acknowledgementRank(StatusSent) || acknowledgementRank(resolved) < acknowledgementRank(expected) {
+			return errors.New("confirmed sent resolution cannot downgrade delivery evidence")
+		}
+	case "CONFIRM_DELIVERED":
+		if acknowledgementRank(resolved) < acknowledgementRank(StatusDelivered) || acknowledgementRank(resolved) < acknowledgementRank(expected) {
+			return errors.New("confirmed delivered resolution cannot downgrade delivery evidence")
+		}
+	case "CONFIRM_READ":
+		if resolved != StatusRead {
+			return errors.New("confirmed read resolution must resolve to READ")
+		}
+	case "MARK_FAILED_PERMANENT":
+		if resolved != StatusFailedPermanent || acknowledgementRank(expected) >= 0 {
+			return errors.New("permanent failure resolution cannot overwrite provider acknowledgement")
+		}
+	case "CONFIRM_NOT_SUBMITTED":
+		if expected != StatusUnknown || resolved != StatusFailedRetryable {
+			return errors.New("safe retry resolution requires UNKNOWN to FAILED_RETRYABLE transition")
+		}
+	default:
+		return errors.New("unsupported reconciliation resolution action")
+	}
+	return nil
+}
+func (s *Service) ResolveReconciliationWithEvidence(ctx context.Context, id string, expected, resolved Status, actor, action, evidence, reason string, now time.Time, writer ReconciliationEvidenceWriter) (Recipient, bool, error) {
 	if repository, ok := s.repository.(ReconciliationAtomicEvidenceRepository); ok {
-		value, err := repository.ResolveReconciliationWithEvidence(ctx, id, expected, actor, action, evidence, reason, now, writer)
+		value, err := repository.ResolveReconciliationWithEvidence(ctx, id, expected, resolved, actor, action, evidence, reason, now, writer)
 		return value, true, err
 	}
-	value, err := s.repository.ResolveReconciliation(ctx, id, expected, actor, action, evidence, reason, now)
+	value, err := s.repository.ResolveReconciliation(ctx, id, expected, resolved, actor, action, evidence, reason, now)
 	return value, false, err
 }
 
@@ -138,21 +174,28 @@ func cloneRecipient(input Recipient) Recipient {
 	}
 	return output
 }
-func (r *MemoryRepository) ResolveReconciliation(_ context.Context, id string, expected Status, actor, action, evidence, reason string, now time.Time) (Recipient, error) {
+func (r *MemoryRepository) ResolveReconciliation(_ context.Context, id string, expected, resolved Status, actor, action, evidence, reason string, now time.Time) (Recipient, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	v, ok := r.recipients[id]
 	if !ok {
 		return Recipient{}, ErrRecipientNotFound
 	}
-	if v.Status != expected {
-		return Recipient{}, errors.New("recipient status changed during reconciliation")
+	if err := validateReconciliationResolution(v, expected, resolved, action); err != nil {
+		return Recipient{}, err
 	}
-	if actor == "" || action == "" || evidence == "" || reason == "" || now.IsZero() {
+	if actor == "" || evidence == "" || reason == "" || now.IsZero() {
 		return Recipient{}, errors.New("complete reconciliation evidence is required")
 	}
+	v.Status = resolved
 	v.ReconciliationRequired = false
 	v.LastErrorDetail = ""
+	switch resolved {
+	case StatusFailedRetryable, StatusFailedPermanent:
+		v.LastErrorCode = "OPERATOR_RECONCILIATION"
+	default:
+		v.LastErrorCode = ""
+	}
 	v.UpdatedAt = now.UTC()
 	r.recipients[id] = cloneRecipient(v)
 	return cloneRecipient(v), nil

@@ -2,6 +2,7 @@ package operations
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -80,6 +81,67 @@ func TestResolveUnknownDeliveryWithProviderEvidence(t *testing.T) {
 	events, _ := auditRepo.List(ctx, 0, 10)
 	if len(events) != 1 || events[0].Action != "DELIVERY_EXCEPTION_RESOLVED" {
 		t.Fatalf("missing resolution audit: %+v", events)
+	}
+}
+
+func TestConfirmNotSubmittedRequiresExplicitDuplicateRiskAcknowledgement(t *testing.T) {
+	ctx := context.Background()
+	recipient := delivery.Recipient{ID: "recipient-unknown-risk", Status: delivery.StatusUnknown, ReconciliationRequired: true, UpdatedAt: time.Now().UTC()}
+	auditRepo := audit.NewMemoryRepository()
+	svc := &Service{Repo: NewMemoryRepository(), Deliveries: delivery.NewService(delivery.NewMemoryRepository(recipient)), Audit: audit.NewRecorder(auditRepo)}
+	_, err := svc.ResolveDeliveryException(ctx, recipient.ID, ResolutionConfirmNotSubmitted, "gateway-log-456", "provider checked; safe to retry", "actor", "req")
+	if !errors.Is(err, ErrApprovalRequired) {
+		t.Fatalf("expected duplicate-risk approval requirement, got %v", err)
+	}
+	resolution, err := svc.ResolveDeliveryException(ctx, recipient.ID, ResolutionConfirmNotSubmitted, "gateway-log-456", "provider checked; safe to retry", "actor", "req-approved", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolution.ResultStatus != delivery.StatusFailedRetryable {
+		t.Fatalf("approved not-submitted evidence must create governed retryable state, got=%s", resolution.ResultStatus)
+	}
+	stored, _ := svc.Deliveries.Get(ctx, recipient.ID)
+	if stored.Status != delivery.StatusFailedRetryable || stored.ReconciliationRequired {
+		t.Fatalf("approved not-submitted evidence did not create retryable state: %+v", stored)
+	}
+	queued, changed, err := svc.Deliveries.ApplyEvent(ctx, recipient.ID, delivery.Event{
+		DeduplicationKey: "operator-approved-retry-queued",
+		Type:             delivery.EventQueued,
+		OccurredAt:       time.Now().UTC().Add(time.Second),
+	})
+	if err != nil || !changed || queued.Status != delivery.StatusQueued {
+		t.Fatalf("approved retry could not re-enter governed dispatch progression: changed=%v value=%+v err=%v", changed, queued, err)
+	}
+	events, err := auditRepo.List(ctx, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Action != "DELIVERY_EXCEPTION_RESOLVED" {
+		t.Fatalf("missing governed retry audit: %+v", events)
+	}
+	var after map[string]any
+	if err := json.Unmarshal(events[0].After, &after); err != nil {
+		t.Fatal(err)
+	}
+	if accepted, ok := after["duplicateRiskAccepted"].(bool); !ok || !accepted {
+		t.Fatalf("duplicate-risk acceptance missing from audit evidence: %s", events[0].After)
+	}
+}
+
+func TestMarkFailedPermanentResolvesUnknownToPermanentFailure(t *testing.T) {
+	ctx := context.Background()
+	recipient := delivery.Recipient{ID: "recipient-unknown-permanent", Status: delivery.StatusUnknown, ReconciliationRequired: true, UpdatedAt: time.Now().UTC()}
+	svc := &Service{Repo: NewMemoryRepository(), Deliveries: delivery.NewService(delivery.NewMemoryRepository(recipient))}
+	resolution, err := svc.ResolveDeliveryException(ctx, recipient.ID, ResolutionMarkFailedPermanent, "provider-proof-789", "provider confirms permanent failure", "actor", "req-permanent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolution.ResultStatus != delivery.StatusFailedPermanent {
+		t.Fatalf("permanent resolution status=%s want %s", resolution.ResultStatus, delivery.StatusFailedPermanent)
+	}
+	stored, _ := svc.Deliveries.Get(ctx, recipient.ID)
+	if stored.Status != delivery.StatusFailedPermanent || stored.ReconciliationRequired {
+		t.Fatalf("permanent resolution did not close UNKNOWN: %+v", stored)
 	}
 }
 

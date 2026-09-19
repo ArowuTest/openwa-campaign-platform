@@ -181,19 +181,19 @@ func scanRecipient(row recipientScanner) (Recipient, error) {
 
 var _ = time.Time{}
 
-func (r *PostgreSQLRepository) ResolveReconciliation(ctx context.Context, id string, expected Status, actor, action, evidence, reason string, now time.Time) (Recipient, error) {
-	return r.resolveReconciliation(ctx, id, expected, actor, action, evidence, reason, now, nil)
+func (r *PostgreSQLRepository) ResolveReconciliation(ctx context.Context, id string, expected, resolved Status, actor, action, evidence, reason string, now time.Time) (Recipient, error) {
+	return r.resolveReconciliation(ctx, id, expected, resolved, actor, action, evidence, reason, now, nil)
 }
 
-func (r *PostgreSQLRepository) ResolveReconciliationWithEvidence(ctx context.Context, id string, expected Status, actor, action, evidence, reason string, now time.Time, writer ReconciliationEvidenceWriter) (Recipient, error) {
-	return r.resolveReconciliation(ctx, id, expected, actor, action, evidence, reason, now, writer)
+func (r *PostgreSQLRepository) ResolveReconciliationWithEvidence(ctx context.Context, id string, expected, resolved Status, actor, action, evidence, reason string, now time.Time, writer ReconciliationEvidenceWriter) (Recipient, error) {
+	return r.resolveReconciliation(ctx, id, expected, resolved, actor, action, evidence, reason, now, writer)
 }
 
-func (r *PostgreSQLRepository) resolveReconciliation(ctx context.Context, id string, expected Status, actor, action, evidence, reason string, now time.Time, writer ReconciliationEvidenceWriter) (Recipient, error) {
+func (r *PostgreSQLRepository) resolveReconciliation(ctx context.Context, id string, expected, resolved Status, actor, action, evidence, reason string, now time.Time, writer ReconciliationEvidenceWriter) (Recipient, error) {
 	if r == nil || r.DB == nil {
 		return Recipient{}, errors.New("database is required")
 	}
-	if strings.TrimSpace(id) == "" || strings.TrimSpace(actor) == "" || strings.TrimSpace(action) == "" || strings.TrimSpace(evidence) == "" || strings.TrimSpace(reason) == "" || now.IsZero() {
+	if strings.TrimSpace(id) == "" || resolved == "" || strings.TrimSpace(actor) == "" || strings.TrimSpace(action) == "" || strings.TrimSpace(evidence) == "" || strings.TrimSpace(reason) == "" || now.IsZero() {
 		return Recipient{}, errors.New("complete reconciliation evidence is required")
 	}
 	tx, err := r.DB.BeginTx(ctx, nil)
@@ -208,13 +208,17 @@ func (r *PostgreSQLRepository) resolveReconciliation(ctx context.Context, id str
 	if err != nil {
 		return Recipient{}, err
 	}
-	if current.Status != expected {
-		return Recipient{}, errors.New("recipient status changed during reconciliation")
-	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO delivery_exception_resolutions(campaign_recipient_id,action,evidence_reference,reason,actor_id,resolved_at,result_status) VALUES($1::uuid,$2,$3,$4,$5::uuid,$6,$7)`, id, action, evidence, reason, actor, now.UTC(), expected); err != nil {
+	if err := validateReconciliationResolution(current, expected, resolved, action); err != nil {
 		return Recipient{}, err
 	}
-	if _, err = tx.ExecContext(ctx, `UPDATE campaign_recipients SET reconciliation_required=false,last_error_detail=NULL,updated_at=$2,version=version+1 WHERE id=$1::uuid`, id, now.UTC()); err != nil {
+	if _, err = tx.ExecContext(ctx, `INSERT INTO delivery_exception_resolutions(campaign_recipient_id,action,evidence_reference,reason,actor_id,resolved_at,result_status) VALUES($1::uuid,$2,$3,$4,$5::uuid,$6,$7)`, id, action, evidence, reason, actor, now.UTC(), resolved); err != nil {
+		return Recipient{}, err
+	}
+	if _, err = tx.ExecContext(ctx, `UPDATE campaign_recipients
+		SET status=$2,reconciliation_required=false,
+		    last_error_code=CASE WHEN $2 IN ('FAILED_RETRYABLE','FAILED_PERMANENT') THEN 'OPERATOR_RECONCILIATION' ELSE NULL END,
+		    last_error_detail=NULL,updated_at=$3,version=version+1
+		WHERE id=$1::uuid`, id, resolved, now.UTC()); err != nil {
 		return Recipient{}, err
 	}
 	if writer != nil {
@@ -225,8 +229,15 @@ func (r *PostgreSQLRepository) resolveReconciliation(ctx context.Context, id str
 	if err = tx.Commit(); err != nil {
 		return Recipient{}, err
 	}
+	current.Status = resolved
 	current.ReconciliationRequired = false
 	current.LastErrorDetail = ""
+	switch resolved {
+	case StatusFailedRetryable, StatusFailedPermanent:
+		current.LastErrorCode = "OPERATOR_RECONCILIATION"
+	default:
+		current.LastErrorCode = ""
+	}
 	current.UpdatedAt = now.UTC()
 	return current, nil
 }

@@ -445,6 +445,7 @@ paths:
         '401': { description: Signature missing, invalid or outside the replay window }
         '409': { description: Event identifier reused with different evidence }
         '422': { $ref: '#/components/responses/ValidationError' }
+        '503': { description: Authenticated event was durably queued but correlation is unresolved; gateway must retry the exact event }
   /internal/gateway/inbound:
     post:
       operationId: ingestSignedGatewayInboundMessage
@@ -1477,6 +1478,27 @@ paths:
       summary: Resolve an unknown or contradictory delivery outcome using reviewed evidence
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - type: object
+                  additionalProperties: false
+                  required: [action, evidenceRef, reason]
+                  properties:
+                    action: { type: string, enum: [CONFIRM_SENT, CONFIRM_DELIVERED, CONFIRM_READ, MARK_FAILED_PERMANENT] }
+                    evidenceRef: { type: string, minLength: 6 }
+                    reason: { type: string, minLength: 8 }
+                - type: object
+                  additionalProperties: false
+                  required: [action, evidenceRef, reason, duplicateRiskAccepted]
+                  properties:
+                    action: { type: string, enum: [CONFIRM_NOT_SUBMITTED] }
+                    evidenceRef: { type: string, minLength: 6 }
+                    reason: { type: string, minLength: 8 }
+                    duplicateRiskAccepted: { type: boolean, enum: [true], description: Explicit acceptance of the POSSIBLE_DUPLICATE_SEND risk after reviewed evidence shows provider submission did not occur. }
       responses:
         '200': { description: Delivery exception resolved }
         '400': { description: Invalid request }

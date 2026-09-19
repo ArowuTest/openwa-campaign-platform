@@ -383,6 +383,10 @@ type CampaignConfig struct {
 	JobClaimBatch                  int
 	JobLease                       time.Duration
 	JobPollInterval                time.Duration
+	JobRetryBaseDelay              time.Duration
+	JobRetryMaxDelay               time.Duration
+	JobRetryJitterPercent          int
+	JobRetryCategoryPolicy         string
 	OutboxConcurrency              int
 	OutboxClaimBatch               int
 	DispatchQueueBackpressureLimit int
@@ -477,6 +481,16 @@ func LoadCampaign() (CampaignConfig, error) {
 	if cfg.JobPollInterval, err = duration("CAMPAIGN_JOB_POLL_INTERVAL", 500*time.Millisecond); err != nil {
 		return CampaignConfig{}, err
 	}
+	if cfg.JobRetryBaseDelay, err = duration("CAMPAIGN_JOB_RETRY_BASE_DELAY", time.Second); err != nil {
+		return CampaignConfig{}, err
+	}
+	if cfg.JobRetryMaxDelay, err = duration("CAMPAIGN_JOB_RETRY_MAX_DELAY", 2*time.Minute); err != nil {
+		return CampaignConfig{}, err
+	}
+	if cfg.JobRetryJitterPercent, err = integer("CAMPAIGN_JOB_RETRY_JITTER_PERCENT", 20); err != nil {
+		return CampaignConfig{}, err
+	}
+	cfg.JobRetryCategoryPolicy = strings.TrimSpace(os.Getenv("CAMPAIGN_JOB_RETRY_CATEGORY_POLICY"))
 	if cfg.OutboxLease, err = duration("OUTBOX_LEASE", 2*time.Minute); err != nil {
 		return CampaignConfig{}, err
 	}
@@ -603,6 +617,12 @@ func (c CampaignConfig) Validate() error {
 	if c.JobPollInterval <= 0 || c.OutboxPollInterval <= 0 {
 		return errors.New("worker poll intervals must be positive")
 	}
+	if c.JobRetryBaseDelay <= 0 || c.JobRetryMaxDelay < c.JobRetryBaseDelay || c.JobRetryMaxDelay > time.Hour {
+		return errors.New("campaign job retry delays must be positive, ordered, and capped at one hour")
+	}
+	if c.JobRetryJitterPercent < 0 || c.JobRetryJitterPercent > 100 {
+		return errors.New("CAMPAIGN_JOB_RETRY_JITTER_PERCENT must be between 0 and 100")
+	}
 	if c.OperationTimeout <= 0 || c.OperationTimeout >= c.JobLease || c.OperationTimeout >= c.OutboxLease {
 		return errors.New("WORKER_OPERATION_TIMEOUT must be positive and shorter than both leases")
 	}
@@ -628,24 +648,28 @@ func int64Value(key string, fallback int64) (int64, error) {
 // It observes the authoritative recipient/exclusion ledgers and records drift
 // without racing the transactional counters maintained by delivery processing.
 type MetricsConfig struct {
-	Environment       string
-	HealthAddr        string
-	DatabaseDriver    string
-	DatabaseURL       string
-	DBMaxOpen         int
-	DBMaxIdle         int
-	DBConnMaxLifetime time.Duration
-	DBConnMaxIdleTime time.Duration
-	DBPingTimeout     time.Duration
-	WorkerID          string
-	Concurrency       int
-	ClaimBatch        int
-	Lease             time.Duration
-	PollInterval      time.Duration
-	MatchInterval     time.Duration
-	DriftInterval     time.Duration
-	FailureInterval   time.Duration
-	ShutdownTimeout   time.Duration
+	Environment              string
+	HealthAddr               string
+	DatabaseDriver           string
+	DatabaseURL              string
+	DBMaxOpen                int
+	DBMaxIdle                int
+	DBConnMaxLifetime        time.Duration
+	DBConnMaxIdleTime        time.Duration
+	DBPingTimeout            time.Duration
+	WorkerID                 string
+	Concurrency              int
+	ClaimBatch               int
+	Lease                    time.Duration
+	PollInterval             time.Duration
+	MatchInterval            time.Duration
+	DriftInterval            time.Duration
+	FailureInterval          time.Duration
+	OutcomeReconcileInterval time.Duration
+	OutcomeReconcileWindow   time.Duration
+	OutcomeReconcileBatch    int
+	FinalUnknownWindow       time.Duration
+	ShutdownTimeout          time.Duration
 }
 
 func LoadMetrics() (MetricsConfig, error) {
@@ -697,6 +721,18 @@ func LoadMetrics() (MetricsConfig, error) {
 	if cfg.FailureInterval, err = duration("METRICS_FAILURE_INTERVAL", time.Minute); err != nil {
 		return MetricsConfig{}, err
 	}
+	if cfg.OutcomeReconcileInterval, err = duration("DELIVERY_OUTCOME_RECONCILE_INTERVAL", time.Minute); err != nil {
+		return MetricsConfig{}, err
+	}
+	if cfg.OutcomeReconcileWindow, err = duration("DELIVERY_OUTCOME_RECONCILE_WINDOW", 15*time.Minute); err != nil {
+		return MetricsConfig{}, err
+	}
+	if cfg.OutcomeReconcileBatch, err = integer("DELIVERY_OUTCOME_RECONCILE_BATCH", 500); err != nil {
+		return MetricsConfig{}, err
+	}
+	if cfg.FinalUnknownWindow, err = duration("DELIVERY_FINAL_UNKNOWN_WINDOW", 24*time.Hour); err != nil {
+		return MetricsConfig{}, err
+	}
 	if cfg.ShutdownTimeout, err = duration("WORKER_SHUTDOWN_TIMEOUT", 30*time.Second); err != nil {
 		return MetricsConfig{}, err
 	}
@@ -733,8 +769,14 @@ func (c MetricsConfig) Validate() error {
 	if c.Lease < 15*time.Second || c.Lease > 10*time.Minute {
 		return errors.New("METRICS_RECONCILIATION_LEASE must be between 15 seconds and 10 minutes")
 	}
-	if c.PollInterval <= 0 || c.MatchInterval <= 0 || c.DriftInterval <= 0 || c.FailureInterval <= 0 {
+	if c.PollInterval <= 0 || c.MatchInterval <= 0 || c.DriftInterval <= 0 || c.FailureInterval <= 0 || c.OutcomeReconcileInterval <= 0 {
 		return errors.New("metrics worker intervals must be positive")
+	}
+	if c.OutcomeReconcileWindow <= 0 || c.FinalUnknownWindow < c.OutcomeReconcileWindow || c.FinalUnknownWindow > 7*24*time.Hour {
+		return errors.New("delivery outcome reconciliation windows are invalid")
+	}
+	if c.OutcomeReconcileBatch < 1 || c.OutcomeReconcileBatch > 5000 {
+		return errors.New("DELIVERY_OUTCOME_RECONCILE_BATCH must be between 1 and 5000")
 	}
 	if c.DriftInterval > c.MatchInterval {
 		return errors.New("METRICS_DRIFT_INTERVAL must not exceed METRICS_MATCH_INTERVAL")

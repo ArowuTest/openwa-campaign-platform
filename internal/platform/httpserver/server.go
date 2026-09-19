@@ -115,6 +115,7 @@ type Dependencies struct {
 	AudienceImportIntake           *importer.IntakeService
 	MaxImportFileBytes             int64
 	DeliveryEvents                 *delivery.Service
+	UnmatchedDeliveryEvents        delivery.UnmatchedEventStore
 	MetaCredentials                metacloud.CredentialResolver
 	MetaSenders                    *metacloud.Service
 	MetaTemplates                  *metacloud.TemplateService
@@ -553,6 +554,23 @@ func (s *Server) ingestGatewayEvent(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "GATEWAY_EVENT_REJECTED", "The gateway event evidence is invalid.", map[string]any{"detail": err.Error()})
 		return
 	}
+	unmatchedEvidence := delivery.UnmatchedEvent{
+		ProviderEventID: event.EventID, ProviderMessageID: event.ProviderMessageID,
+		ClientReference: event.ClientReference, EventType: string(event.EventType),
+		Payload: append([]byte(nil), body...), OccurredAt: event.OccurredAt.UTC(), ReceivedAt: now,
+	}
+	queuedUnmatched := false
+	if s.deps.UnmatchedDeliveryEvents != nil {
+		queuedUnmatched, err = s.deps.UnmatchedDeliveryEvents.Match(r.Context(), unmatchedEvidence)
+		if errors.Is(err, delivery.ErrEventDedupMismatch) {
+			httpx.WriteError(w, r, http.StatusConflict, "GATEWAY_EVENT_REPLAY_CONFLICT", "The provider event identifier was reused with different evidence.", nil)
+			return
+		}
+		if err != nil {
+			s.internalError(w, r, err)
+			return
+		}
+	}
 	recipientID := strings.TrimSpace(event.ClientReference)
 	if recipientID == "" && strings.TrimSpace(event.ProviderMessageID) != "" {
 		resolved, resolveErr := s.deps.DeliveryEvents.GetByProviderMessageID(r.Context(), event.ProviderMessageID)
@@ -568,6 +586,19 @@ func (s *Server) ingestGatewayEvent(w http.ResponseWriter, r *http.Request) {
 		recipient, changed, err = s.deps.DeliveryEvents.ApplyEvent(r.Context(), recipientID, event.DeliveryEvent())
 	}
 	if errors.Is(err, delivery.ErrRecipientNotFound) {
+		if s.deps.UnmatchedDeliveryEvents != nil {
+			queueErr := s.deps.UnmatchedDeliveryEvents.Enqueue(r.Context(), unmatchedEvidence)
+			if errors.Is(queueErr, delivery.ErrEventDedupMismatch) {
+				httpx.WriteError(w, r, http.StatusConflict, "GATEWAY_EVENT_REPLAY_CONFLICT", "The provider event identifier was reused with different evidence.", nil)
+				return
+			}
+			if queueErr != nil {
+				s.internalError(w, r, queueErr)
+				return
+			}
+			httpx.WriteError(w, r, http.StatusServiceUnavailable, "GATEWAY_EVENT_DEFERRED", "The authenticated gateway event was durably queued but could not yet be correlated. Retry the same event identifier and evidence.", map[string]any{"queuedForReconciliation": true})
+			return
+		}
 		httpx.WriteError(w, r, http.StatusNotFound, "CAMPAIGN_RECIPIENT_NOT_FOUND", "The callback referenced an unknown campaign recipient.", nil)
 		return
 	}
@@ -578,6 +609,12 @@ func (s *Server) ingestGatewayEvent(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		s.internalError(w, r, err)
 		return
+	}
+	if queuedUnmatched {
+		if resolveErr := s.deps.UnmatchedDeliveryEvents.Resolve(r.Context(), event.EventID, now); resolveErr != nil {
+			s.internalError(w, r, resolveErr)
+			return
+		}
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"accepted": true, "replayed": !changed, "recipientId": recipient.ID,

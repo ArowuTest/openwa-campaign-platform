@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,6 +28,69 @@ func (e RetryableError) Error() string {
 }
 func (e RetryableError) Unwrap() error { return e.Err }
 
+type RetryClassPolicy struct {
+	BaseDelay time.Duration
+	MaxDelay  time.Duration
+	Jitter    func(jobID string, attempt int, base time.Duration) time.Duration
+}
+
+type RetryPolicy struct {
+	BaseDelay time.Duration
+	MaxDelay  time.Duration
+	Jitter    func(jobID string, attempt int, base time.Duration) time.Duration
+	ByCode    map[string]RetryClassPolicy
+}
+
+func ParseRetryCategoryPolicy(raw string) (map[string]RetryClassPolicy, error) {
+	out := map[string]RetryClassPolicy{}
+	for _, entry := range strings.Split(strings.TrimSpace(raw), ";") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		parts := strings.Split(entry, ",")
+		if len(parts) != 4 {
+			return nil, fmt.Errorf("invalid retry category policy %q", entry)
+		}
+		code := canonicalRetryCode(parts[0])
+		if code == "" || code == "OUTCOME_UNKNOWN" {
+			return nil, fmt.Errorf("invalid retry category code %q", code)
+		}
+		base, err := time.ParseDuration(strings.TrimSpace(parts[1]))
+		if err != nil {
+			return nil, fmt.Errorf("retry category %s base delay: %w", code, err)
+		}
+		maxDelay, err := time.ParseDuration(strings.TrimSpace(parts[2]))
+		if err != nil {
+			return nil, fmt.Errorf("retry category %s max delay: %w", code, err)
+		}
+		percent, err := strconv.Atoi(strings.TrimSpace(parts[3]))
+		if err != nil || percent < 0 || percent > 100 || base <= 0 || maxDelay < base || maxDelay > time.Hour {
+			return nil, fmt.Errorf("invalid retry category policy %q", entry)
+		}
+		out[code] = RetryClassPolicy{BaseDelay: base, MaxDelay: maxDelay, Jitter: DeterministicJitter(percent)}
+	}
+	return out, nil
+}
+
+func DeterministicJitter(percent int) func(string, int, time.Duration) time.Duration {
+	if percent <= 0 {
+		return nil
+	}
+	if percent > 100 {
+		percent = 100
+	}
+	return func(jobID string, attempt int, base time.Duration) time.Duration {
+		h := fnv.New64a()
+		_, _ = fmt.Fprintf(h, "%s:%d", jobID, attempt)
+		span := int64(base) * int64(percent) / 100
+		if span <= 0 {
+			return 0
+		}
+		return time.Duration(int64(h.Sum64()%uint64(2*span+1)) - span)
+	}
+}
+
 type Runner struct {
 	Repository       Repository
 	Owner            string
@@ -35,6 +101,7 @@ type Runner struct {
 	PollInterval     time.Duration
 	OperationTimeout time.Duration
 	ShutdownGrace    time.Duration
+	RetryPolicy      RetryPolicy
 	Handler          Handler
 	active           atomic.Int64
 }
@@ -189,14 +256,19 @@ handled:
 		}
 		return nil
 	}
-	var retry RetryableError
-	if errors.As(handlerErr, &retry) {
+	if retry, ok := retryableErrorFrom(handlerErr); ok {
+		code := canonicalRetryCode(retry.Code)
+		retryable := code != "OUTCOME_UNKNOWN"
 		after := retry.RetryAfter
-		if after <= 0 {
-			after = backoff(job.AttemptCount)
+		if retryable {
+			if after <= 0 {
+				after = r.retryDelay(job, code)
+			} else {
+				after = r.boundRequestedRetryDelay(code, after)
+			}
 		}
 		opCtx, opCancel := context.WithTimeout(context.Background(), r.OperationTimeout)
-		err := r.Repository.Fail(opCtx, job.ID, r.Owner, job.LeaseVersion, now, true, after, retry.Code, handlerErr.Error())
+		err := r.Repository.Fail(opCtx, job.ID, r.Owner, job.LeaseVersion, now, retryable, after, code, handlerErr.Error())
 		opCancel()
 		if err != nil {
 			return fmt.Errorf("record retryable job %s failure: %w", job.ID, err)
@@ -213,6 +285,108 @@ handled:
 }
 
 func (r *Runner) Active() int64 { return r.active.Load() }
+
+func (r *Runner) retryDelay(job Job, code string) time.Duration {
+	base, maxDelay, jitter := r.retryPolicyFor(code)
+	attempt := job.AttemptCount
+	if attempt < 1 {
+		attempt = 1
+	}
+	delay := base
+	for i := 1; i < attempt && delay < maxDelay; i++ {
+		if delay > maxDelay/2 {
+			delay = maxDelay
+			break
+		}
+		delay *= 2
+	}
+	if delay > maxDelay {
+		delay = maxDelay
+	}
+	if jitter != nil {
+		jitterValue := jitter(job.ID, attempt, delay)
+		if jitterValue > maxDelay-delay {
+			jitterValue = maxDelay - delay
+		}
+		if jitterValue < -delay {
+			jitterValue = -delay
+		}
+		delay += jitterValue
+	}
+	floor := retryDelayFloor(base, maxDelay)
+	if delay < floor {
+		delay = floor
+	}
+	return delay
+}
+
+func (r *Runner) boundRequestedRetryDelay(code string, requested time.Duration) time.Duration {
+	base, maxDelay, _ := r.retryPolicyFor(code)
+	floor := retryDelayFloor(base, maxDelay)
+	if requested < floor {
+		return floor
+	}
+	if requested > maxDelay {
+		return maxDelay
+	}
+	return requested
+}
+
+func (r *Runner) retryPolicyFor(code string) (time.Duration, time.Duration, func(string, int, time.Duration) time.Duration) {
+	base, maxDelay, jitter := r.RetryPolicy.BaseDelay, r.RetryPolicy.MaxDelay, r.RetryPolicy.Jitter
+	if class, ok := r.RetryPolicy.ByCode[canonicalRetryCode(code)]; ok {
+		if class.BaseDelay > 0 {
+			base = class.BaseDelay
+		}
+		if class.MaxDelay > 0 {
+			maxDelay = class.MaxDelay
+		}
+		if class.Jitter != nil {
+			jitter = class.Jitter
+		}
+	}
+	if base <= 0 {
+		base = time.Second
+	}
+	if maxDelay <= 0 {
+		maxDelay = 128 * time.Second
+	}
+	if maxDelay < base {
+		maxDelay = base
+	}
+	return base, maxDelay, jitter
+}
+
+func retryDelayFloor(base, maxDelay time.Duration) time.Duration {
+	floor := base / 10
+	if floor < time.Millisecond {
+		floor = time.Millisecond
+	}
+	if floor > maxDelay {
+		floor = maxDelay
+	}
+	if floor <= 0 {
+		return time.Nanosecond
+	}
+	return floor
+}
+
+func canonicalRetryCode(code string) string {
+	return strings.ToUpper(strings.TrimSpace(code))
+}
+
+func retryableErrorFrom(err error) (RetryableError, bool) {
+	var value RetryableError
+	if errors.As(err, &value) {
+		return value, true
+	}
+	var pointer *RetryableError
+	if errors.As(err, &pointer) && pointer != nil {
+		return *pointer, true
+	}
+	return RetryableError{}, false
+}
+
 func backoff(attempt int) time.Duration {
 	if attempt < 1 {
 		attempt = 1

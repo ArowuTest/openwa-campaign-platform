@@ -43,6 +43,6 @@ for row in rows:
     requirement = row["requirement"].replace("|", "\\|")
     evidence_text = evidence_text.replace("|", "\\|")
     lines.append(f"| {row['id']} | {row['priority']} | {row['status']} | {requirement} | {evidence_text} |")
-(root / "docs/requirements/TRACEABILITY.md").write_text("\n".join(lines) + "\n")
-(root / "docs/requirements/traceability.json").write_text(json.dumps(rows, indent=2) + "\n")
+(root / "docs/requirements/TRACEABILITY.md").write_text("\n".join(lines) + "\n", encoding="cp1252", newline="\n")
+(root / "docs/requirements/traceability.json").write_text(json.dumps(rows, indent=2) + "\n", encoding="utf-8", newline="\n")
 print(json.dumps({"total": len(rows), "counts": counts}, default=dict))

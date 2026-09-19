@@ -625,7 +625,7 @@ type DeliveryResolution struct {
 	ResultStatus delivery.Status          `json:"resultStatus"`
 }
 
-func (s *Service) ResolveDeliveryException(ctx context.Context, recipientID string, action DeliveryResolutionAction, evidenceRef, reason, actor, correlation string) (DeliveryResolution, error) {
+func (s *Service) ResolveDeliveryException(ctx context.Context, recipientID string, action DeliveryResolutionAction, evidenceRef, reason, actor, correlation string, duplicateRiskAccepted ...bool) (DeliveryResolution, error) {
 	if s == nil || s.Deliveries == nil {
 		return DeliveryResolution{}, errors.New("delivery reconciliation is unavailable")
 	}
@@ -640,6 +640,7 @@ func (s *Service) ResolveDeliveryException(ctx context.Context, recipientID stri
 	if current.Status != delivery.StatusUnknown && !current.ReconciliationRequired {
 		return DeliveryResolution{}, ErrConflict
 	}
+	duplicateRiskApproved := len(duplicateRiskAccepted) > 0 && duplicateRiskAccepted[0]
 	var eventType delivery.EventType
 	switch action {
 	case ResolutionConfirmSent:
@@ -654,6 +655,9 @@ func (s *Service) ResolveDeliveryException(ctx context.Context, recipientID stri
 		if current.ProviderMessageID != "" || current.HighestAcknowledgement != "" {
 			return DeliveryResolution{}, ErrConflict
 		}
+		if !duplicateRiskApproved {
+			return DeliveryResolution{}, ErrApprovalRequired
+		}
 		eventType = delivery.EventFailedRetryable
 	default:
 		return DeliveryResolution{}, ErrInvalid
@@ -665,13 +669,24 @@ func (s *Service) ResolveDeliveryException(ctx context.Context, recipientID stri
 	if err != nil {
 		return DeliveryResolution{}, err
 	}
-	auditInput := audit.Input{ActorType: "USER", ActorID: actor, Action: "DELIVERY_EXCEPTION_RESOLVED", ObjectType: "CAMPAIGN_RECIPIENT", ObjectID: recipientID, Outcome: "SUCCESS", Sensitivity: "HIGH", After: map[string]any{"action": action, "evidenceRef": evidenceRef, "resultStatus": result.Status}, Reason: reason, CorrelationID: correlation, OccurredAt: now}
+	resolvedStatus := result.Status
+	switch action {
+	case ResolutionConfirmNotSubmitted:
+		resolvedStatus = delivery.StatusFailedRetryable
+	case ResolutionMarkFailedPermanent:
+		resolvedStatus = delivery.StatusFailedPermanent
+	}
+	auditAfter := map[string]any{"action": action, "evidenceRef": evidenceRef, "resultStatus": resolvedStatus}
+	if action == ResolutionConfirmNotSubmitted {
+		auditAfter["duplicateRiskAccepted"] = duplicateRiskApproved
+	}
+	auditInput := audit.Input{ActorType: "USER", ActorID: actor, Action: "DELIVERY_EXCEPTION_RESOLVED", ObjectType: "CAMPAIGN_RECIPIENT", ObjectID: recipientID, Outcome: "SUCCESS", Sensitivity: "HIGH", After: auditAfter, Reason: reason, CorrelationID: correlation, OccurredAt: now}
 	var atomicAudit bool
 	writer := func(writeCtx context.Context, exec delivery.TransactionExecer) error {
 		_, writeErr := audit.EnqueueTx(writeCtx, exec, auditInput)
 		return writeErr
 	}
-	result, atomicAudit, err = s.Deliveries.ResolveReconciliationWithEvidence(ctx, recipientID, result.Status, actor, string(action), evidenceRef, reason, now, writer)
+	result, atomicAudit, err = s.Deliveries.ResolveReconciliationWithEvidence(ctx, recipientID, result.Status, resolvedStatus, actor, string(action), evidenceRef, reason, now, writer)
 	if err != nil {
 		return DeliveryResolution{}, err
 	}

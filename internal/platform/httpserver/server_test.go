@@ -376,6 +376,116 @@ func TestGatewayCallbackCanResolveRecipientByProviderMessageID(t *testing.T) {
 	}
 }
 
+func TestGatewayCallbackQueuesAuthenticatedUnmatchedEventForReconciliation(t *testing.T) {
+	secret := bytes.Repeat([]byte{6}, 32)
+	now := time.Now().UTC()
+	repository := delivery.NewMemoryRepository()
+	queue := delivery.NewMemoryUnmatchedEventStore()
+	handler := New(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
+		DeliveryEvents: delivery.NewService(repository), UnmatchedDeliveryEvents: queue, GatewayCallbackSecret: secret,
+		GatewayCallbackMaxSkew: 5 * time.Minute,
+	}).Handler()
+	body := []byte(`{"schemaVersion":"1.0","eventId":"evt-unmatched","eventType":"message.delivered","sessionId":"session-1","providerMessageId":"provider-missing","occurredAt":"` + now.Format(time.RFC3339Nano) + `"}`)
+	timestamp, signature, err := gateway.SignCallback(secret, now, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/internal/gateway/events", bytes.NewReader(body))
+	request.Header.Set(gateway.TimestampHeader, timestamp)
+	request.Header.Set(gateway.SignatureHeader, signature)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), `"GATEWAY_EVENT_DEFERRED"`) {
+		t.Fatalf("unmatched callback status=%d body=%s", response.Code, response.Body.String())
+	}
+	items, err := queue.List(context.Background(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ProviderEventID != "evt-unmatched" || items[0].ProviderMessageID != "provider-missing" {
+		t.Fatalf("unmatched queue=%+v", items)
+	}
+	conflictBody := []byte(`{"schemaVersion":"1.0","eventId":"evt-unmatched","eventType":"message.read","sessionId":"session-1","providerMessageId":"provider-missing","occurredAt":"` + now.Format(time.RFC3339Nano) + `"}`)
+	conflictTimestamp, conflictSignature, err := gateway.SignCallback(secret, now, conflictBody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conflictRequest := httptest.NewRequest(http.MethodPost, "/api/v1/internal/gateway/events", bytes.NewReader(conflictBody))
+	conflictRequest.Header.Set(gateway.TimestampHeader, conflictTimestamp)
+	conflictRequest.Header.Set(gateway.SignatureHeader, conflictSignature)
+	conflictResponse := httptest.NewRecorder()
+	handler.ServeHTTP(conflictResponse, conflictRequest)
+	if conflictResponse.Code != http.StatusConflict {
+		t.Fatalf("unmatched replay conflict status=%d body=%s", conflictResponse.Code, conflictResponse.Body.String())
+	}
+
+	if err := repository.Create(context.Background(), delivery.Recipient{
+		ID: "recipient-late-correlation", Status: delivery.StatusSubmitting,
+		ProviderMessageID: "provider-missing", UpdatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	lateConflictRequest := httptest.NewRequest(http.MethodPost, "/api/v1/internal/gateway/events", bytes.NewReader(conflictBody))
+	lateConflictRequest.Header.Set(gateway.TimestampHeader, conflictTimestamp)
+	lateConflictRequest.Header.Set(gateway.SignatureHeader, conflictSignature)
+	lateConflictResponse := httptest.NewRecorder()
+	handler.ServeHTTP(lateConflictResponse, lateConflictRequest)
+	if lateConflictResponse.Code != http.StatusConflict {
+		t.Fatalf("late correlated replay conflict status=%d body=%s", lateConflictResponse.Code, lateConflictResponse.Body.String())
+	}
+	items, err = queue.List(context.Background(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ProviderEventID != "evt-unmatched" {
+		t.Fatalf("conflicting late correlation cleared unmatched evidence: %+v", items)
+	}
+	unmodified, err := repository.Get(context.Background(), "recipient-late-correlation")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unmodified.Status != delivery.StatusSubmitting {
+		t.Fatalf("conflicting late correlation mutated recipient before replay validation: %+v", unmodified)
+	}
+
+	retryRequest := httptest.NewRequest(http.MethodPost, "/api/v1/internal/gateway/events", bytes.NewReader(body))
+	retryRequest.Header.Set(gateway.TimestampHeader, timestamp)
+	retryRequest.Header.Set(gateway.SignatureHeader, signature)
+	retryResponse := httptest.NewRecorder()
+	handler.ServeHTTP(retryResponse, retryRequest)
+	if retryResponse.Code != http.StatusOK || !strings.Contains(retryResponse.Body.String(), `"recipientId":"recipient-late-correlation"`) {
+		t.Fatalf("correlated retry status=%d body=%s", retryResponse.Code, retryResponse.Body.String())
+	}
+	items, err = queue.List(context.Background(), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 0 {
+		t.Fatalf("resolved unmatched event remained pending: %+v", items)
+	}
+}
+
+func TestGatewayCallbackWithNoQueuedUnmatchedRecordRemainsValid(t *testing.T) {
+	secret := bytes.Repeat([]byte{10}, 32)
+	now := time.Now().UTC()
+	repository := delivery.NewMemoryRepository(delivery.Recipient{ID: "recipient-no-queue", Status: delivery.StatusSubmitting, ProviderMessageID: "provider-no-queue", UpdatedAt: now})
+	queue := delivery.NewMemoryUnmatchedEventStore()
+	handler := New(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{DeliveryEvents: delivery.NewService(repository), UnmatchedDeliveryEvents: queue, GatewayCallbackSecret: secret}).Handler()
+	body := []byte(`{"schemaVersion":"1.0","eventId":"evt-no-queue","eventType":"message.delivered","sessionId":"session-1","providerMessageId":"provider-no-queue","occurredAt":"` + now.Format(time.RFC3339Nano) + `"}`)
+	ts, sig, err := gateway.SignCallback(secret, now, body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/internal/gateway/events", bytes.NewReader(body))
+	req.Header.Set(gateway.TimestampHeader, ts)
+	req.Header.Set(gateway.SignatureHeader, sig)
+	res := httptest.NewRecorder()
+	handler.ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("matched callback without queued evidence status=%d body=%s", res.Code, res.Body.String())
+	}
+}
+
 func TestGatewayCallbackRejectsEventIDReuseWithDifferentEvidence(t *testing.T) {
 	secret := bytes.Repeat([]byte{8}, 32)
 	now := time.Now().UTC()

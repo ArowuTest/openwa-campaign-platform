@@ -356,10 +356,12 @@ func writeOperationsError(w http.ResponseWriter, r *http.Request, err error) {
 		httpx.WriteError(w, r, 404, "OPERATIONS_NOT_FOUND", "The requested operations record was not found.", nil)
 	case errors.Is(err, operations.ErrConflict):
 		httpx.WriteError(w, r, 409, "OPERATIONS_CONFLICT", "The record changed or is no longer eligible for this action.", nil)
+	case errors.Is(err, operations.ErrApprovalRequired):
+		httpx.WriteError(w, r, 409, "DUPLICATE_RISK_APPROVAL_REQUIRED", "Retry can duplicate a message if provider submission cannot be disproven. Review provider evidence and explicitly accept the duplicate-send risk before retrying.", map[string]any{"risk": "POSSIBLE_DUPLICATE_SEND", "approvalField": "duplicateRiskAccepted"})
 	case errors.Is(err, operations.ErrInvalid):
 		httpx.WriteError(w, r, 422, "OPERATIONS_INVALID", "The operations request failed validation.", nil)
 	default:
-		httpx.WriteError(w, r, 422, "OPERATIONS_REJECTED", "The operations request was rejected.", map[string]any{"detail": err.Error()})
+		httpx.WriteError(w, r, http.StatusInternalServerError, "OPERATIONS_INTERNAL", "The operations request could not be completed.", nil)
 	}
 }
 
@@ -422,9 +424,10 @@ func (s *Server) listDeliveryExceptions(w http.ResponseWriter, r *http.Request) 
 }
 
 type deliveryResolutionRequest struct {
-	Action      operations.DeliveryResolutionAction `json:"action"`
-	EvidenceRef string                              `json:"evidenceRef"`
-	Reason      string                              `json:"reason"`
+	Action                operations.DeliveryResolutionAction `json:"action"`
+	EvidenceRef           string                              `json:"evidenceRef"`
+	Reason                string                              `json:"reason"`
+	DuplicateRiskAccepted bool                                `json:"duplicateRiskAccepted"`
 }
 
 func (s *Server) resolveDeliveryException(w http.ResponseWriter, r *http.Request) {
@@ -446,7 +449,7 @@ func (s *Server) resolveDeliveryException(w http.ResponseWriter, r *http.Request
 		httpx.WriteError(w, r, 400, "INVALID_JSON", "The delivery-resolution request is invalid.", nil)
 		return
 	}
-	v, err := s.deps.Operations.ResolveDeliveryException(r.Context(), r.PathValue("id"), in.Action, in.EvidenceRef, in.Reason, p.User.ID, r.Header.Get("X-Request-ID"))
+	v, err := s.deps.Operations.ResolveDeliveryException(r.Context(), r.PathValue("id"), in.Action, in.EvidenceRef, in.Reason, p.User.ID, r.Header.Get("X-Request-ID"), in.DuplicateRiskAccepted)
 	if err != nil {
 		writeOperationsError(w, r, err)
 		return

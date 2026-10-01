@@ -30,6 +30,7 @@ services:
       GATEWAY_CAPABILITIES: ${GATEWAY_CAPABILITIES:?required}
       GATEWAY_INTERNAL_URL: ${GATEWAY_INTERNAL_URL:?approved private gateway command URL is required}
       GATEWAY_RUNTIME_ALLOWED_HOSTS: ${GATEWAY_RUNTIME_ALLOWED_HOSTS:?governed gateway runtime host authority is required}
+      SENDER_HEARTBEAT_TTL: ${SENDER_HEARTBEAT_TTL:-90s}
       CONTROL_API_INTERNAL_URL: ${CONTROL_API_INTERNAL_URL:?approved Railway control URL is required}
       CONTROL_API_CALLBACK_URL: ${CONTROL_API_CALLBACK_URL:?approved Railway callback URL is required}
       CONTROL_API_INBOUND_URL: ${CONTROL_API_INBOUND_URL:?approved Railway inbound URL is required}

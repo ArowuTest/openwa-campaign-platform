@@ -121,11 +121,23 @@ func TestPostgreSQLTestMessageSendPersistsVariableValuesIdempotently(t *testing.
 	if replayed.ID != stored.ID || replayed.VariableValues["name"] != "Ada" {
 		t.Fatalf("unexpected replayed send: %+v", replayed)
 	}
-	evidence, err := repo.ValidateTestRoute(ctx, RouteRequirements{CampaignID: campaignID, GatewayPoolID: gatewayPoolID, Provider: "OPENWA", Engine: "BAILEYS", SessionID: sessionID, RequiredCapabilities: []string{"SEND_TEXT"}, At: now})
+	if _, err := db.ExecContext(ctx, `UPDATE sender_nodes SET boot_id='task6-test-route-lease' WHERE id=$1::uuid`, nodeID); err != nil {
+		t.Fatal(err)
+	}
+	requirements := RouteRequirements{CampaignID: campaignID, GatewayPoolID: gatewayPoolID, Provider: "OPENWA", Engine: "BAILEYS", SessionID: sessionID, RequiredCapabilities: []string{"SEND_TEXT"}, At: now}
+	evidence, err := repo.ValidateTestRoute(ctx, requirements)
 	if err != nil {
 		t.Fatalf("validate governed test route: %v", err)
 	}
 	if evidence.GatewayNodeID != nodeID || evidence.GatewayNodeURL != "http://task6-node.internal:2785" {
 		t.Fatalf("governed test route lost node destination: %+v", evidence)
+	}
+	for _, boot := range []string{"test-route-replacement", ""} {
+		if _, err := db.ExecContext(ctx, `UPDATE sender_nodes SET boot_id=$2 WHERE id=$1::uuid`, nodeID, boot); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := repo.ValidateTestRoute(ctx, requirements); err == nil {
+			t.Errorf("test route accepted stale-boot lease: boot=%q evidence=%+v", boot, got)
+		}
 	}
 }

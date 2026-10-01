@@ -2073,15 +2073,38 @@ paths:
             schema:
               type: object
               additionalProperties: false
-              required: [nodeId, sessionId, status, engineVersion, sentToday]
+              required: [nodeId, sessionId, bootId, status, engineVersion, sentToday]
               properties:
                 nodeId: { type: string }
                 sessionId: { type: string }
+                bootId: { type: string, minLength: 1, description: Current accepted gateway process boot identity used as the session lease epoch. }
                 status: { type: string, enum: [PAIRING, CONNECTING, READY, BUSY, DRAINING, PAUSED, DISCONNECTED, RECOVERING, FAILED_RECOVERY, RESTRICTED] }
                 engineVersion: { type: string }
                 sentToday: { type: integer, format: int64, minimum: 0 }
       responses:
-        '200': { description: Signed session telemetry accepted without changing governed capacity }
+        '200':
+          description: Signed telemetry and boot-bound ownership committed atomically without changing governed capacity
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [id, nodeId, status, sentToday, ownership]
+                properties:
+                  id: { type: string }
+                  nodeId: { type: string }
+                  status: { type: string }
+                  sentToday: { type: integer, format: int64, minimum: 0 }
+                  ownership:
+                    type: object
+                    additionalProperties: false
+                    required: [nodeId, sessionId, bootId, leaseVersion, leaseExpiresAt, serverNow]
+                    properties:
+                      nodeId: { type: string }
+                      sessionId: { type: string }
+                      bootId: { type: string }
+                      leaseVersion: { type: integer, format: int64, minimum: 1 }
+                      leaseExpiresAt: { type: string, format: date-time }
+                      serverNow: { type: string, format: date-time }
         '400': { description: Malformed or unsupported telemetry }
         '401': { description: Signature or timestamp invalid }
         '404': { description: Governed sender session not found }

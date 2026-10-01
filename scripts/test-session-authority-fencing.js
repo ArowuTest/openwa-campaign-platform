@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 const assert = require('node:assert/strict');
+// This suite isolates other behavior; real boot ownership is covered separately.
+const ownedRuntime = { assertSessionOwned() {}, onSessionOwnershipLost() { return () => {}; } };
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
@@ -75,7 +77,7 @@ async function run() {
     'services/openwa-gateway/src/session-authority.service.ts',
     { './gateway-identity.service': { GatewayIdentityService: class {} } },
   );
-  const authority = new SessionAuthorityService(identity);
+  const authority = new SessionAuthorityService(identity, ownedRuntime);
   await authority.onModuleInit();
   let providerSends = 0;
   const provider = {
@@ -112,13 +114,13 @@ async function run() {
   assert.equal(providerSends, 1, 'conflicting authority must not reach provider send');
 
   const reboundIdentity = { ...identity, gatewayPoolId: 'pool-2', adapterVersion: '0.8.29' };
-  const reboundAuthority = new SessionAuthorityService(reboundIdentity);
+  const reboundAuthority = new SessionAuthorityService(reboundIdentity, ownedRuntime);
   await reboundAuthority.onModuleInit();
   const rebound = { ...request(2), gatewayPoolId: 'pool-2', gatewayAdapterVersion: '0.8.29', idempotencyKey: 'rebound-fence-000000000000001' };
   await assert.rejects(() => reboundAuthority.validate(rebound), ConflictException, 'same lease must not rebind durable pool/adapter authority');
 
   const siblingIdentity = { ...identity, engine: 'WHATSAPP_WEB_JS' };
-  const siblingAuthority = new SessionAuthorityService(siblingIdentity);
+  const siblingAuthority = new SessionAuthorityService(siblingIdentity, ownedRuntime);
   await siblingAuthority.onModuleInit();
   const siblingEngine = { ...request(2), engine: 'WHATSAPP_WEB_JS', idempotencyKey: 'sibling-engine-fence-000000001' };
   await assert.rejects(() => siblingAuthority.validate(siblingEngine), ConflictException, 'same lease must not rebind durable provider/engine authority');
@@ -151,7 +153,7 @@ async function run() {
   await authority.tombstone('session-deleted');
   const repeatedTombstone = await fs.readFile(path.join(directory, tombstoneFile), 'utf8');
   assert.equal(repeatedTombstone, originalTombstone, 'repeated delete rewrote immutable tombstone evidence');
-  const restartedAuthority = new SessionAuthorityService(identity);
+  const restartedAuthority = new SessionAuthorityService(identity, ownedRuntime);
   await restartedAuthority.onModuleInit();
   await assert.rejects(
     () => restartedAuthority.validate({ ...deleted, sessionLeaseVersion: 21, idempotencyKey: 'deleted-fence-00000000000021' }),
@@ -170,7 +172,7 @@ async function run() {
   };
   const finalHealthIdempotency = { execute: async (_request, operation) => { finalHealthIdempotencyExecutions += 1; return operation(); } };
   const passPipelines = { run: async (_sessionId, operation) => operation(), status: () => ({}), recordProviderSuccess: () => undefined, recordProviderFailure: () => undefined };
-  const passAuthorities = { validate: async () => undefined, submitIfCurrent: async (_request, operation) => operation() };
+  const passAuthorities = { assertOwned() {}, validate: async () => undefined, submitIfCurrent: async (_request, operation) => operation() };
   const finalHealthMessaging = new GatewayMessagingService(finalHealthProvider, finalHealthIdempotency, passPipelines, passAuthorities);
   await assert.rejects(() => finalHealthMessaging.send({ ...request(30), sessionId: 'session-health-drop', idempotencyKey: 'health-drop-0000000000000030' }), ServiceUnavailableException);
   assert.equal(finalHealthIdempotencyExecutions, 0, 'final health failure opened idempotency ambiguity boundary');

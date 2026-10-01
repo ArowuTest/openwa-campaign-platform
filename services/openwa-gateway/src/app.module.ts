@@ -22,6 +22,7 @@ import { GatewayObservabilityService } from './observability.service';
 import { ObservabilityMiddleware } from './observability.middleware';
 import { MetricsController } from './metrics.controller';
 import { RuntimeRegistrationService } from './runtime-registration.service';
+import { SessionHeartbeatPublisherService } from './session-heartbeat-publisher.service';
 import { EmbeddedOpenWAEngineService } from './provider/embedded-openwa-engine.service';
 
 @Module({
@@ -30,6 +31,7 @@ import { EmbeddedOpenWAEngineService } from './provider/embedded-openwa-engine.s
     GatewayIdentityService,
     GatewayObservabilityService,
     RuntimeRegistrationService,
+    SessionHeartbeatPublisherService,
     CommandReplayService,
     MockMessagingProvider,
     OpenWAProvider,

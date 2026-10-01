@@ -63,6 +63,7 @@ type Config struct {
 	MetaHealthStaleAfter              time.Duration
 	MetaConversationWindow            time.Duration
 	GatewayStaleAfter                 time.Duration
+	SenderHeartbeatTTL                time.Duration
 	GatewayCallbackMaxSkew            time.Duration
 	MediaDownloadSecret               string
 	ObjectStoreDriver                 string
@@ -126,6 +127,10 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 	gatewayStaleSeconds, err := intEnv("GATEWAY_STALE_AFTER_SECONDS", 120)
+	if err != nil {
+		return Config{}, err
+	}
+	senderHeartbeatTTL, err := durationEnv("SENDER_HEARTBEAT_TTL", 90*time.Second)
 	if err != nil {
 		return Config{}, err
 	}
@@ -252,6 +257,7 @@ func Load() (Config, error) {
 		MetaHealthStaleAfter:              metaHealthStaleAfter,
 		MetaConversationWindow:            metaConversationWindow,
 		GatewayStaleAfter:                 time.Duration(gatewayStaleSeconds) * time.Second,
+		SenderHeartbeatTTL:                senderHeartbeatTTL,
 		GatewayCallbackMaxSkew:            callbackSkew,
 		MediaDownloadSecret:               mediaDownloadSecret,
 		ObjectStoreDriver:                 strings.ToLower(strings.TrimSpace(envOrDefault("OBJECT_STORE_DRIVER", "filesystem"))),
@@ -383,6 +389,9 @@ func (c Config) Validate() error {
 	}
 	if c.GatewayStaleAfter < 30*time.Second || c.GatewayStaleAfter > time.Hour {
 		return errors.New("GATEWAY_STALE_AFTER_SECONDS must be between 30 and 3600")
+	}
+	if c.SenderHeartbeatTTL < 10*time.Second || c.SenderHeartbeatTTL > 10*time.Minute {
+		return errors.New("SENDER_HEARTBEAT_TTL must be between 10 seconds and 10 minutes")
 	}
 	if c.GatewayCallbackMaxSkew <= 0 || c.GatewayCallbackMaxSkew > 15*time.Minute {
 		return errors.New("GATEWAY_CALLBACK_MAX_SKEW must be positive and no more than 15 minutes")

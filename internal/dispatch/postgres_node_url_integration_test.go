@@ -69,6 +69,8 @@ func TestPostgreSQLGovernedRouteCarriesExactNodeURL(t *testing.T) {
 	must(`INSERT INTO contacts(id,encrypted_msisdn,msisdn_lookup_hmac,masked_msisdn,status,profile_recorded_at) VALUES($1::uuid,decode('00','hex'),digest($2,'sha256'),'***4242','ACTIVE',$3)`, contactID, contactID, now)
 	must(`INSERT INTO campaign_recipients(id,campaign_id,snapshot_id,contact_id,message_version_id,idempotency_key,status,eligibility_evidence_hash,attempt_count,authorised_at,updated_at,version) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5::uuid,$6,'AUTHORISED','node-url-evidence',0,$7,$7,1)`, recipientID, campaignID, snapshotID, contactID, messageID, "node-url:"+recipientID, now)
 
+	must(`UPDATE sender_nodes SET boot_id='node-url-boot-a' WHERE id=$1::uuid`, nodeID)
+	must(`UPDATE sender_session_leases SET lease_token_hash=sha256(convert_to('node-url-boot-a','UTF8')) WHERE session_id=$1::uuid`, sessionID)
 	loader := &PostgreSQLMaterialLoader{DB: db}
 	route, err := loader.loadGovernedRoute(ctx, recipientID, sessionID, "text", campaignID+":"+recipientID, now)
 	if err != nil {
@@ -76,5 +78,18 @@ func TestPostgreSQLGovernedRouteCarriesExactNodeURL(t *testing.T) {
 	}
 	if route.GatewayNodeID != nodeID || route.GatewayNodeURL != "http://10.20.30.42:2785" {
 		t.Fatalf("governed campaign route lost exact node destination: %+v", route)
+	}
+	for _, boot := range []string{"node-url-boot-b", ""} {
+		must(`UPDATE sender_nodes SET boot_id=$2 WHERE id=$1::uuid`, nodeID, boot)
+		if got, err := loader.loadGovernedRoute(ctx, recipientID, sessionID, "text", campaignID+":"+recipientID, now); err == nil {
+			t.Errorf("old-boot lease materialized dispatch authority: boot=%q route=%+v", boot, got)
+		}
+	}
+	// Seed the durable result of a fresh heartbeat; the signed acquisition and
+	// controlled-recovery service composition has its own integration tests.
+	must(`UPDATE sender_nodes SET boot_id='node-url-boot-b' WHERE id=$1::uuid`, nodeID)
+	must(`UPDATE sender_session_leases SET lease_token_hash=sha256(convert_to('node-url-boot-b','UTF8')),version=version+1 WHERE session_id=$1::uuid`, sessionID)
+	if recovered, err := loader.loadGovernedRoute(ctx, recipientID, sessionID, "text", campaignID+":"+recipientID, now); err != nil || recovered.SessionLeaseVersion != 9 {
+		t.Fatalf("matching replacement lease did not restore route: %+v err=%v", recovered, err)
 	}
 }

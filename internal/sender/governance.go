@@ -57,30 +57,31 @@ type Node struct {
 }
 
 type GovernedSession struct {
-	ID                          string     `json:"id"`
-	NodeID                      string     `json:"nodeId,omitempty"`
-	PoolID                      string     `json:"poolId,omitempty"`
-	GatewayPoolID               string     `json:"gatewayPoolId,omitempty"`
-	MaskedMSISDN                string     `json:"maskedMsisdn"`
-	OwnerReference              string     `json:"ownerReference"`
-	RegistrationCountryISO2     string     `json:"registrationCountryIso2"`
-	ProfileDisplayName          string     `json:"profileDisplayName"`
-	RecoveryReference           string     `json:"-"`
-	RecoveryReferenceConfigured bool       `json:"recoveryReferenceConfigured"`
-	EngineType                  string     `json:"engineType"`
-	EngineVersion               string     `json:"engineVersion,omitempty"`
-	StateVolumeReference        string     `json:"stateVolumeReference,omitempty"`
-	Status                      Status     `json:"status"`
-	SafeMessagesPerMinute       int        `json:"safeMessagesPerMinute"`
-	SafeDailyCapacity           int64      `json:"safeDailyCapacity"`
-	InFlightLimit               int        `json:"inFlightLimit"`
-	SentToday                   int64      `json:"sentToday"`
-	LastHeartbeatAt             *time.Time `json:"lastHeartbeatAt,omitempty"`
-	LastSuccessAt               *time.Time `json:"lastSuccessAt,omitempty"`
-	QuarantinedAt               *time.Time `json:"quarantinedAt,omitempty"`
-	QuarantineReason            string     `json:"quarantineReason,omitempty"`
-	ReinstatedAt                *time.Time `json:"reinstatedAt,omitempty"`
-	Version                     int64      `json:"version"`
+	Ownership                   *SessionOwnershipReceipt `json:"ownership,omitempty"`
+	ID                          string                   `json:"id"`
+	NodeID                      string                   `json:"nodeId,omitempty"`
+	PoolID                      string                   `json:"poolId,omitempty"`
+	GatewayPoolID               string                   `json:"gatewayPoolId,omitempty"`
+	MaskedMSISDN                string                   `json:"maskedMsisdn"`
+	OwnerReference              string                   `json:"ownerReference"`
+	RegistrationCountryISO2     string                   `json:"registrationCountryIso2"`
+	ProfileDisplayName          string                   `json:"profileDisplayName"`
+	RecoveryReference           string                   `json:"-"`
+	RecoveryReferenceConfigured bool                     `json:"recoveryReferenceConfigured"`
+	EngineType                  string                   `json:"engineType"`
+	EngineVersion               string                   `json:"engineVersion,omitempty"`
+	StateVolumeReference        string                   `json:"stateVolumeReference,omitempty"`
+	Status                      Status                   `json:"status"`
+	SafeMessagesPerMinute       int                      `json:"safeMessagesPerMinute"`
+	SafeDailyCapacity           int64                    `json:"safeDailyCapacity"`
+	InFlightLimit               int                      `json:"inFlightLimit"`
+	SentToday                   int64                    `json:"sentToday"`
+	LastHeartbeatAt             *time.Time               `json:"lastHeartbeatAt,omitempty"`
+	LastSuccessAt               *time.Time               `json:"lastSuccessAt,omitempty"`
+	QuarantinedAt               *time.Time               `json:"quarantinedAt,omitempty"`
+	QuarantineReason            string                   `json:"quarantineReason,omitempty"`
+	ReinstatedAt                *time.Time               `json:"reinstatedAt,omitempty"`
+	Version                     int64                    `json:"version"`
 }
 
 type SessionOperationalMetadata struct {

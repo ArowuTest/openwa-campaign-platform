@@ -22,8 +22,10 @@ export class GatewayMessagingService {
       this.authorities.submitIfCurrent(request, async () => {
         const currentHealth = await this.provider.health(request.sessionId);
         if (!currentHealth.ready || currentHealth.status !== 'READY') throw new ServiceUnavailableException('session is not ready for governed submission');
+        this.authorities.assertOwned(request.sessionId, request.sessionLeaseVersion);
         return this.idempotency.execute(request, async () => {
           try {
+            this.authorities.assertOwned(request.sessionId, request.sessionLeaseVersion);
             const result = await this.provider.send(request);
             this.pipelines.recordProviderSuccess(request.sessionId);
             return result;
@@ -38,6 +40,8 @@ export class GatewayMessagingService {
   async health(sessionId: string): Promise<SessionHealth & { pipeline: ReturnType<SessionPipelineService['status']> }> {
     return { ...(await this.provider.health(sessionId)), pipeline: this.pipelines.status(sessionId) };
   }
+  listSessions(): Promise<SessionRecord[]> { return required(this.provider.listSessions, 'session listing').call(this.provider); }
+  synchronizeSentToday(sessionId: string, sentToday: number): void { required(this.provider.synchronizeSentToday, 'session usage synchronization').call(this.provider, sessionId, sentToday); }
   getSession(sessionId: string): Promise<SessionRecord> { return required(this.provider.getSession, 'session read').call(this.provider, sessionId); }
   async createSession(name: string): Promise<SessionRecord> {
     return this.authorities.runIfNotTombstoned(name, () =>
@@ -46,6 +50,7 @@ export class GatewayMessagingService {
   }
   async startSession(sessionId: string, options?: SessionStartOptions): Promise<SessionRecord> {
     return this.authorities.runIfNotTombstoned(sessionId, async () => {
+      this.authorities.assertOwned(sessionId);
       this.pipelines.beginStart(sessionId);
       try {
         const session = await required(this.provider.startSession, 'session start').call(this.provider, sessionId, options);
@@ -89,9 +94,10 @@ export class GatewayMessagingService {
     );
   }
   async pairingCode(sessionId: string, phoneNumber: string): Promise<unknown> {
-    return this.authorities.runIfNotTombstoned(sessionId, () =>
-      required(this.provider.pairingCode, 'pairing code').call(this.provider, sessionId, phoneNumber)
-    );
+    return this.authorities.runIfNotTombstoned(sessionId, () => {
+      this.authorities.assertOwned(sessionId);
+      return required(this.provider.pairingCode, 'pairing code').call(this.provider, sessionId, phoneNumber);
+    });
   }
   drain(sessionId: string) { this.pipelines.drain(sessionId); }
   resume(sessionId: string) { this.pipelines.resume(sessionId); }

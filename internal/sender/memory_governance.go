@@ -8,9 +8,13 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"campaign-platform/internal/gateway"
 )
 
 type MemoryGovernanceStore struct {
+	HeartbeatTTL      time.Duration
+	Leases            gateway.LeaseStore
 	mu                sync.Mutex
 	pools             map[string]Pool
 	nodes             map[string]Node
@@ -314,6 +318,11 @@ func (m *MemoryGovernanceStore) TransitionSession(_ context.Context, id string, 
 func (m *MemoryGovernanceStore) HeartbeatSession(_ context.Context, id string, e int64, v GovernedSession, now time.Time) (GovernedSession, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.heartbeatSessionLocked(id, e, v, now)
+}
+
+// Caller holds mu, including while establishing the corresponding lease.
+func (m *MemoryGovernanceStore) heartbeatSessionLocked(id string, e int64, v GovernedSession, now time.Time) (GovernedSession, error) {
 	cur, ok := m.sessions[id]
 	if !ok {
 		return GovernedSession{}, ErrSenderNotFound
@@ -341,31 +350,8 @@ func (m *MemoryGovernanceStore) HeartbeatSession(_ context.Context, id string, e
 	m.sessions[id] = cur
 	return cur, nil
 }
-func (m *MemoryGovernanceStore) Capacity(_ context.Context, pool string, now time.Time) (CapacitySummary, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	p, ok := m.pools[pool]
-	if !ok {
-		return CapacitySummary{}, ErrSenderNotFound
-	}
-	r := CapacitySummary{PoolID: pool, ReservedCapacity: p.ReservedCapacity, AsAt: now}
-	for _, s := range m.sessions {
-		if s.PoolID != pool || (s.Status != StatusReady && s.Status != StatusBusy) || s.LastHeartbeatAt == nil || now.Sub(*s.LastHeartbeatAt) > 90*time.Second {
-			continue
-		}
-		r.ReadySessions++
-		r.ConfiguredMessagesPerMinute += s.SafeMessagesPerMinute
-		r.AvailableMessagesPerMinute += s.SafeMessagesPerMinute
-		r.ConfiguredDailyCapacity += s.SafeDailyCapacity
-		if s.SafeDailyCapacity > s.SentToday {
-			r.RemainingDailyCapacity += s.SafeDailyCapacity - s.SentToday
-		}
-	}
-	r.AvailableDailyCapacity = r.RemainingDailyCapacity - r.ReservedCapacity
-	if r.AvailableDailyCapacity < 0 {
-		r.AvailableDailyCapacity = 0
-	}
-	return r, nil
+func (m *MemoryGovernanceStore) Capacity(ctx context.Context, pool string, now time.Time) (CapacitySummary, error) {
+	return m.leaseCapacity(ctx, pool, now)
 }
 
 func (m *MemoryGovernanceStore) ListGatewayPools(context.Context) ([]GatewayPool, error) {

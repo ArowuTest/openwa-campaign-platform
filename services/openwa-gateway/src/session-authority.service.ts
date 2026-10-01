@@ -3,6 +3,7 @@ import { link, mkdir, open, readFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { SendRequest } from './provider/messaging-provider';
 import { GatewayIdentityService } from './gateway-identity.service';
+import { RuntimeRegistrationService } from './runtime-registration.service';
 
 type AuthorityRecord = {
   provider: string;
@@ -24,7 +25,10 @@ type AuthorityRecord = {
 export class SessionAuthorityService implements OnModuleInit {
   private readonly directory = String(process.env.GATEWAY_SESSION_AUTHORITY_DIR ?? '/data/gateway-session-authority');
   private readonly validationQueues = new Map<string, Promise<void>>();
-  constructor(private readonly identity: GatewayIdentityService) {}
+  constructor(private readonly identity: GatewayIdentityService, private readonly runtime: RuntimeRegistrationService) {}
+  assertOwned(sessionId: string, dispatchVersion?: number): void {
+    this.runtime.assertSessionOwned(sessionId, dispatchVersion);
+  }
 
   async onModuleInit() { await mkdir(this.directory, { recursive: true, mode: 0o700 }); }
 
@@ -85,6 +89,7 @@ export class SessionAuthorityService implements OnModuleInit {
     }
   }
   private async validateSerial(request: SendRequest): Promise<void> {
+    this.assertOwned(request.sessionId, request.sessionLeaseVersion);
     await this.throwIfTombstoned(request.sessionId);
     const now = Date.now();
     const expiry = Date.parse(request.authorityExpiresAt);

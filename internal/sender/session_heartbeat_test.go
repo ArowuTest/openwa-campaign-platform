@@ -7,11 +7,13 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"campaign-platform/internal/gateway"
 )
 
 func readyHeartbeatSession(t *testing.T, ctx context.Context, governance *GovernanceService) (Node, GovernedSession) {
 	t.Helper()
-	node, err := governance.RegisterNode(ctx, Node{Name: "heartbeat-node", Status: "READY", Capacity: 4}, "actor", "approved node")
+	node, err := governance.RegisterNode(ctx, Node{Name: "heartbeat-node", BootID: "boot-a", Status: "READY", Capacity: 4}, "actor", "approved node")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,12 +55,15 @@ func TestSessionHeartbeatRequiresSignedNodeBoundReplaySafeTelemetry(t *testing.T
 	node, session := readyHeartbeatSession(t, ctx, governance)
 	fixed := time.Now().UTC().Truncate(time.Second)
 	secret := bytes.Repeat([]byte{0x42}, 32)
+	leases := gateway.NewMemoryLeaseStore()
 	service := &SessionHeartbeatService{
 		Governance: governance,
 		Runtime:    &RuntimeRegistrationService{Store: store, Secret: secret, Clock: func() time.Time { return fixed }},
+		Leases:     leases,
+		LeaseTTL:   90 * time.Second,
 	}
 	report := SessionHeartbeatReport{
-		NodeID: node.ID, SessionID: session.ID, Status: StatusReady,
+		NodeID: node.ID, SessionID: session.ID, BootID: node.BootID, Status: StatusReady,
 		EngineVersion: "engine-1", SentToday: 42,
 	}
 	raw, timestamp, nonce, signature := signedSessionHeartbeat(t, secret, fixed, "session-heartbeat-0001", report)
@@ -99,5 +104,85 @@ func TestSessionHeartbeatRequiresSignedNodeBoundReplaySafeTelemetry(t *testing.T
 	pathRaw, pathTS, pathNonce, pathSig := signedSessionHeartbeat(t, secret, fixed.Add(2*time.Second), "session-heartbeat-0005", report)
 	if _, err := service.Heartbeat(ctx, "different-session", pathTS, pathNonce, pathSig, pathRaw); !errors.Is(err, ErrSessionHeartbeatIdentity) {
 		t.Fatalf("expected path/body session mismatch rejection, got %v", err)
+	}
+}
+
+func TestSessionHeartbeatAcquiresRenewsAndRequiresSafeRecoveryForNewBoot(t *testing.T) {
+	ctx := context.Background()
+	store := NewMemoryGovernanceStore()
+	governance := &GovernanceService{Store: store}
+	node, session := readyHeartbeatSession(t, ctx, governance)
+	secret := bytes.Repeat([]byte{0x53}, 32)
+	leases := gateway.NewMemoryLeaseStore()
+	clock := time.Now().UTC().Truncate(time.Second)
+	service := &SessionHeartbeatService{
+		Governance: governance,
+		Runtime:    &RuntimeRegistrationService{Store: store, Secret: secret, Clock: func() time.Time { return clock }},
+		Leases:     leases,
+		LeaseTTL:   90 * time.Second,
+	}
+	report := SessionHeartbeatReport{
+		NodeID: node.ID, SessionID: session.ID, BootID: node.BootID, Status: StatusReady,
+		EngineVersion: "adapter-v1", SentToday: 10,
+	}
+
+	raw, timestamp, nonce, signature := signedSessionHeartbeat(t, secret, clock, "lease-heartbeat-0001", report)
+	if _, err := service.Heartbeat(ctx, session.ID, timestamp, nonce, signature, raw); err != nil {
+		t.Fatal(err)
+	}
+	first, ok, err := leases.Get(ctx, session.ID)
+	if err != nil || !ok {
+		t.Fatalf("initial heartbeat did not acquire lease: lease=%+v ok=%v err=%v", first, ok, err)
+	}
+	if first.WorkerID != node.ID || first.Token != node.BootID || first.Version != 1 || !first.ExpiresAt.Equal(clock.Add(90*time.Second)) {
+		t.Fatalf("unexpected initial heartbeat lease: %+v", first)
+	}
+
+	clock = clock.Add(30 * time.Second)
+	raw, timestamp, nonce, signature = signedSessionHeartbeat(t, secret, clock, "lease-heartbeat-0002", report)
+	if _, err := service.Heartbeat(ctx, session.ID, timestamp, nonce, signature, raw); err != nil {
+		t.Fatal(err)
+	}
+	second, ok, err := leases.Get(ctx, session.ID)
+	if err != nil || !ok {
+		t.Fatalf("renewed heartbeat lease missing: lease=%+v ok=%v err=%v", second, ok, err)
+	}
+	if second.Version != first.Version+1 || second.Token != node.BootID || !second.ExpiresAt.Equal(clock.Add(90*time.Second)) {
+		t.Fatalf("heartbeat did not renew the current boot lease: first=%+v second=%+v", first, second)
+	}
+
+	node, err = store.HeartbeatNode(ctx, node.ID, node.Version, Node{BootID: "boot-b", Status: "READY", Capacity: 4}, clock.Add(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	report.BootID = node.BootID
+	clock = clock.Add(30 * time.Second)
+	raw, timestamp, nonce, signature = signedSessionHeartbeat(t, secret, clock, "lease-heartbeat-0003", report)
+	if _, err := service.Heartbeat(ctx, session.ID, timestamp, nonce, signature, raw); !errors.Is(err, gateway.ErrLeaseHeld) {
+		t.Fatalf("new boot took over a live lease: %v", err)
+	}
+
+	clock = second.ExpiresAt.Add(time.Second)
+	raw, timestamp, nonce, signature = signedSessionHeartbeat(t, secret, clock, "lease-heartbeat-0004", report)
+	if _, err := service.Heartbeat(ctx, session.ID, timestamp, nonce, signature, raw); !errors.Is(err, ErrSessionHeartbeatRecoveryRequired) {
+		t.Fatalf("new boot reactivated READY directly after lease expiry: %v", err)
+	}
+
+	report.Status = StatusDisconnected
+	clock = clock.Add(time.Second)
+	raw, timestamp, nonce, signature = signedSessionHeartbeat(t, secret, clock, "lease-heartbeat-0005", report)
+	updated, err := service.Heartbeat(ctx, session.ID, timestamp, nonce, signature, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Status != StatusDisconnected {
+		t.Fatalf("controlled takeover did not enter a non-sending state: %+v", updated)
+	}
+	takenOver, ok, err := leases.Get(ctx, session.ID)
+	if err != nil || !ok {
+		t.Fatalf("takeover lease missing: lease=%+v ok=%v err=%v", takenOver, ok, err)
+	}
+	if takenOver.WorkerID != node.ID || takenOver.Token != node.BootID || takenOver.Version <= second.Version {
+		t.Fatalf("controlled takeover did not establish the new boot fence: before=%+v after=%+v", second, takenOver)
 	}
 }

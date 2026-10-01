@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 const assert = require('node:assert/strict');
+// This suite isolates other behavior; real boot ownership is covered separately.
+const ownedRuntime = { assertSessionOwned() {}, onSessionOwnershipLost() { return () => {}; } };
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
@@ -48,7 +50,7 @@ async function verifyAuthoritySerialization() {
   const authority = new SessionAuthorityService({
     provider: 'OPENWA', engine: 'BAILEYS', gatewayPoolId: 'pool-1', gatewayPoolVersion: 1,
     adapterVersion: '0.8.28', nodeId: 'node-1', nodeVersion: 1,
-  });
+  }, ownedRuntime);
   await authority.onModuleInit();
   assert.equal(typeof authority.runIfNotTombstoned, 'function', 'session lifecycle side effects need a tombstone-serialised authority guard');
   let entered;
@@ -86,6 +88,7 @@ async function verifyGatewayUsesSerialGuard() {
   });
   const guarded = [];
   const authorities = {
+    assertOwned() {},
     runIfNotTombstoned: async (sessionId, operation) => { guarded.push(sessionId); return operation(); },
     assertNotTombstoned: async () => { throw new Error('non-serial tombstone check used'); },
     tombstone: async () => undefined,

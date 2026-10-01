@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"campaign-platform/internal/gateway"
 	"campaign-platform/internal/sender"
 )
 
@@ -31,7 +32,7 @@ func heartbeatHTTPFixture(t *testing.T) (*Server, sender.Node, sender.GovernedSe
 	ctx := context.Background()
 	store := sender.NewMemoryGovernanceStore()
 	governance := &sender.GovernanceService{Store: store}
-	node, err := governance.RegisterNode(ctx, sender.Node{Name: "http-heartbeat-node", Status: "READY", Capacity: 2}, "actor", "approved node")
+	node, err := governance.RegisterNode(ctx, sender.Node{Name: "http-heartbeat-node", BootID: "boot-http", Status: "READY", Capacity: 2}, "actor", "approved node")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +55,7 @@ func heartbeatHTTPFixture(t *testing.T) (*Server, sender.Node, sender.GovernedSe
 	secret := bytes.Repeat([]byte{0x51}, 32)
 	runtime := &sender.RuntimeRegistrationService{Store: store, Secret: secret, Clock: func() time.Time { return fixed }}
 	server := New(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{
-		SenderSessionHeartbeat: &sender.SessionHeartbeatService{Governance: governance, Runtime: runtime},
+		SenderSessionHeartbeat: &sender.SessionHeartbeatService{Governance: governance, Runtime: runtime, Leases: gateway.NewMemoryLeaseStore(), LeaseTTL: 90 * time.Second},
 	})
 	return server, node, session, fixed, secret
 }
@@ -79,7 +80,7 @@ func signedHeartbeatRequest(t *testing.T, methodURL string, fixed time.Time, sec
 func TestSenderSessionHeartbeatRequiresMachineSignatureAndRejectsReplay(t *testing.T) {
 	server, node, session, fixed, secret := heartbeatHTTPFixture(t)
 	report := sender.SessionHeartbeatReport{
-		NodeID: node.ID, SessionID: session.ID, Status: sender.StatusReady,
+		NodeID: node.ID, SessionID: session.ID, BootID: node.BootID, Status: sender.StatusReady,
 		EngineVersion: "engine-http-1", SentToday: 44,
 	}
 	raw, err := json.Marshal(report)
@@ -107,5 +108,23 @@ func TestSenderSessionHeartbeatRequiresMachineSignatureAndRejectsReplay(t *testi
 	server.Handler().ServeHTTP(replayResponse, replay)
 	if replayResponse.Code != http.StatusConflict {
 		t.Fatalf("heartbeat nonce replay was not rejected: status=%d body=%s", replayResponse.Code, replayResponse.Body.String())
+	}
+}
+
+func TestSenderSessionHeartbeatLeaseAndRecoveryConflictsAre409(t *testing.T) {
+	server := New(slog.New(slog.NewTextHandler(io.Discard, nil)), Dependencies{})
+	for name, err := range map[string]error{
+		"lease-held":        gateway.ErrLeaseHeld,
+		"lease-lost":        gateway.ErrLeaseLost,
+		"recovery-required": sender.ErrSessionHeartbeatRecoveryRequired,
+	} {
+		t.Run(name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/api/v1/internal/sender-sessions/session-1/heartbeat", nil)
+			response := httptest.NewRecorder()
+			server.writeSessionHeartbeatError(response, request, err)
+			if response.Code != http.StatusConflict {
+				t.Fatalf("%s mapped to status=%d body=%s", name, response.Code, response.Body.String())
+			}
+		})
 	}
 }

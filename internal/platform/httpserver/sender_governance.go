@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"campaign-platform/internal/gateway"
 	"campaign-platform/internal/identity"
 	"campaign-platform/internal/sender"
 	sharedcrypto "campaign-platform/internal/shared/crypto"
@@ -434,6 +435,8 @@ func (s *Server) writeSessionHeartbeatError(w http.ResponseWriter, r *http.Reque
 		httpx.WriteError(w, r, http.StatusConflict, "SENDER_HEARTBEAT_IDENTITY_MISMATCH", "The sender-session heartbeat does not match its governed node and session.", nil)
 	case errors.Is(err, sender.ErrSessionHeartbeatStale), errors.Is(err, sender.ErrSenderConflict):
 		httpx.WriteError(w, r, http.StatusConflict, "SENDER_HEARTBEAT_STALE", "The sender-session heartbeat is stale or conflicts with newer telemetry.", nil)
+	case errors.Is(err, gateway.ErrLeaseHeld), errors.Is(err, gateway.ErrLeaseLost), errors.Is(err, sender.ErrSessionHeartbeatRecoveryRequired):
+		httpx.WriteError(w, r, http.StatusConflict, "SENDER_HEARTBEAT_OWNERSHIP_CONFLICT", "The sender-session ownership lease is held, lost, or requires controlled recovery before takeover.", nil)
 	case errors.Is(err, sender.ErrSenderNotFound):
 		httpx.WriteError(w, r, http.StatusNotFound, "SENDER_SESSION_NOT_FOUND", "The governed sender session does not exist.", nil)
 	case errors.Is(err, sender.ErrSessionHeartbeatInvalid):

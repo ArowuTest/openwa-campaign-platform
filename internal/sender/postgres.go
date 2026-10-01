@@ -21,6 +21,8 @@ JOIN sender_nodes sn ON sn.id=ss.node_id
 JOIN sender_session_leases sl
   ON sl.session_id=ss.id
  AND sl.worker_node_id=ss.node_id
+ AND coalesce(sn.boot_id,'')<>''
+ AND sl.lease_token_hash=sha256(convert_to(sn.boot_id,'UTF8'))
 WHERE ($2='' OR ss.sender_pool_id=nullif($2,'')::uuid)
   AND ($2<>'' OR $3='' OR ss.logical_sender_pool=$3)
   AND ($4='' OR ss.gateway_pool_id=nullif($4,'')::uuid)
@@ -59,7 +61,9 @@ SELECT
    AND NOT sn.draining
    AND ss.last_heartbeat_at>$7
    AND sn.last_heartbeat_at>$7
-   AND EXISTS (SELECT 1 FROM sender_session_leases sl WHERE sl.session_id=ss.id AND sl.worker_node_id=ss.node_id AND sl.expires_at>$6)
+   AND EXISTS (SELECT 1 FROM sender_session_leases sl WHERE sl.session_id=ss.id AND sl.worker_node_id=ss.node_id
+ AND coalesce(sn.boot_id,'')<>''
+ AND sl.lease_token_hash=sha256(convert_to(sn.boot_id,'UTF8')) AND sl.expires_at>$6)
    AND coalesce(ss.safe_messages_per_minute,0)>0
    AND coalesce(ss.safe_daily_capacity,0)>coalesce(ss.sent_today,0)) AS healthy
 FROM sender_sessions ss

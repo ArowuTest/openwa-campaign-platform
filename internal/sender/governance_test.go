@@ -7,6 +7,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"campaign-platform/internal/gateway"
 )
 
 func registerReadySession(t *testing.T, ctx context.Context, svc *GovernanceService, store *MemoryGovernanceStore, value GovernedSession) GovernedSession {
@@ -58,6 +60,15 @@ func TestGovernedSenderCapacityAndConflicts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	n.BootID = "capacity-test-boot"
+	n, err = store.HeartbeatNode(ctx, n.ID, n.Version, n, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.Leases = gateway.NewMemoryLeaseStore()
+	if _, err = store.Leases.Acquire(ctx, s.ID, n.ID, n.BootID, now, 90*time.Second); err != nil {
+		t.Fatal(err)
+	}
 	cap, err := store.Capacity(ctx, p.ID, now)
 	if err != nil {
 		t.Fatal(err)
@@ -80,6 +91,20 @@ func TestQuarantineExcludesCapacityAndHeartbeatCannotReinstate(t *testing.T) {
 	now := time.Now().UTC()
 	node, _ = store.HeartbeatNode(ctx, node.ID, node.Version, Node{Status: "READY", Capacity: 1}, now)
 	session, _ = store.HeartbeatSession(ctx, session.ID, session.Version, GovernedSession{Status: StatusReady, SafeMessagesPerMinute: 25, SafeDailyCapacity: 500, InFlightLimit: 1}, now)
+	node.BootID = "quarantine-test-boot"
+	var err error
+	node, err = store.HeartbeatNode(ctx, node.ID, node.Version, node, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.Leases = gateway.NewMemoryLeaseStore()
+	if _, err = store.Leases.Acquire(ctx, session.ID, node.ID, node.BootID, now, 90*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	beforeQuarantine, err := store.Capacity(ctx, pool.ID, now)
+	if err != nil || beforeQuarantine.ReadySessions != 1 {
+		t.Fatalf("healthy owned fixture unavailable: %+v %v", beforeQuarantine, err)
+	}
 	quarantined, err := svc.QuarantineSession(ctx, session.ID, session.Version, "operator", "failure threshold exceeded")
 	if err != nil {
 		t.Fatal(err)

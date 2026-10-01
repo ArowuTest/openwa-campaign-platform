@@ -8,7 +8,14 @@ import (
 	"time"
 )
 
-type PostgreSQLLeaseStore struct{ DB *sql.DB }
+// SQLLeaseExecutor allows the lease and its governed session update to share
+// one transaction instead of committing ownership before telemetry succeeds.
+type SQLLeaseExecutor interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+type PostgreSQLLeaseStore struct{ DB SQLLeaseExecutor }
 
 func (s *PostgreSQLLeaseStore) Acquire(ctx context.Context, sessionID, workerID, token string, now time.Time, ttl time.Duration) (Lease, error) {
 	if s.DB == nil {

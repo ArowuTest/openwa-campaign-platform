@@ -44,4 +44,12 @@ export class OpenWAProvider implements MessagingProvider {
   pairingCode(sessionId: string, phoneNumber: string): Promise<unknown> {
     return this.embedded.pairingCode(sessionId, phoneNumber);
   }
+
+  listSessions(): Promise<SessionRecord[]> {
+    return this.embedded.listSessions();
+  }
+
+  synchronizeSentToday(sessionId: string, sentToday: number): void {
+    this.embedded.synchronizeSentToday(sessionId, sentToday);
+  }
 }

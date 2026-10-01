@@ -9,17 +9,21 @@ import (
 	"io"
 	"strings"
 	"time"
+
+	"campaign-platform/internal/gateway"
 )
 
 var (
-	ErrSessionHeartbeatInvalid  = errors.New("sender session heartbeat is invalid")
-	ErrSessionHeartbeatIdentity = errors.New("sender session heartbeat identity mismatch")
-	ErrSessionHeartbeatStale    = errors.New("sender session heartbeat is stale")
+	ErrSessionHeartbeatInvalid          = errors.New("sender session heartbeat is invalid")
+	ErrSessionHeartbeatIdentity         = errors.New("sender session heartbeat identity mismatch")
+	ErrSessionHeartbeatStale            = errors.New("sender session heartbeat is stale")
+	ErrSessionHeartbeatRecoveryRequired = errors.New("sender session heartbeat requires controlled recovery before lease takeover")
 )
 
 type SessionHeartbeatReport struct {
 	NodeID        string `json:"nodeId"`
 	SessionID     string `json:"sessionId"`
+	BootID        string `json:"bootId"`
 	Status        Status `json:"status"`
 	EngineVersion string `json:"engineVersion"`
 	SentToday     int64  `json:"sentToday"`
@@ -28,6 +32,8 @@ type SessionHeartbeatReport struct {
 type SessionHeartbeatService struct {
 	Governance *GovernanceService
 	Runtime    *RuntimeRegistrationService
+	Leases     gateway.LeaseStore
+	LeaseTTL   time.Duration
 }
 
 func DecodeSessionHeartbeatReport(raw []byte) (SessionHeartbeatReport, error) {
@@ -45,8 +51,9 @@ func DecodeSessionHeartbeatReport(raw []byte) (SessionHeartbeatReport, error) {
 	}
 	report.NodeID = strings.TrimSpace(report.NodeID)
 	report.SessionID = strings.TrimSpace(report.SessionID)
+	report.BootID = strings.TrimSpace(report.BootID)
 	report.EngineVersion = strings.TrimSpace(report.EngineVersion)
-	if report.NodeID == "" || report.SessionID == "" || report.SentToday < 0 {
+	if report.NodeID == "" || report.SessionID == "" || report.BootID == "" || report.EngineVersion == "" || report.SentToday < 0 {
 		return SessionHeartbeatReport{}, ErrSessionHeartbeatInvalid
 	}
 	if !machineHeartbeatStatusAllowed(report.Status) {
@@ -66,8 +73,8 @@ func machineHeartbeatStatusAllowed(status Status) bool {
 }
 
 func (s *SessionHeartbeatService) Heartbeat(ctx context.Context, pathSessionID, timestamp, nonce, signature string, raw []byte) (GovernedSession, error) {
-	if s == nil || s.Governance == nil || s.Governance.Store == nil || s.Runtime == nil || s.Runtime.Store == nil {
-		return GovernedSession{}, errors.New("sender session heartbeat dependencies are required")
+	if s == nil || s.Governance == nil || s.Governance.Store == nil || s.Runtime == nil || s.Runtime.Store == nil || s.Leases == nil || s.LeaseTTL <= 0 {
+		return GovernedSession{}, errors.New("sender session heartbeat governance, runtime, lease store and positive lease TTL are required")
 	}
 	report, err := DecodeSessionHeartbeatReport(raw)
 	if err != nil {
@@ -98,10 +105,56 @@ func (s *SessionHeartbeatService) Heartbeat(ctx context.Context, pathSessionID, 
 	if strings.TrimSpace(current.NodeID) == "" || current.NodeID != report.NodeID {
 		return GovernedSession{}, ErrSessionHeartbeatIdentity
 	}
+	node, err := s.Governance.Store.GetNode(ctx, report.NodeID)
+	if err != nil {
+		return GovernedSession{}, err
+	}
+	if strings.TrimSpace(node.BootID) == "" || node.BootID != report.BootID {
+		return GovernedSession{}, ErrSessionHeartbeatIdentity
+	}
 	if current.LastHeartbeatAt != nil && !observedAt.After(current.LastHeartbeatAt.UTC()) {
 		return GovernedSession{}, ErrSessionHeartbeatStale
 	}
-	return s.Governance.Store.HeartbeatSession(ctx, current.ID, current.Version, GovernedSession{
-		Status: report.Status, EngineVersion: report.EngineVersion, SentToday: report.SentToday,
-	}, observedAt)
+	store, ok := s.Governance.Store.(atomicSessionHeartbeatStore)
+	if !ok {
+		return GovernedSession{}, errors.New("atomic sender session heartbeat storage is required")
+	}
+	// Initial reads are advisory. Storage rechecks boot, session version and
+	// observation order under the same lock/transaction as both mutations.
+	// A failed update must roll back ownership, never DELETE its fence history.
+	return store.ApplyOwnedSessionHeartbeat(ctx, current, report, observedAt, now, s.LeaseTTL, s.Leases)
+}
+
+func (s *SessionHeartbeatService) ensureSessionLease(ctx context.Context, current GovernedSession, report SessionHeartbeatReport, now time.Time) (gateway.Lease, bool, error) {
+	existing, ok, err := s.Leases.Get(ctx, current.ID)
+	if err != nil {
+		return gateway.Lease{}, false, err
+	}
+	if !ok {
+		lease, err := s.Leases.Acquire(ctx, current.ID, report.NodeID, report.BootID, now, s.LeaseTTL)
+		return lease, err == nil, err
+	}
+	if existing.ExpiresAt.After(now) {
+		if existing.WorkerID != report.NodeID {
+			return gateway.Lease{}, false, gateway.ErrLeaseHeld
+		}
+		existing.Token = report.BootID
+		lease, err := s.Leases.Renew(ctx, existing, now, s.LeaseTTL)
+		if errors.Is(err, gateway.ErrLeaseLost) {
+			return gateway.Lease{}, false, gateway.ErrLeaseHeld
+		}
+		return lease, false, err
+	}
+	if !safeExpiredLeaseTakeover(current.Status, report.Status) {
+		return gateway.Lease{}, false, ErrSessionHeartbeatRecoveryRequired
+	}
+	lease, err := s.Leases.Acquire(ctx, current.ID, report.NodeID, report.BootID, now, s.LeaseTTL)
+	return lease, err == nil, err
+}
+
+func safeExpiredLeaseTakeover(current, reported Status) bool {
+	if reported == StatusReady || reported == StatusBusy {
+		return false
+	}
+	return current == reported || AllowedSessionTransition(current, reported)
 }

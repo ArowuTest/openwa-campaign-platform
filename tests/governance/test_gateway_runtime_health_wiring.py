@@ -56,5 +56,31 @@ class GatewayRuntimeHealthWiringTests(unittest.TestCase):
         self.assertIn("GATEWAY_STALE_AFTER_SECONDS=120", source)
 
 
+class CurrentBootLeaseWiringTests(unittest.TestCase):
+    """Static wiring guard only; PostgreSQL behavioral tests remain mandatory."""
+
+    def assert_boot_binding(self, relative, anchor):
+        source = (ROOT / relative).read_text(encoding="utf-8")
+        start = source.index(anchor)
+        # Inspect the first SQL literal in the named production query/function,
+        # not comments or unrelated code that might contain the same predicate.
+        query = source[start:].split("`", 2)[1]
+        compact = re.sub(r"\s+", "", query)
+        self.assertIn("coalesce(sn.boot_id,'')<>''", compact)
+        self.assertIn("sl.lease_token_hash=sha256(convert_to(sn.boot_id,'UTF8'))", compact)
+
+    def test_candidate_allocation_requires_current_boot(self):
+        self.assert_boot_binding("internal/sender/postgres.go", "const postgresAllocationQuery")
+
+    def test_existing_assignment_requires_current_boot(self):
+        self.assert_boot_binding("internal/sender/postgres.go", "const postgresAssignedSessionValidationQuery")
+
+    def test_campaign_materialization_requires_current_boot(self):
+        self.assert_boot_binding("internal/dispatch/postgres_material.go", "func (l *PostgreSQLMaterialLoader) loadGovernedRoute")
+
+    def test_internal_test_route_requires_current_boot(self):
+        self.assert_boot_binding("internal/testmessage/postgres.go", "func (r *PostgreSQLRepository) ValidateTestRoute")
+
+
 if __name__ == "__main__":
     unittest.main()

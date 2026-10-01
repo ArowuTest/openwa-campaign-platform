@@ -1,7 +1,9 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit, ServiceUnavailableException } from '@nestjs/common';
+import { SessionOwnershipRegistry } from './session-ownership';
 import { createHash, createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { isIP } from 'node:net';
 import { readFile, readdir, statfs } from 'node:fs/promises';
+import { boundedResponseDetail } from './control-plane-response';
 import { GatewayIdentityService } from './gateway-identity.service';
 import { GatewayObservabilityService } from './observability.service';
 
@@ -32,11 +34,62 @@ export class RuntimeRegistrationService implements OnModuleInit, OnModuleDestroy
   private inFlightRuntimeState?: string;
   private inFlightAbort?: AbortController;
   private shuttingDown = false;
+  private runtimeRegistered = false;
+  private readonly sessionOwnership = new SessionOwnershipRegistry();
   private runtimeSequence = 0;
   private lastCPU = process.cpuUsage();
   private lastCPUAt = process.hrtime.bigint();
 
   constructor(private readonly identity: GatewayIdentityService, private readonly observability: GatewayObservabilityService) {}
+
+  isRuntimeRegistered(): boolean { return this.runtimeRegistered && !this.shuttingDown; }
+  bootIdentity(): string { return this.bootId; }
+  assertSessionOwned(sessionId: string, dispatchVersion?: number): void {
+    try {
+      if (!this.isRuntimeRegistered()) throw new Error('gateway runtime is not registered');
+      this.sessionOwnership.assertOwned(sessionId, dispatchVersion);
+    } catch (error) {
+      throw new ServiceUnavailableException(error instanceof Error ? error.message : 'session ownership is unavailable');
+    }
+  }
+  revokeSessionOwnership(sessionId: string): void { this.sessionOwnership.revoke(sessionId); }
+  onSessionOwnershipLost(listener: (sessionId: string) => void): () => void { return this.sessionOwnership.onLoss(listener); }
+
+  async publishSessionHeartbeat(sessionId: string, report: Record<string, unknown>, observedAt = new Date()): Promise<{ sentToday: number }> {
+    sessionId = String(sessionId ?? '').trim();
+    if (!this.isRuntimeRegistered()) throw new Error('gateway runtime registration has not been accepted');
+    if (!sessionId || report?.nodeId !== this.identity.nodeId || report?.sessionId !== sessionId || report?.bootId !== this.bootId) {
+      throw new Error('session heartbeat identity does not match the registered gateway runtime');
+    }
+    const pending = this.sessionOwnership.begin(sessionId);
+    try {
+      const base = this.controlPlaneBaseURL();
+      if (!base) throw new Error('control plane internal URL is not configured');
+      const body = Buffer.from(JSON.stringify(report));
+      const response = await fetch(`${base}/api/v1/internal/sender-sessions/${encodeURIComponent(sessionId)}/heartbeat`, {
+        method: 'POST', body, headers: this.runtimeHeaders(body, observedAt), redirect: 'manual',
+        signal: AbortSignal.timeout(boundedInteger(process.env.GATEWAY_RUNTIME_TIMEOUT_MS, 5_000, 1_000, 30_000)),
+      });
+      const detail = await boundedResponseDetail(response, 4096);
+      if (!response.ok) {
+        let code = '';
+        try { code = String((JSON.parse(detail) as { error?: unknown }).error ?? ''); } catch {}
+        throw new SessionHeartbeatControlError(response.status, code, detail);
+      }
+      let payload: { sentToday?: unknown };
+      try { payload = JSON.parse(detail) as { sentToday?: unknown }; }
+      catch { throw new Error('control plane returned invalid sender-session heartbeat JSON'); }
+      if (!payload || typeof payload.sentToday !== 'number' || !Number.isSafeInteger(payload.sentToday) || payload.sentToday < 0) {
+        throw new Error('control plane returned invalid sender-session usage evidence');
+      }
+      if (!this.isRuntimeRegistered()) throw new Error('gateway runtime registration is no longer accepted');
+      this.sessionOwnership.accept(sessionId, this.identity.nodeId, this.bootId, pending, payload);
+      return { sentToday: payload.sentToday };
+    } catch (error) {
+      this.sessionOwnership.reject(sessionId, pending);
+      throw error;
+    }
+  }
 
   async onModuleInit(): Promise<void> {
     if (process.env.NODE_ENV === 'production') {
@@ -62,6 +115,7 @@ export class RuntimeRegistrationService implements OnModuleInit, OnModuleDestroy
 
   async onModuleDestroy(): Promise<void> {
     this.shuttingDown = true;
+    this.sessionOwnership.revokeAll();
     if (this.timer) clearInterval(this.timer);
     for (let attempt = 0; attempt < 3; attempt += 1) {
       if (await this.publish('DRAINING')) return;
@@ -93,33 +147,47 @@ export class RuntimeRegistrationService implements OnModuleInit, OnModuleDestroy
       const report = await this.report(runtimeState);
       if (cancellation?.aborted) throw new Error('runtime publication aborted');
       const body = Buffer.from(JSON.stringify(report));
-      const timestamp = String(Math.floor(Date.now() / 1000));
-      const nonce = randomBytes(24).toString('base64url');
-      const digest = createHash('sha256').update(body).digest('hex');
-      const signature = `sha256=${createHmac('sha256', process.env.GATEWAY_RUNTIME_SECRET ?? '').update(timestamp).update('\n').update(nonce).update('\n').update(digest).digest('hex')}`;
       const response = await fetch(this.runtimeURL(), {
         method: 'POST', body,
-        headers: {
-          'content-type': 'application/json',
-          'x-gateway-runtime-timestamp': timestamp,
-          'x-gateway-runtime-nonce': nonce,
-          'x-gateway-runtime-signature': signature,
-          ...(this.observability.traceparent() ? { traceparent: this.observability.traceparent()! } : {})
-        },
+        headers: this.runtimeHeaders(body),
         redirect: 'manual',
         signal: AbortSignal.any([AbortSignal.timeout(boundedInteger(process.env.GATEWAY_RUNTIME_TIMEOUT_MS, 5_000, 1_000, 30_000)), ...(cancellation ? [cancellation] : [])])
       });
       if (!response.ok) throw new Error(`control plane returned HTTP ${response.status}`);
+      this.runtimeRegistered = true;
       this.observability.increment('openwa_gateway_runtime_registration_total', { outcome: 'accepted' });
       this.observability.gauge('openwa_gateway_runtime_registration_last_success_seconds', Math.floor(Date.now() / 1000));
       return true;
     } catch (error) {
       this.observability.increment('openwa_gateway_runtime_registration_total', { outcome: 'failed' });
+      this.runtimeRegistered = false;
+      this.sessionOwnership.revokeAll();
       this.logger.warn(`gateway runtime registration deferred: ${safeError(error)}`);
       return false;
     } finally {
       this.observability.observe('openwa_gateway_runtime_registration_duration_seconds', Number(process.hrtime.bigint() - started) / 1e9);
     }
+  }
+
+  private runtimeHeaders(body: Buffer, observedAt = new Date()): Record<string, string> {
+    const timestamp = String(Math.floor(observedAt.getTime() / 1000));
+    const nonce = randomBytes(24).toString('base64url');
+    const digest = createHash('sha256').update(body).digest('hex');
+    const signature = `sha256=${createHmac('sha256', process.env.GATEWAY_RUNTIME_SECRET ?? '').update(timestamp).update('\n').update(nonce).update('\n').update(digest).digest('hex')}`;
+    return {
+      'content-type': 'application/json',
+      'x-gateway-runtime-timestamp': timestamp,
+      'x-gateway-runtime-nonce': nonce,
+      'x-gateway-runtime-signature': signature,
+      ...(this.observability.traceparent() ? { traceparent: this.observability.traceparent()! } : {}),
+    };
+  }
+
+  private controlPlaneBaseURL(): string {
+    const rawBase = String(process.env.CONTROL_API_INTERNAL_URL ?? '').trim();
+    return process.env.NODE_ENV === 'production'
+      ? this.productionCrossProviderURL('CONTROL_API_INTERNAL_URL', true).canonical
+      : rawBase.replace(/\/+$/u, '');
   }
 
   private runtimeURL(): string {
@@ -130,10 +198,7 @@ export class RuntimeRegistrationService implements OnModuleInit, OnModuleDestroy
       }
       return explicit;
     }
-    const rawBase = String(process.env.CONTROL_API_INTERNAL_URL ?? '').trim();
-    const base = process.env.NODE_ENV === 'production'
-      ? this.productionCrossProviderURL('CONTROL_API_INTERNAL_URL', true).canonical
-      : rawBase.replace(/\/+$/u, '');
+    const base = this.controlPlaneBaseURL();
     return base ? `${base}/api/v1/internal/gateway-nodes/${encodeURIComponent(this.identity.nodeId)}/runtime` : '';
   }
 
@@ -268,6 +333,12 @@ export class RuntimeRegistrationService implements OnModuleInit, OnModuleDestroy
       resourceHealth,
       observedAt: new Date().toISOString()
     };
+  }
+}
+
+export class SessionHeartbeatControlError extends Error {
+  constructor(readonly status: number, readonly code: string, detail: string) {
+    super(`sender-session heartbeat rejected by control plane (HTTP ${status}${code ? ` ${code}` : ''})${detail ? `: ${detail.slice(0, 300)}` : ''}`);
   }
 }
 

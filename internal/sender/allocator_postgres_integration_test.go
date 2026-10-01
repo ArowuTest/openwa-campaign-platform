@@ -81,11 +81,39 @@ func TestPostgreSQLAllocatorExcludesStaleHeartbeatAndExpiredLease(t *testing.T) 
 		t.Fatal(err)
 	}
 
+	if _, err := db.ExecContext(ctx, `UPDATE sender_nodes SET boot_id='allocator-live-lease' WHERE id=$1::uuid`, nodeID); err != nil {
+		t.Fatal(err)
+	}
 	allocator := &PostgreSQLAllocator{DB: db, HeartbeatTTL: 90 * time.Second}
 	route := AllocationRoute{LegacyPool: "allocator-evidence"}
 	assigned, err := allocator.Assign(ctx, recipientID, route, now)
 	if err != nil || assigned != sessionID {
 		t.Fatalf("fresh worker was not allocatable: assigned=%q err=%v", assigned, err)
+	}
+
+	for _, boot := range []string{"replacement-runtime", ""} {
+		t.Run("current_boot_binding_"+boot, func(t *testing.T) {
+			if _, err := db.ExecContext(ctx, `UPDATE sender_nodes SET boot_id=$2 WHERE id=$1::uuid`, nodeID, boot); err != nil {
+				t.Fatal(err)
+			}
+			// Exercise both an existing assignment and fresh candidate selection.
+			for _, existing := range []bool{true, false} {
+				var assignedValue any
+				if existing {
+					assignedValue = sessionID
+				}
+				if _, err := db.ExecContext(ctx, `UPDATE campaign_recipients SET assigned_session_id=$2::uuid WHERE id=$1::uuid`, recipientID, assignedValue); err != nil {
+					t.Fatal(err)
+				}
+				if got, err := allocator.Assign(ctx, recipientID, route, now); !errors.Is(err, ErrNoHealthySession) {
+					t.Errorf("old-boot lease remained eligible: existing=%v assigned=%q err=%v", existing, got, err)
+				}
+			}
+		})
+	}
+	// Restore the original, matching fixture for the independent liveness cases.
+	if _, err := db.ExecContext(ctx, `UPDATE sender_nodes SET boot_id='allocator-live-lease' WHERE id=$1::uuid`, nodeID); err != nil {
+		t.Fatal(err)
 	}
 
 	if _, err := db.ExecContext(ctx, `UPDATE campaign_recipients SET assigned_session_id=NULL WHERE id=$1::uuid`, recipientID); err != nil {

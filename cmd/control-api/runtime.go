@@ -22,6 +22,7 @@ import (
 	"campaign-platform/internal/consent"
 	"campaign-platform/internal/delivery"
 	"campaign-platform/internal/execution"
+	"campaign-platform/internal/gateway"
 	"campaign-platform/internal/geography"
 	"campaign-platform/internal/identity"
 	"campaign-platform/internal/inbound"
@@ -129,6 +130,8 @@ func buildMemoryRuntime(cfg config.Config, protector *sharedcrypto.MSISDNProtect
 		return nil, fmt.Errorf("bootstrap provider capabilities: %w", err)
 	}
 	senderStore := sender.NewMemoryGovernanceStore()
+	senderStore.HeartbeatTTL = cfg.SenderHeartbeatTTL
+	senderStore.Leases = gateway.NewMemoryLeaseStore()
 	proxyKeys, err := buildSenderProxyKeyring(cfg, false)
 	if err != nil {
 		return nil, fmt.Errorf("initialise sender proxy protection: %w", err)
@@ -158,7 +161,7 @@ func buildMemoryRuntime(cfg config.Config, protector *sharedcrypto.MSISDNProtect
 	materialisationService := &materialisation.MaterialisationService{Repository: materialisation.NewMemoryMaterialisationRepository()}
 	metrics := delivery.NewMetricsService(delivery.NewMemoryMetricsRepository())
 	senderGovernance := &sender.GovernanceService{Store: senderStore, HealthPolicies: &sender.PlatformHealthPolicyResolver{Configurations: configurations}, RequireCanonicalRuntimeURL: cfg.Environment == "staging" || cfg.Environment == "production", RuntimeAllowedInternalHosts: cfg.GatewayRuntimeAllowedHosts, RuntimeForbiddenHosts: []string{cfg.ControlAPIHostname()}}
-	senderSessionHeartbeat := &sender.SessionHeartbeatService{Governance: senderGovernance, Runtime: gatewayRuntime}
+	senderSessionHeartbeat := &sender.SessionHeartbeatService{Governance: senderGovernance, Runtime: gatewayRuntime, Leases: senderStore.Leases, LeaseTTL: cfg.SenderHeartbeatTTL}
 	senderLifecycle := &sender.SessionLifecycleService{Governance: senderGovernance, Gateway: &sender.HTTPSessionGateway{CommandSecret: cfg.GatewayCommandSecret}, Proxies: senderProxies, ActiveWork: sender.StaticActiveSessionWorkChecker(false), TransportRuntime: &sender.PlatformTransportRuntimeResolver{Configurations: configurations}, Maintenance: maintenance}
 	pacingPolicies := &sender.PacingAdministration{Store: sender.NewMemoryPacingStore()}
 	executionStore := execution.NewMemoryStore()
@@ -284,7 +287,7 @@ func buildPostgreSQLRuntime(ctx context.Context, cfg config.Config, protector *s
 	}
 	optOutProcessor := &consent.OptOutProcessor{Deliveries: deliveryEvents, Ledger: consentLedger, Policies: optOutPolicies, ActorID: consent.DefaultGatewayServiceActorID, Inbox: inboundReplies, Protector: protector, Senders: &postgresrepo.InboundSenderResolver{DB: db}}
 	providerCapabilities := &provider.Service{Store: &provider.PostgreSQLStore{DB: db}}
-	senderStore := &sender.PostgreSQLGovernanceStore{DB: db}
+	senderStore := &sender.PostgreSQLGovernanceStore{DB: db, HeartbeatTTL: cfg.SenderHeartbeatTTL}
 	proxyKeys, err := buildSenderProxyKeyring(cfg, true)
 	if err != nil {
 		return fail(fmt.Errorf("initialise sender proxy protection: %w", err))
@@ -311,7 +314,7 @@ func buildPostgreSQLRuntime(ctx context.Context, cfg config.Config, protector *s
 	materialisationService := &materialisation.MaterialisationService{Repository: &materialisation.PostgreSQLRepository{DB: db}}
 	metrics := delivery.NewMetricsService(&delivery.PostgreSQLMetricsRepository{DB: db})
 	senderGovernance := &sender.GovernanceService{Store: senderStore, HealthPolicies: &sender.PlatformHealthPolicyResolver{Configurations: configurations}, HealthSignals: &sender.PostgreSQLHealthSignalSource{DB: db}, RequireCanonicalRuntimeURL: cfg.Environment == "staging" || cfg.Environment == "production", RuntimeAllowedInternalHosts: cfg.GatewayRuntimeAllowedHosts, RuntimeForbiddenHosts: []string{cfg.ControlAPIHostname()}}
-	senderSessionHeartbeat := &sender.SessionHeartbeatService{Governance: senderGovernance, Runtime: gatewayRuntime}
+	senderSessionHeartbeat := &sender.SessionHeartbeatService{Governance: senderGovernance, Runtime: gatewayRuntime, Leases: &gateway.PostgreSQLLeaseStore{DB: db}, LeaseTTL: cfg.SenderHeartbeatTTL}
 	senderLifecycle := &sender.SessionLifecycleService{Governance: senderGovernance, Gateway: &sender.HTTPSessionGateway{CommandSecret: cfg.GatewayCommandSecret}, Proxies: senderProxies, ActiveWork: sender.PostgreSQLActiveSessionWorkChecker{DB: db}, TransportRuntime: &sender.PlatformTransportRuntimeResolver{Configurations: configurations}, Maintenance: maintenance}
 	pacingPolicies := &sender.PacingAdministration{Store: &postgresrepo.PacingPolicyRepository{DB: db}}
 	executionStore := &execution.PostgreSQLStore{DB: db}

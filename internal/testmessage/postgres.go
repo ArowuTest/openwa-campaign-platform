@@ -353,6 +353,8 @@ FROM campaigns c
 JOIN sender_sessions s ON s.id=$1::uuid
 JOIN sender_nodes sn ON sn.id=s.node_id
 JOIN sender_session_leases sl ON sl.session_id=s.id AND sl.worker_node_id=sn.id
+ AND coalesce(sn.boot_id,'')<>''
+ AND sl.lease_token_hash=sha256(convert_to(sn.boot_id,'UTF8'))
 JOIN gateway_pools g ON g.id=s.gateway_pool_id
 LEFT JOIN sender_pools sp ON sp.id=s.sender_pool_id
 LEFT JOIN LATERAL (

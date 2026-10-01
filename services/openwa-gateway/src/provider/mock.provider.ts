@@ -21,4 +21,6 @@ export class MockMessagingProvider implements MessagingProvider {
   async deleteSession(_sessionId: string): Promise<void> {}
   async qr(sessionId: string): Promise<unknown> { return { sessionId, qrCode: 'mock', status: 'qr_ready' }; }
   async pairingCode(sessionId: string, _phoneNumber: string): Promise<unknown> { return { sessionId, pairingCode: 'MOCK1234', status: 'authenticating' }; }
+  async listSessions(): Promise<SessionRecord[]> { return []; }
+  synchronizeSentToday(_sessionId: string, _sentToday: number): void {}
 }

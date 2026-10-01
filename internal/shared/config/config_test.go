@@ -125,7 +125,7 @@ func setDevelopmentEnvironment(t *testing.T) {
 		"BOOTSTRAP_ADMIN_TOTP_SECRET": "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ", "SECURE_COOKIES": "false",
 		"SESSION_IDLE_TIMEOUT": "30m", "SESSION_ABSOLUTE_TIMEOUT": "12h",
 		"MSISDN_ENCRYPTION_KEY_BASE64": "", "MSISDN_LOOKUP_KEY_BASE64": "", "IDENTITY_SECRET_KEY_BASE64": "", "INBOUND_CONTENT_KEY_BASE64": "", "INBOUND_CONTENT_KEYS_JSON": "", "INBOUND_CONTENT_ACTIVE_KEY_VERSION": "v1", "PRIVACY_EVIDENCE_KEY_BASE64": "", "PRIVACY_EVIDENCE_KEYS_JSON": "", "PRIVACY_EVIDENCE_ACTIVE_KEY_VERSION": "v1", "SENDER_PROXY_KEYS_JSON": "", "SENDER_PROXY_ACTIVE_KEY_VERSION": "v1", "INBOUND_CONTENT_RETENTION_DAYS": "90",
-		"GATEWAY_CALLBACK_SECRET": "development-gateway-callback-secret-change-me", "GATEWAY_COMMAND_SECRET": "development-gateway-command-secret-change-me", "GATEWAY_RUNTIME_SECRET": "development-gateway-runtime-secret-change-me", "GATEWAY_CALLBACK_MAX_SKEW": "5m", "MEDIA_DOWNLOAD_SECRET": "development-media-download-secret-change-me",
+		"GATEWAY_CALLBACK_SECRET": "development-gateway-callback-secret-change-me", "GATEWAY_COMMAND_SECRET": "development-gateway-command-secret-change-me", "GATEWAY_RUNTIME_SECRET": "development-gateway-runtime-secret-change-me", "SENDER_HEARTBEAT_TTL": "90s", "GATEWAY_CALLBACK_MAX_SKEW": "5m", "MEDIA_DOWNLOAD_SECRET": "development-media-download-secret-change-me",
 		"OBJECT_STORE_ROOT": t.TempDir(), "MAX_IMPORT_FILE_BYTES": "536870912", "CLAMAV_ADDRESS": "",
 		"CLAMAV_DIAL_TIMEOUT": "5s", "CLAMAV_SCAN_TIMEOUT": "2m",
 		"ALLOWED_NETWORK_CIDRS": "10.0.0.0/8", "TRUSTED_PROXY_CIDRS": "10.0.0.0/8",
@@ -148,7 +148,7 @@ func setProductionEnvironment(t *testing.T) {
 		"MSISDN_ENCRYPTION_KEY_BASE64": key, "MSISDN_LOOKUP_KEY_BASE64": lookup, "IDENTITY_SECRET_KEY_BASE64": key, "INBOUND_CONTENT_KEY_BASE64": key, "INBOUND_CONTENT_KEYS_JSON": "", "INBOUND_CONTENT_ACTIVE_KEY_VERSION": "v1", "PRIVACY_EVIDENCE_KEY_BASE64": key, "PRIVACY_EVIDENCE_KEYS_JSON": "", "PRIVACY_EVIDENCE_ACTIVE_KEY_VERSION": "v1", "SENDER_PROXY_KEYS_JSON": `{"v1":"` + key + `"}`, "SENDER_PROXY_ACTIVE_KEY_VERSION": "v1", "INBOUND_CONTENT_RETENTION_DAYS": "90",
 		"GATEWAY_RUNTIME_ALLOWED_HOSTS": "gateway.private.example",
 		"CONTROL_API_INTERNAL_URL":      "https://control.internal.example",
-		"GATEWAY_CALLBACK_SECRET":       "c7c4d58cba7d4f03a2234cc45891d7f89c8247b4c80a4d01", "GATEWAY_COMMAND_SECRET": "f915536086184fa1b103e78b01abc0045cd1ed2c6cb442c0", "GATEWAY_RUNTIME_SECRET": "2de703d848e949c4a636050ec61f6441cfd0bf2ef1b443d9", "GATEWAY_CALLBACK_MAX_SKEW": "5m", "MEDIA_DOWNLOAD_SECRET": "9919af30f33e43db82bdc17c7e8323d1f5e6627f4eb44554",
+		"GATEWAY_CALLBACK_SECRET":       "c7c4d58cba7d4f03a2234cc45891d7f89c8247b4c80a4d01", "GATEWAY_COMMAND_SECRET": "f915536086184fa1b103e78b01abc0045cd1ed2c6cb442c0", "GATEWAY_RUNTIME_SECRET": "2de703d848e949c4a636050ec61f6441cfd0bf2ef1b443d9", "SENDER_HEARTBEAT_TTL": "90s", "GATEWAY_CALLBACK_MAX_SKEW": "5m", "MEDIA_DOWNLOAD_SECRET": "9919af30f33e43db82bdc17c7e8323d1f5e6627f4eb44554",
 		"OBJECT_STORE_ROOT": t.TempDir(), "MAX_IMPORT_FILE_BYTES": "536870912", "CLAMAV_ADDRESS": "clamav:3310",
 		"CLAMAV_DIAL_TIMEOUT": "5s", "CLAMAV_SCAN_TIMEOUT": "2m",
 		"ALLOWED_NETWORK_CIDRS": "10.0.0.0/8", "TRUSTED_PROXY_CIDRS": "10.0.0.0/8",
@@ -384,5 +384,36 @@ func TestLoadGatewayRuntimeHostsRejectIPAndLegacyNumericLiterals(t *testing.T) {
 		if _, err := Load(); err == nil {
 			t.Fatalf("IP-like governed gateway host accepted: %s", host)
 		}
+	}
+}
+
+func TestLoadSenderHeartbeatTTLIsSharedAndBounded(t *testing.T) {
+	setDevelopmentEnvironment(t)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SenderHeartbeatTTL != 90*time.Second {
+		t.Fatalf("unexpected sender heartbeat TTL default: %s", cfg.SenderHeartbeatTTL)
+	}
+
+	setDevelopmentEnvironment(t)
+	t.Setenv("SENDER_HEARTBEAT_TTL", "2m")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("valid sender heartbeat TTL rejected: %v", err)
+	}
+	if cfg.SenderHeartbeatTTL != 2*time.Minute {
+		t.Fatalf("unexpected sender heartbeat TTL override: %s", cfg.SenderHeartbeatTTL)
+	}
+
+	for _, value := range []string{"9s", "11m"} {
+		t.Run(value, func(t *testing.T) {
+			setDevelopmentEnvironment(t)
+			t.Setenv("SENDER_HEARTBEAT_TTL", value)
+			if _, err := Load(); err == nil || !strings.Contains(err.Error(), "SENDER_HEARTBEAT_TTL") {
+				t.Fatalf("unsafe sender heartbeat TTL %q accepted: %v", value, err)
+			}
+		})
 	}
 }

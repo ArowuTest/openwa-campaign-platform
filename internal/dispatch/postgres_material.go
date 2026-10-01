@@ -316,6 +316,8 @@ LEFT JOIN campaign_routing_plan_pools rp
 JOIN sender_sessions ss ON ss.id=$1::uuid
 JOIN sender_nodes sn ON sn.id=ss.node_id
 JOIN sender_session_leases sl ON sl.session_id=ss.id AND sl.worker_node_id=ss.node_id
+ AND coalesce(sn.boot_id,'')<>''
+ AND sl.lease_token_hash=sha256(convert_to(sn.boot_id,'UTF8'))
 JOIN gateway_pools gp ON gp.id=ss.gateway_pool_id
 LEFT JOIN provider_capability_definitions pd ON pd.id=(CASE WHEN sh.routing_plan_id IS NULL THEN cp.provider_capability_definition_id ELSE rp.provider_capability_definition_id END)
 WHERE cr.id=$2::uuid`

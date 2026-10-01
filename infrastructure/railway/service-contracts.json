@@ -26,7 +26,8 @@
         "CLAMAV_ADDRESS",
         "MEDIA_DOWNLOAD_BASE_URL",
         "GATEWAY_RUNTIME_ALLOWED_HOSTS",
-        "CONTROL_API_INTERNAL_URL"
+        "CONTROL_API_INTERNAL_URL",
+        "SENDER_HEARTBEAT_TTL"
       ],
       "tls_required": true
     },
@@ -56,7 +57,8 @@
         "media-download"
       ],
       "required_environment": [
-        "MEDIA_DOWNLOAD_BASE_URL"
+        "MEDIA_DOWNLOAD_BASE_URL",
+        "SENDER_HEARTBEAT_TTL"
       ]
     },
     "export-worker": {

@@ -49,11 +49,20 @@ function rewriteSource(relative, text) {
       "  reconnectMode?: 'UNBOUNDED' | 'DISABLED' | 'BOUNDED';\n" +
       "  reconnectMaxAttempts?: number;\n" +
       "  reconnectBaseDelayMs?: number;\n" +
-      "  reconnectStabilityResetMs?: number;\n",
+      "  reconnectStabilityResetMs?: number;\n" +
+      "  assertSessionOwnership?: () => void;\n",
     );
   }
   if (relative === 'engine/adapters/baileys-lifecycle.ts') {
     text = rewriteBaileysRecoveryPolicy(text);
+    const entries = [
+      ['  private async connectInner(): Promise<void> {', '  private async connectInner(): Promise<void> {\n    this.host.config.assertSessionOwnership?.();'],
+      ['    const sock = b.default({', '    this.host.config.assertSessionOwnership?.();\n    const sock = b.default({'],
+    ];
+    for (const [before, after] of entries) {
+      if (text.split(before).length !== 2) throw new Error('Retained Baileys ownership guard anchor changed');
+      text = text.replace(before, after);
+    }
   }
   return text;
 }

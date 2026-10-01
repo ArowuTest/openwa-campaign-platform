@@ -32,7 +32,7 @@ export type SendResult = {
 
 export type SessionHealth = {
   ready: boolean;
-  status: 'READY' | 'PAIRING' | 'DISCONNECTED' | 'PAUSED' | 'RESTRICTED' | 'UNKNOWN';
+  status: 'READY' | 'PAIRING' | 'DRAINING' | 'DISCONNECTED' | 'PAUSED' | 'RESTRICTED' | 'UNKNOWN';
   checkedAt: string;
   detail?: string;
   runtimeConfiguration?: SessionTransportRuntimeConfiguration;
@@ -67,6 +67,7 @@ export type SessionRecord = {
   id?: string;
   name?: string;
   status?: string;
+  sentToday?: number;
   phone?: string | null;
   pushName?: string | null;
   connectedAt?: string | null;
@@ -88,4 +89,6 @@ export interface MessagingProvider {
   deleteSession?(sessionId: string): Promise<void>;
   qr?(sessionId: string): Promise<unknown>;
   pairingCode?(sessionId: string, phoneNumber: string): Promise<unknown>;
+  listSessions?(): Promise<SessionRecord[]>;
+  synchronizeSentToday?(sessionId: string, sentToday: number): void;
 }

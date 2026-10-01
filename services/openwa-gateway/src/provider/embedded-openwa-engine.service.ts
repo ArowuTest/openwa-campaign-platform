@@ -12,6 +12,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, readdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { GatewayIdentityService } from '../gateway-identity.service';
+import { RuntimeRegistrationService } from '../runtime-registration.service';
 import { InboundMessagePublisherService } from '../inbound-message-publisher.service';
 import { GatewayObservabilityService } from '../observability.service';
 import { ProviderEventPublisherService } from '../provider-event-publisher.service';
@@ -43,10 +44,13 @@ type RuntimeSession = {
   connectedAt?: string | null;
   updatedAt: string;
   lastError?: string | null;
+  sentToday: number;
+  sentTodayDate: string;
   reconnectAttempts: number;
   reconnectLastAttemptAt?: number;
   stuckAuthRecoveryUsed: boolean;
   reconnectTimer?: NodeJS.Timeout;
+  ownershipRetirementPending?: boolean;
 };
 
 class BoundedLidMappingStore implements LidMappingStore {
@@ -95,6 +99,7 @@ export class EmbeddedOpenWAEngineService implements OnModuleInit, OnModuleDestro
   private readonly outboundReferences = new Map<string, string>();
   private readonly livenessFailures = new Map<string, number>();
   private watchdogTimer?: NodeJS.Timeout;
+  private removeOwnershipListener?: () => void;
   private watchdogRunning = false;
   private readonly lidMappings = new BoundedLidMappingStore(
     boundedInteger(process.env.OPENWA_LID_CACHE_MAX, 5000, 100, 100_000),
@@ -112,11 +117,13 @@ export class EmbeddedOpenWAEngineService implements OnModuleInit, OnModuleDestro
     private readonly publisher: ProviderEventPublisherService,
     private readonly inbound: InboundMessagePublisherService,
     private readonly observability: GatewayObservabilityService,
+    private readonly runtimeRegistration: RuntimeRegistrationService,
   ) {
     this.deploymentRuntime = deploymentTransportRuntimeConfiguration(this.identity.engine);
   }
 
   async onModuleInit(): Promise<void> {
+    this.removeOwnershipListener = this.runtimeRegistration.onSessionOwnershipLost(id => this.retireUnownedSession(id));
     await mkdir(this.registryDirectory, { recursive: true, mode: 0o700 });
     await mkdir(join(this.authDirectory, 'whatsapp-web-js'), { recursive: true, mode: 0o700 });
     await mkdir(join(this.authDirectory, 'baileys'), { recursive: true, mode: 0o700 });
@@ -131,6 +138,8 @@ export class EmbeddedOpenWAEngineService implements OnModuleInit, OnModuleDestro
         generation: 0,
         status: EngineStatus.DISCONNECTED,
         updatedAt: new Date().toISOString(),
+        sentToday: 0,
+        sentTodayDate: utcDateKey(new Date()),
         reconnectAttempts: 0,
         stuckAuthRecoveryUsed: false,
       });
@@ -140,6 +149,8 @@ export class EmbeddedOpenWAEngineService implements OnModuleInit, OnModuleDestro
   }
 
   async onModuleDestroy(): Promise<void> {
+    this.removeOwnershipListener?.();
+    this.removeOwnershipListener = undefined;
     if (this.watchdogTimer) clearInterval(this.watchdogTimer);
     this.watchdogTimer = undefined;
     this.livenessFailures.clear();
@@ -168,6 +179,8 @@ export class EmbeddedOpenWAEngineService implements OnModuleInit, OnModuleDestro
       generation: 0,
       status: EngineStatus.DISCONNECTED,
       updatedAt: persistent.createdAt,
+      sentToday: 0,
+      sentTodayDate: utcDateKey(new Date()),
       reconnectAttempts: 0,
       stuckAuthRecoveryUsed: false,
     };
@@ -180,12 +193,36 @@ export class EmbeddedOpenWAEngineService implements OnModuleInit, OnModuleDestro
     return this.record(this.requireSession(sessionId));
   }
 
+  async listSessions(): Promise<SessionRecord[]> {
+    return [...this.sessions.values()].map(state => this.record(state)).sort((left, right) => String(left.id ?? '').localeCompare(String(right.id ?? '')));
+  }
+
+  synchronizeSentToday(sessionId: string, sentToday: number): void {
+    if (!Number.isSafeInteger(sentToday) || sentToday < 0) throw new TypeError('sentToday must be a non-negative safe integer');
+    const state = this.requireSession(sessionId);
+    const today = utcDateKey(new Date());
+    if (state.sentTodayDate !== today) {
+      state.sentTodayDate = today;
+      state.sentToday = sentToday;
+      return;
+    }
+    state.sentToday = Math.max(state.sentToday, sentToday);
+  }
+
   async health(sessionId: string): Promise<SessionHealth> {
     const state = this.requireSession(sessionId);
+    // Losing a lease is not a provider restriction. Keep the session non-sending
+    // while teardown is pending without persisting sticky RESTRICTED telemetry.
+    if (state.ownershipRetirementPending) {
+      return { ready: false, status: 'DRAINING', checkedAt: new Date().toISOString(),
+        detail: state.lastError ? safeError(state.lastError) : undefined,
+        runtimeConfiguration: { ...this.runtimePolicy(state) } };
+    }
     const status = state.engine?.getStatus() ?? state.status;
     return { ...mapHealth(status, state.lastError), runtimeConfiguration: { ...this.runtimePolicy(state) } };
   }
   async startSession(sessionId: string, options?: SessionStartOptions): Promise<SessionRecord> {
+    this.runtimeRegistration.assertSessionOwned(sessionId);
     return this.withTransition(sessionId, async () => {
       await this.assertNoPendingTeardown(sessionId);
       const state = this.requireSession(sessionId);
@@ -309,11 +346,13 @@ export class EmbeddedOpenWAEngineService implements OnModuleInit, OnModuleDestro
   async pairingCode(sessionId: string, phoneNumber: string): Promise<{ sessionId: string; pairingCode: string }> {
     const state = this.requireSession(sessionId);
     if (!state.engine) throw new BadRequestException('session is not started');
+    this.runtimeRegistration.assertSessionOwned(sessionId);
     const pairingCode = await state.engine.requestPairingCode(phoneNumber);
     return { sessionId, pairingCode };
   }
 
   async send(request: SendRequest): Promise<SendResult> {
+    this.runtimeRegistration.assertSessionOwned(request.sessionId, request.sessionLeaseVersion);
     const state = this.requireSession(request.sessionId);
     const engine = state.engine;
     if (!engine || engine.getStatus() !== EngineStatus.READY) {
@@ -328,6 +367,7 @@ export class EmbeddedOpenWAEngineService implements OnModuleInit, OnModuleDestro
       throw new ServiceUnavailableException('OpenWA engine returned no provider message identifier');
     }
     const acceptedAt = timestampToISO(result.timestamp);
+    this.recordAcceptedSend(state, acceptedAt);
     if (request.clientReference) this.rememberOutboundReference(result.id, request.clientReference);
     await this.queueProviderEvent(request.sessionId, result.id, 'sent', request.clientReference, acceptedAt);
     return { accepted: true, providerMessageId: result.id, acceptedAt };
@@ -350,6 +390,7 @@ export class EmbeddedOpenWAEngineService implements OnModuleInit, OnModuleDestro
   }
 
   private async initializeEngine(state: RuntimeSession, reconnect = false): Promise<void> {
+    this.runtimeRegistration.assertSessionOwned(state.persistent.id);
     const generation = state.generation + 1;
     state.generation = generation;
     state.status = EngineStatus.INITIALIZING;
@@ -360,6 +401,7 @@ export class EmbeddedOpenWAEngineService implements OnModuleInit, OnModuleDestro
     state.engine = engine;
     try {
       await engine.initialize(this.callbacks(state.persistent.id, generation, engine));
+      this.runtimeRegistration.assertSessionOwned(state.persistent.id);
       if (this.isCurrent(state.persistent.id, generation, engine)) {
         state.status = engine.getStatus();
         state.phone = engine.getPhoneNumber();
@@ -395,6 +437,7 @@ export class EmbeddedOpenWAEngineService implements OnModuleInit, OnModuleDestro
       return new BaileysAdapter({
         sessionId: session.name,
         dbSessionId: session.id,
+        assertSessionOwnership: () => this.runtimeRegistration.assertSessionOwned(session.id),
         authDir: join(this.authDirectory, 'baileys'),
         proxyUrl: proxy?.url,
         proxyType: proxy?.type,
@@ -748,6 +791,39 @@ export class EmbeddedOpenWAEngineService implements OnModuleInit, OnModuleDestro
     return Boolean(state && state.generation === generation && state.engine === engine);
   }
 
+  private retireUnownedSession(sessionId: string): void {
+    const state = this.sessions.get(sessionId);
+    // Repeated loss notifications must not invalidate an outstanding teardown
+    // or report DISCONNECTED before that same engine actually retires.
+    if (!state || state.ownershipRetirementPending) return;
+    this.cancelReconnect(state);
+    const engine = this.detachEngine(state);
+    state.status = EngineStatus.ACTION_REQUIRED;
+    state.lastError = 'Current process session ownership expired or was rejected';
+    state.updatedAt = new Date().toISOString();
+    if (!engine) { state.status = EngineStatus.DISCONNECTED; return; }
+    state.ownershipRetirementPending = true;
+    // Detach synchronously before asynchronous teardown: callbacks and reconnects
+    // from this retired instance cannot restore READY. Do not remove credentials.
+    const cleanup = Promise.resolve().then(() => engine.forceDestroy()).then(() => {
+      // The pending flag has a single owner: this teardown. A concurrent stop
+      // can advance callback generation, but cannot make this cleanup obsolete.
+      state.ownershipRetirementPending = false;
+      if (!state.engine) {
+        state.status = EngineStatus.DISCONNECTED;
+        state.updatedAt = new Date().toISOString();
+      }
+    }).catch(error => {
+      state.ownershipRetirementPending = false;
+      if (!state.engine) {
+        state.status = EngineStatus.ACTION_REQUIRED;
+        state.lastError = safeError(error);
+        // A manual stop cannot turn a genuine teardown failure into success.
+      }
+    });
+    this.trackTeardown(sessionId, cleanup);
+  }
+
   private cancelReconnect(state: RuntimeSession): void {
     if (state.reconnectTimer) clearTimeout(state.reconnectTimer);
     state.reconnectTimer = undefined;
@@ -811,11 +887,31 @@ export class EmbeddedOpenWAEngineService implements OnModuleInit, OnModuleDestro
     return state.runtime ?? this.deploymentRuntime;
   }
 
+  private recordAcceptedSend(state: RuntimeSession, acceptedAt: string): void {
+    const date = utcDateKey(new Date(acceptedAt));
+    // Late provider evidence retains its event timestamp, but cannot roll the
+    // active usage counter backwards and erase newer-day accepted sends.
+    if (date < state.sentTodayDate) return;
+    if (state.sentTodayDate !== date) {
+      state.sentTodayDate = date;
+      state.sentToday = 0;
+    }
+    state.sentToday += 1;
+  }
+
   private record(state: RuntimeSession): SessionRecord {
+    // An idle session still crosses UTC midnight. Reset before publishing usage,
+    // otherwise the control plane would seed the new day with yesterday's count.
+    const today = utcDateKey(new Date());
+    if (state.sentTodayDate !== today) {
+      state.sentTodayDate = today;
+      state.sentToday = 0;
+    }
     return {
       id: state.persistent.id,
       name: state.persistent.name,
       status: state.status,
+      sentToday: state.sentToday,
       phone: state.phone ?? null,
       pushName: state.pushName ?? null,
       connectedAt: state.connectedAt ?? null,
@@ -1000,6 +1096,11 @@ function toChatId(e164: string): string {
 function timestampToISO(value: number | undefined): string {
   if (typeof value === 'number' && Number.isFinite(value) && value > 0) return new Date(value * 1000).toISOString();
   return new Date().toISOString();
+}
+
+function utcDateKey(value: Date): string {
+  if (Number.isNaN(value.getTime())) throw new TypeError('heartbeat usage timestamp is invalid');
+  return value.toISOString().slice(0, 10);
 }
 
 function safeFilename(value: string | undefined): string {

@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 const assert = require('node:assert/strict');
+// This suite isolates other behavior; real boot ownership is covered separately.
+const ownedRuntime = { assertSessionOwned() {}, onSessionOwnershipLost() { return () => {}; } };
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
@@ -134,7 +136,7 @@ async function testLifecycleAndEvents() {
   const inbound = { queue: async event => { inboundEvents.push(event); } };
   const observability = { increment() {}, gauge() {}, observe() {} };
   const { EmbeddedOpenWAEngineService } = serviceModule();
-  const service = new EmbeddedOpenWAEngineService(identity, publisher, inbound, observability);
+  const service = new EmbeddedOpenWAEngineService(identity, publisher, inbound, observability, ownedRuntime);
   await service.onModuleInit();
 
   const created = await service.createSession('session-1');
@@ -219,7 +221,7 @@ async function testLifecycleAndEvents() {
   assert.equal((await service.health('session-3')).runtimeConfiguration?.source, 'DEPLOYMENT_BOOTSTRAP', 'logout must clear governed recovery authority before a later start');
   await service.deleteSession('session-3');
 
-  const serviceAfterRestart = new EmbeddedOpenWAEngineService(identity, publisher, inbound, observability);
+  const serviceAfterRestart = new EmbeddedOpenWAEngineService(identity, publisher, inbound, observability, ownedRuntime);
   await serviceAfterRestart.onModuleInit();
   const reloaded = await serviceAfterRestart.getSession('session-1');
   assert.equal(reloaded.status, 'disconnected');
@@ -251,7 +253,7 @@ async function testExplicitRestartUsesCurrentProxyConfiguration() {
   const inbound = { queue: async () => {} };
   const observability = { increment() {}, gauge() {}, observe() {} };
   const { EmbeddedOpenWAEngineService } = serviceModule();
-  const service = new EmbeddedOpenWAEngineService(identity, publisher, inbound, observability);
+  const service = new EmbeddedOpenWAEngineService(identity, publisher, inbound, observability, ownedRuntime);
   await service.onModuleInit();
   await service.createSession('proxy-reset-session');
   await service.startSession('proxy-reset-session', { proxy: { url: 'socks5://proxy.example:1080', type: 'socks5' } });
@@ -281,7 +283,7 @@ async function testEngineSpecificDeploymentRecoveryDefaults() {
   const observability = { increment() {}, gauge() {}, observe() {} };
   const { EmbeddedOpenWAEngineService } = serviceModule();
 
-  const baileys = new EmbeddedOpenWAEngineService({ engine: 'BAILEYS', gatewayPoolId: 'gateway-1' }, publisher, inbound, observability);
+  const baileys = new EmbeddedOpenWAEngineService({ engine: 'BAILEYS', gatewayPoolId: 'gateway-1' }, publisher, inbound, observability, ownedRuntime);
   await baileys.onModuleInit();
   await baileys.createSession('baileys-defaults');
   await baileys.startSession('baileys-defaults');
@@ -291,7 +293,7 @@ async function testEngineSpecificDeploymentRecoveryDefaults() {
   await baileys.deleteSession('baileys-defaults');
   await baileys.onModuleDestroy();
 
-  const wwjs = new EmbeddedOpenWAEngineService({ engine: 'WHATSAPP_WEB_JS', gatewayPoolId: 'gateway-1' }, publisher, inbound, observability);
+  const wwjs = new EmbeddedOpenWAEngineService({ engine: 'WHATSAPP_WEB_JS', gatewayPoolId: 'gateway-1' }, publisher, inbound, observability, ownedRuntime);
   await wwjs.onModuleInit();
   await wwjs.createSession('wwjs-defaults');
   await wwjs.startSession('wwjs-defaults');
@@ -314,7 +316,7 @@ async function testWatchdogRecoversSilentDeadReadySession() {
   const inbound = { queue: async () => {} };
   const observability = { increment() {}, gauge() {}, observe() {} };
   const { EmbeddedOpenWAEngineService } = serviceModule();
-  const service = new EmbeddedOpenWAEngineService(identity, publisher, inbound, observability);
+  const service = new EmbeddedOpenWAEngineService(identity, publisher, inbound, observability, ownedRuntime);
   await service.onModuleInit();
   await service.createSession('watchdog-session');
   const runtime = {
@@ -359,7 +361,137 @@ async function testProviderDelegatesWithoutFetch() {
   assert.deepEqual(calls.map(call => call[0]), ['health', 'createSession', 'startSession', 'stopSession', 'logoutSession', 'deleteSession']);
 }
 
+async function testBootOwnershipStopsActivationAndRetiresEngine() {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'embedded-openwa-owned-'));
+  const originalRegistry = process.env.OPENWA_SESSION_REGISTRY_DIR;
+  const originalAuth = process.env.OPENWA_SESSION_DATA_DIR;
+  process.env.OPENWA_SESSION_REGISTRY_DIR = path.join(root, 'registry');
+  process.env.OPENWA_SESSION_DATA_DIR = path.join(root, 'auth');
+  let owned = false;
+  let onLoss;
+  const ownership = {
+    assertSessionOwned() { if (!owned) throw new ServiceUnavailableException('current process does not own session'); },
+    onSessionOwnershipLost(listener) { onLoss = listener; return () => { onLoss = undefined; }; },
+  };
+  const { EmbeddedOpenWAEngineService } = serviceModule();
+  const service = new EmbeddedOpenWAEngineService({ engine: 'BAILEYS' }, { create: x => x, queue: async () => {} }, { queue: async () => {} }, { increment() {}, gauge() {}, observe() {} }, ownership);
+  try {
+    await service.onModuleInit();
+    await service.createSession('boot-owned');
+    const before = fakeEngines.length;
+    await assert.rejects(() => service.startSession('boot-owned'), /does not own/);
+    assert.equal(fakeEngines.length, before, 'unowned process instantiated a transport');
+    owned = true;
+    await service.startSession('boot-owned');
+    const engine = fakeEngines.at(-1);
+    assert.equal(typeof engine.config.assertSessionOwnership, 'function', 'retained reconnect did not receive the ownership guard');
+    engine.triggerReady();
+    assert.equal((await service.health('boot-owned')).ready, true);
+    const registryFiles = await fs.readdir(process.env.OPENWA_SESSION_REGISTRY_DIR);
+    const persisted = await fs.readFile(path.join(process.env.OPENWA_SESSION_REGISTRY_DIR, registryFiles[0]), 'utf8');
+    owned = false;
+    onLoss('boot-owned');
+    assert.equal(service.sessions.get('boot-owned').engine, undefined, 'ownership loss did not synchronously detach engine');
+    engine.triggerReady();
+    assert.equal((await service.health('boot-owned')).ready, false, 'retired callbacks resurrected READY');
+    await waitTurn();
+    assert.ok(engine.calls.includes('forceDestroy'), 'ownership loss did not tear down the old engine');
+    const afterLoss = fakeEngines.length;
+    await assert.rejects(() => service.startSession('boot-owned'), /does not own/);
+    assert.equal(fakeEngines.length, afterLoss, 'unowned manual restart instantiated another transport');
+    assert.equal(await fs.readFile(path.join(process.env.OPENWA_SESSION_REGISTRY_DIR, registryFiles[0]), 'utf8'), persisted, 'ownership loss deleted or rewrote session persistence');
+    assert.throws(() => engine.config.assertSessionOwnership(), /does not own/);
+    owned = true;
+    await service.startSession('boot-owned');
+    assert.equal(fakeEngines.length, afterLoss + 1, 'controlled recovery did not create a new engine');
+    console.log('Embedded boot ownership activation/retirement/recovery test passed.');
+  } finally {
+    await service.onModuleDestroy();
+    if (originalRegistry === undefined) delete process.env.OPENWA_SESSION_REGISTRY_DIR; else process.env.OPENWA_SESSION_REGISTRY_DIR = originalRegistry;
+    if (originalAuth === undefined) delete process.env.OPENWA_SESSION_DATA_DIR; else process.env.OPENWA_SESSION_DATA_DIR = originalAuth;
+    await fs.rm(root, { recursive: true, force: true });
+  }
+}
+
+async function testOwnershipRetirementPublishesRecoverableTelemetry() {
+  for (const engineName of ['BAILEYS', 'WHATSAPP_WEB_JS']) {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ownership-retirement-'));
+    const previousRegistry = process.env.OPENWA_SESSION_REGISTRY_DIR;
+    const previousAuth = process.env.OPENWA_SESSION_DATA_DIR;
+    process.env.OPENWA_SESSION_REGISTRY_DIR = path.join(root, 'registry');
+    process.env.OPENWA_SESSION_DATA_DIR = path.join(root, 'auth');
+    let owned = true;
+    let onLoss;
+    let finishRetirement;
+    const retiring = new Promise(resolve => { finishRetirement = resolve; });
+    const runtime = {
+      assertSessionOwned() { if (!owned) throw new ServiceUnavailableException('current process does not own session'); },
+      onSessionOwnershipLost(listener) { onLoss = listener; return () => { onLoss = undefined; }; },
+    };
+    const metrics = { increment() {}, gauge() {}, observe() {} };
+    const { EmbeddedOpenWAEngineService } = serviceModule();
+    const service = new EmbeddedOpenWAEngineService({ engine: engineName }, { create: x => x, queue: async () => {} }, { queue: async () => {} }, metrics, runtime);
+    const { SessionHeartbeatPublisherService } = loadModule('services/openwa-gateway/src/session-heartbeat-publisher.service.ts');
+    const reported = [];
+    const heartbeat = new SessionHeartbeatPublisherService(
+      { nodeId: 'retirement-node', adapterVersion: 'retirement-test' },
+      { listSessions: () => service.listSessions(), health: async id => ({ ...(await service.health(id)), pipeline: {} }), synchronizeSentToday: (id, count) => service.synchronizeSentToday(id, count) },
+      { isRuntimeRegistered: () => true, bootIdentity: () => 'retirement-boot', publishSessionHeartbeat: async (_id, report) => { reported.push(report.status); return { sentToday: report.sentToday }; } },
+      metrics,
+    );
+    try {
+      await service.onModuleInit();
+      await service.createSession('retiring-session');
+      await service.startSession('retiring-session');
+      const engine = fakeEngines.at(-1);
+      engine.triggerReady();
+      engine.forceDestroy = () => retiring;
+      owned = false;
+      onLoss('retiring-session');
+      await heartbeat.publishNow();
+      assert.deepEqual(reported, ['DRAINING'], `${engineName}: routine retirement must not publish sticky RESTRICTED`);
+      assert.equal((await service.health('retiring-session')).ready, false);
+      // A second loss may follow another heartbeat while teardown remains pending.
+      onLoss('retiring-session');
+      await heartbeat.publishNow();
+      assert.deepEqual(reported, ['DRAINING', 'DRAINING'], 'repeat loss cleared or promoted the pending retirement');
+      // An operator can also stop the already detached session. That must not
+      // orphan the original teardown completion or report recovery prematurely.
+      await service.stopSession('retiring-session');
+      await heartbeat.publishNow();
+      assert.equal(reported.at(-1), 'DRAINING', 'manual stop hid unfinished retirement');
+      finishRetirement();
+      await waitTurn();
+      await heartbeat.publishNow();
+      assert.equal(reported.at(-1), 'DISCONNECTED', 'completed teardown did not restore a non-sending recovery state');
+      owned = true;
+      await service.startSession('retiring-session');
+      const replacement = fakeEngines.at(-1);
+      assert.notEqual(replacement, engine, 'controlled start reused the retired engine');
+      replacement.triggerReady();
+      replacement.forceDestroy = async () => { throw new Error('teardown proof unavailable'); };
+      owned = false;
+      onLoss('retiring-session');
+      await waitTurn();
+      await heartbeat.publishNow();
+      assert.equal(reported.at(-1), 'RESTRICTED', 'genuine teardown failure must remain fail-closed');
+      assert.equal((await service.health('retiring-session')).ready, false);
+    } finally {
+      finishRetirement();
+      await waitTurn();
+      heartbeat.onModuleDestroy();
+      await service.onModuleDestroy();
+      if (previousRegistry === undefined) delete process.env.OPENWA_SESSION_REGISTRY_DIR; else process.env.OPENWA_SESSION_REGISTRY_DIR = previousRegistry;
+      if (previousAuth === undefined) delete process.env.OPENWA_SESSION_DATA_DIR; else process.env.OPENWA_SESSION_DATA_DIR = previousAuth;
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  }
+  console.log('Ownership retirement telemetry and failure policy tests passed for both engines.');
+}
+
 (async () => {
+  await testOwnershipRetirementPublishesRecoverableTelemetry();
+  await testBootOwnershipStopsActivationAndRetiresEngine();
   await testLifecycleAndEvents();
   await testExplicitRestartUsesCurrentProxyConfiguration();
   await testEngineSpecificDeploymentRecoveryDefaults();

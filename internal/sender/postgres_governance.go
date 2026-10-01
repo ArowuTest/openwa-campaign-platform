@@ -5,14 +5,16 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
 	"campaign-platform/internal/shared/id"
 )
 
-type PostgreSQLGovernanceStore struct{ DB *sql.DB }
+type PostgreSQLGovernanceStore struct {
+	DB           *sql.DB
+	HeartbeatTTL time.Duration
+}
 
 func canonicalUUIDText(value string) bool {
 	value = strings.TrimSpace(value)
@@ -370,7 +372,11 @@ SELECT `+governedSessionColumns+` FROM updated`, id, e, status, "STATUS_"+string
 	return value, err
 }
 func (p *PostgreSQLGovernanceStore) HeartbeatSession(ctx context.Context, id string, e int64, v GovernedSession, now time.Time) (GovernedSession, error) {
-	row := p.DB.QueryRowContext(ctx, `UPDATE sender_sessions SET
+	return heartbeatPostgreSQLSession(ctx, p.DB, id, e, v, now)
+}
+
+func heartbeatPostgreSQLSession(ctx context.Context, db sessionHeartbeatSQLStore, id string, e int64, v GovernedSession, now time.Time) (GovernedSession, error) {
+	row := db.QueryRowContext(ctx, `UPDATE sender_sessions SET
 status=CASE WHEN status IN('QUARANTINED','RESTRICTED','RETIRED') THEN status WHEN sender_session_transition_allowed(status,$3) THEN $3 ELSE status END,
 engine_version=$4,
 sent_today=CASE
@@ -388,17 +394,7 @@ RETURNING `+governedSessionColumns, id, e, v.Status, v.EngineVersion, v.SentToda
 	return value, err
 }
 func (p *PostgreSQLGovernanceStore) Capacity(ctx context.Context, pool string, now time.Time) (CapacitySummary, error) {
-	var v CapacitySummary
-	v.PoolID = pool
-	v.AsAt = now
-	err := p.DB.QueryRowContext(ctx, `SELECT count(*) FILTER(WHERE ss.status IN ('READY','BUSY') AND ss.last_heartbeat_at>$2),count(DISTINCT ss.node_id) FILTER(WHERE sn.status='READY' AND NOT sn.draining AND sn.last_heartbeat_at>$2),coalesce(sum(ss.safe_messages_per_minute) FILTER(WHERE ss.status IN ('READY','BUSY') AND ss.last_heartbeat_at>$2),0)::int,least(sp.max_messages_per_minute,coalesce(sum(ss.safe_messages_per_minute) FILTER(WHERE ss.status IN ('READY','BUSY') AND ss.last_heartbeat_at>$2),0))::int,coalesce(sum(ss.safe_daily_capacity),0),coalesce(sum(greatest(ss.safe_daily_capacity-ss.sent_today,0)) FILTER(WHERE ss.status IN ('READY','BUSY') AND ss.last_heartbeat_at>$2),0),sp.reserved_capacity,greatest(least(sp.daily_capacity,coalesce(sum(greatest(ss.safe_daily_capacity-ss.sent_today,0)) FILTER(WHERE ss.status IN ('READY','BUSY') AND ss.last_heartbeat_at>$2),0))-sp.reserved_capacity,0) FROM sender_pools sp LEFT JOIN sender_sessions ss ON ss.sender_pool_id=sp.id LEFT JOIN sender_nodes sn ON sn.id=ss.node_id WHERE sp.id=$1::uuid GROUP BY sp.max_messages_per_minute,sp.daily_capacity,sp.reserved_capacity`, pool, now.Add(-90*time.Second)).Scan(&v.ReadySessions, &v.HealthyNodes, &v.ConfiguredMessagesPerMinute, &v.AvailableMessagesPerMinute, &v.ConfiguredDailyCapacity, &v.RemainingDailyCapacity, &v.ReservedCapacity, &v.AvailableDailyCapacity)
-	if errors.Is(err, sql.ErrNoRows) {
-		return CapacitySummary{}, ErrSenderNotFound
-	}
-	if err != nil {
-		return CapacitySummary{}, fmt.Errorf("calculate sender capacity: %w", err)
-	}
-	return v, nil
+	return p.leaseCapacity(ctx, pool, now)
 }
 
 func decodeCapabilities(raw []byte) ([]Capability, error) {

@@ -1,5 +1,7 @@
 #!/usr/bin/env node
 const assert = require('node:assert/strict');
+// This suite isolates other behavior; real boot ownership is covered separately.
+const ownedRuntime = { assertSessionOwned() {}, onSessionOwnershipLost() { return () => {}; } };
 const test = require('node:test');
 const fs = require('node:fs/promises');
 const os = require('node:os');
@@ -93,7 +95,7 @@ test('session authority never regresses a concurrent lease fence', async () => {
   const { SessionAuthorityService } = loadSessionAuthority({
     'node:fs/promises': delayedFs,
   });
-  const service = new SessionAuthorityService(identity);
+  const service = new SessionAuthorityService(identity, ownedRuntime);
   await service.onModuleInit();
   const request = {
     provider: 'OPENWA',
@@ -156,7 +158,7 @@ test('session authority fsyncs the accepted fence before returning success', asy
     adapterVersion: '0.13.0', nodeId: 'node-1', nodeVersion: 1,
   };
   const { SessionAuthorityService } = loadSessionAuthority({ 'node:fs/promises': durableFs });
-  const service = new SessionAuthorityService(identity);
+  const service = new SessionAuthorityService(identity, ownedRuntime);
   await service.onModuleInit();
   await service.validate({
     provider: 'OPENWA', engine: 'BAILEYS', gatewayPoolId: 'pool-1', gatewayPoolVersion: 1,
@@ -179,7 +181,7 @@ test('session authority rejects expired and excessive horizons without persistin
     adapterVersion: '0.13.0', nodeId: 'node-1', nodeVersion: 1,
   };
   const { SessionAuthorityService } = loadSessionAuthority();
-  const service = new SessionAuthorityService(identity);
+  const service = new SessionAuthorityService(identity, ownedRuntime);
   await service.onModuleInit();
   const base = {
     provider: 'OPENWA', engine: 'BAILEYS', gatewayPoolId: 'pool-1', gatewayPoolVersion: 1,

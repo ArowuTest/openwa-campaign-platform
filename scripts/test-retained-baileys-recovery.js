@@ -69,3 +69,27 @@ function host(config) {
     Math.random = originalRandom;
   }
 })();
+
+const test = require('node:test');
+test('retained Baileys refuses socket initialization without current ownership', async () => {
+  const BaileysLifecycle = loadLifecycle();
+  let libraryLoads = 0;
+  const lifecycle = new BaileysLifecycle(host({ assertSessionOwnership: () => { throw new Error('session lease unavailable'); } }));
+  lifecycle.loadLib = async () => { libraryLoads += 1; throw new Error('unexpected library load'); };
+  await assert.rejects(() => lifecycle.connectInner(), /session lease unavailable/);
+  assert.equal(libraryLoads, 0, 'unowned recovery reached transport initialization');
+});
+test('retained Baileys rechecks ownership after asynchronous auth/version reads', async () => {
+  const BaileysLifecycle = loadLifecycle();
+  let checks = 0;
+  let sockets = 0;
+  const lifecycle = new BaileysLifecycle(host({ assertSessionOwnership: () => { if (++checks > 1) throw new Error('session lease expired'); } }));
+  lifecycle.loadLib = async () => ({
+    useMultiFileAuthState: async () => ({ state: { keys: {} }, saveCreds() {} }),
+    fetchLatestBaileysVersion: async () => ({ version: [1, 2, 3] }),
+    makeCacheableSignalKeyStore: keys => keys,
+    default: () => { sockets += 1; throw new Error('unexpected socket creation'); },
+  });
+  await assert.rejects(() => lifecycle.connectInner(), /session lease expired/);
+  assert.equal(sockets, 0, 'lease expired during auth read but a provider socket was opened');
+});

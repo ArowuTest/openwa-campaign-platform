@@ -4,8 +4,8 @@
   "version": "0.2.0",
   "description": "Isolated WhatsApp transport gateway. OpenWA source will be imported at the approved upstream commit.",
   "scripts": {
-    "start:dev": "nest start --watch",
-    "build": "nest build",
+    "start:dev": "node ./node_modules/@nestjs/cli/bin/nest.js start --watch",
+    "build": "node ./node_modules/@nestjs/cli/bin/nest.js build",
     "start:prod": "node dist/main.js",
     "typecheck": "tsc --noEmit",
     "sync:retained": "node scripts/sync-retained-openwa.mjs",

@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "evidence_type": "railway-production-postgres-provisioning",
+  "observed_at": "2026-10-02T20:30:00+01:00",
+  "railway_project": {
+    "id": "8633a0b9-3b15-4c8d-b6f2-0306b284f4dd",
+    "name": "openwa-prod"
+  },
+  "environment": {
+    "id": "546fd711-cf80-4402-89b0-cb3ae5671fa9",
+    "name": "production"
+  },
+  "service": {
+    "id": "cc26de87-8b13-408c-b750-42e35ebb5f52",
+    "name": "Postgres",
+    "image": "ghcr.io/railwayapp-templates/postgres-ssl:18",
+    "deployment_id": "cbab8365-b3a9-45c3-968f-001bd241bb52",
+    "deployment_status": "SUCCESS",
+    "deployment_created_at": "2026-10-02T20:02:15.326Z",
+    "engine_major_version": 18
+  },
+  "volume": {
+    "id": "c25e8933-e2ad-4cbe-814d-ea7a5ebeb2d8",
+    "name": "postgres-volume",
+    "mount_path": "/var/lib/postgresql/data",
+    "size_mb": 5000,
+    "region": "ams"
+  },
+  "private_network": {
+    "id": "3938b952-6b74-4425-8245-0d64d69c33f2",
+    "name": "railway",
+    "dns_name": "railway",
+    "dns_suffix": "railway.internal",
+    "address_family": "IPv4 & IPv6",
+    "state": "ready",
+    "endpoint_id": "1edf7bc1-2a33-4936-8e77-99cc7bf0f64c",
+    "endpoint_short_name": "postgres",
+    "hostname": "postgres.railway.internal",
+    "sync_status": "ACTIVE"
+  },
+  "public_exposure": {
+    "domains": [],
+    "tcp_proxies": []
+  },
+  "pitr": {
+    "enabled": true,
+    "bucket_wired": true,
+    "bucket": {
+      "id": "bba3331e-df04-46ca-a1eb-c139baf90344",
+      "name": "Postgres-PITR",
+      "region": "ams"
+    },
+    "live_probe": {
+      "available": true,
+      "coverage_status": "PENDING_RAILWAY_SSH_KEY",
+      "archiver_status": "PENDING_RAILWAY_SSH_KEY",
+      "reason": "Railway CLI PITR live coverage and archiver probe requires a local SSH key; service-level PITR is enabled and bucket-wired."
+    }
+  },
+  "safe_observations": [
+    "Railway production Postgres service exists and is online.",
+    "Postgres service has no public Railway HTTP domain.",
+    "Postgres service has no public TCP proxy.",
+    "Private network endpoint postgres.railway.internal is ACTIVE.",
+    "PITR is enabled and a Postgres-PITR bucket is wired."
+  ],
+  "explicit_non_claims": [
+    "database has been provisioned, but no application DATABASE_URL values are stored in source",
+    "no service-specific login roles or stable privilege role grants have been created yet",
+    "no backend service has been wired to production database credentials yet",
+    "no production migration has run",
+    "no backup restore rehearsal has been completed",
+    "PITR is enabled and bucket-wired, but live coverage and archiver probes are pending Railway SSH key setup",
+    "no release gate is closed",
+    "Supabase is not part of V1",
+    "Hostinger remains gateway/session runtime only"
+  ]
+}

@@ -4,9 +4,11 @@ import json
 import re
 import sys
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 PLAN = ROOT / "infrastructure/railway/production-postgres-plan-2026-10-02.json"
+EVIDENCE = ROOT / "evidence/release-gates/railway-production-postgres-2026-10-02.json"
 ADR = ROOT / "docs/decisions/ADR-0007-railway-authoritative-postgres.md"
 SHELL = ROOT / "infrastructure/railway/production-services-2026-10-02.json"
 CONTRACT = ROOT / "infrastructure/railway/service-contracts.json"
@@ -22,9 +24,20 @@ EXPECTED_ROLES = {
     "platform-governance-worker": "campaign_platform_governance_worker",
 }
 SECRET_VALUE_KEYS = {"password", "secret", "token", "database_url", "dsn", "credential", "connection_string"}
+ALLOWED_PLACEHOLDERS = (
+    "external-secret",
+    "railway-reference",
+    "required",
+    "stable-nologin",
+    "non-secret",
+)
+ALLOWED_DATABASE_STATUSES = {
+    "PENDING_PROVISIONING",
+    "PROVISIONED_PITR_ENABLED_PENDING_ROLE_MIGRATION_RESTORE_EVIDENCE",
+}
 
 
-def load_json(path: Path) -> dict:
+def load_json(path: Path) -> dict[str, Any]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -40,13 +53,71 @@ def contains_secret_value(value: object) -> bool:
             lowered = str(key).lower()
             if any(marker in lowered for marker in SECRET_VALUE_KEYS):
                 text = str(child).strip().lower()
-                if text and not any(allowed in text for allowed in ("external-secret", "railway-reference", "required", "stable-nologin", "non-secret")):
+                if text and not any(allowed in text for allowed in ALLOWED_PLACEHOLDERS):
                     return True
             if contains_secret_value(child):
                 return True
     elif isinstance(value, list):
         return any(contains_secret_value(item) for item in value)
+    elif isinstance(value, str):
+        lowered = value.lower()
+        if "postgres://" in lowered or "postgresql://" in lowered or "password=" in lowered:
+            return True
     return False
+
+
+def validate_provisioned_database(database: dict[str, Any], evidence: dict[str, Any], errors: list[str]) -> None:
+    if database.get("status") != "PROVISIONED_PITR_ENABLED_PENDING_ROLE_MIGRATION_RESTORE_EVIDENCE":
+        return
+    if not UUID.fullmatch(str(database.get("service_id", ""))):
+        errors.append("provisioned Postgres service_id must be a UUID")
+    if database.get("name") != "Postgres":
+        errors.append("provisioned Railway Postgres service name must match observed service")
+    if int(database.get("engine_major_version", 0)) < int(database.get("minimum_major_version", 17)):
+        errors.append("observed Postgres major version is below minimum")
+    if database.get("deployment_status") != "SUCCESS":
+        errors.append("provisioned Postgres deployment must be SUCCESS")
+    if "postgres-ssl" not in str(database.get("image", "")):
+        errors.append("provisioned Postgres image must be Railway SSL Postgres image")
+
+    volume = database.get("volume", {})
+    if not UUID.fullmatch(str(volume.get("id", ""))):
+        errors.append("provisioned Postgres volume id must be a UUID")
+    if volume.get("mount_path") != "/var/lib/postgresql/data":
+        errors.append("provisioned Postgres volume must be mounted at PostgreSQL data path")
+    if int(volume.get("size_mb", 0)) <= 0:
+        errors.append("provisioned Postgres volume size must be recorded")
+
+    private_network = database.get("private_network", {})
+    if private_network.get("hostname") != "postgres.railway.internal":
+        errors.append("provisioned Postgres private hostname must be postgres.railway.internal")
+    if private_network.get("state") != "ready" or private_network.get("sync_status") != "ACTIVE":
+        errors.append("provisioned Postgres private network endpoint must be ready and ACTIVE")
+
+    public_exposure = database.get("public_exposure", {})
+    if public_exposure.get("domains") != []:
+        errors.append("provisioned Postgres must not have public HTTP domains")
+    if public_exposure.get("tcp_proxies") != []:
+        errors.append("provisioned Postgres must not have public TCP proxies")
+
+    pitr = database.get("pitr", {})
+    if pitr.get("enabled") is not True or pitr.get("bucket_wired") is not True:
+        errors.append("provisioned Postgres must have PITR enabled and bucket wired")
+    bucket = pitr.get("bucket", {})
+    if bucket.get("name") != "Postgres-PITR" or not UUID.fullmatch(str(bucket.get("id", ""))):
+        errors.append("PITR bucket identity must be recorded")
+    live_probe = pitr.get("live_probe", {})
+    if live_probe.get("coverage_status") != "PENDING_RAILWAY_SSH_KEY":
+        errors.append("PITR live coverage probe must remain pending until Railway SSH key evidence exists")
+    if live_probe.get("archiver_status") != "PENDING_RAILWAY_SSH_KEY":
+        errors.append("PITR archiver probe must remain pending until Railway SSH key evidence exists")
+
+    if evidence.get("service", {}).get("id") != database.get("service_id"):
+        errors.append("Postgres evidence service id must match plan")
+    if evidence.get("pitr", {}).get("enabled") is not True:
+        errors.append("Postgres evidence must record PITR enabled")
+    if evidence.get("public_exposure") != public_exposure:
+        errors.append("Postgres evidence public exposure must match plan")
 
 
 def validate() -> list[str]:
@@ -54,6 +125,7 @@ def validate() -> list[str]:
     plan = load_json(PLAN)
     shell = load_json(SHELL)
     contract = load_json(CONTRACT)
+    evidence = load_json(EVIDENCE) if EVIDENCE.is_file() else {}
 
     if not ADR.is_file():
         errors.append("ADR-0007 decision record is missing")
@@ -87,13 +159,14 @@ def validate() -> list[str]:
     database = plan.get("database", {})
     if database.get("provider") != "railway-managed-postgresql":
         errors.append("authoritative production database must be Railway managed PostgreSQL")
-    if database.get("status") != "PENDING_PROVISIONING":
-        errors.append("plan must not claim an unproven production database exists")
+    if database.get("status") not in ALLOWED_DATABASE_STATUSES:
+        errors.append("production Postgres status is not recognised")
     for flag in ("ssl_required", "pitr_required", "backup_required", "restore_rehearsal_required"):
         if database.get(flag) is not True:
             errors.append(f"database plan must require {flag}")
     if database.get("public_access") != "disabled-by-default":
         errors.append("production Postgres public access must be disabled by default")
+    validate_provisioned_database(database, evidence, errors)
 
     forbidden = set(plan.get("forbidden_database_targets", []))
     for target in ("hostinger-authoritative-postgres", "plain-docker-postgres-without-managed-volume-and-pitr", "supabase-v1-primary"):
@@ -105,22 +178,22 @@ def validate() -> list[str]:
     if set(bindings) != expected_services or bindings != EXPECTED_ROLES:
         errors.append("service role bindings must match all seven Railway backend services exactly")
 
-    if contains_secret_value(plan):
-        errors.append("production Postgres plan must not contain credential values")
+    if contains_secret_value(plan) or contains_secret_value(evidence):
+        errors.append("production Postgres plan/evidence must not contain credential values")
 
     non_claims = " ".join(plan.get("explicit_non_claims", [])).lower()
-    for required in ("no database has been provisioned", "no credentials", "no release gate", "supabase is not part of v1", "hostinger remains gateway"):
+    for required in ("no application database_url", "no service-specific login roles", "no production migration", "no backup restore rehearsal", "no release gate"):
         if required not in non_claims:
             errors.append(f"missing explicit non-claim: {required}")
 
-    evidence = set(plan.get("required_evidence_before_gate_closure", []))
+    gate_evidence = set(plan.get("required_evidence_before_gate_closure", []))
     for required in (
         "managed Railway PostgreSQL service exists in openwa-prod production",
         "migrations replay cleanly on a production-equivalent database",
         "PITR/WAL enabled and retention recorded",
         "backup restore rehearsal completed",
     ):
-        if required not in evidence:
+        if required not in gate_evidence:
             errors.append(f"missing required pre-closure evidence: {required}")
     return errors
 

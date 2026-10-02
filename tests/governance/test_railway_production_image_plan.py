@@ -38,16 +38,19 @@ class RailwayProductionImagePlanTests(unittest.TestCase):
             self.assertEqual(entry["public_ingress"], declaration["public_ingress"])
             self.assertEqual(entry["source_commit"], plan["source"]["local_head"])
 
-    def test_image_plan_is_pending_and_contains_no_digests(self):
+    def test_image_plan_is_pushed_but_pending_and_contains_no_digests(self):
         plan = self.load_json(PLAN)
-        self.assertFalse(plan["source"]["github_remote_configured"])
-        self.assertEqual(plan["source"]["push_status"], "NOT_PUSHED_NO_GITHUB_REMOTE")
+        self.assertTrue(plan["source"]["github_remote_configured"])
+        self.assertEqual(plan["source"]["github_repository"], "ArowuTest/openwa-campaign-platform")
+        self.assertEqual(plan["source"]["remote_branch"], "main")
+        self.assertEqual(plan["source"]["push_status"], "PUSHED_TO_GITHUB_MAIN")
+        self.assertEqual(plan["source"]["remote_head"], plan["source"]["local_head"])
         for entry in plan["services"].values():
             self.assertIsNone(entry["image_digest"])
-            self.assertEqual(entry["build_status"], "PENDING_GITHUB_REMOTE_AND_DIGEST_PINNED_BUILD")
+            self.assertEqual(entry["build_status"], "PENDING_DIGEST_PINNED_BUILD_AND_RAILWAY_DEPLOYMENT")
         non_claims = " ".join(plan["explicit_non_claims"]).lower()
         self.assertIn("no image digest", non_claims)
-        self.assertIn("no github push", non_claims)
+        self.assertIn("no railway source deployment", non_claims)
         self.assertIn("no release gate", non_claims)
 
     def test_cli_verifier_accepts_current_plan(self):

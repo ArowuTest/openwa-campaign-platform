@@ -41,17 +41,23 @@ def validate() -> list[str]:
         errors.append("image plan environment does not match production shell")
 
     scope = str(plan.get("scope", "")).lower()
-    for phrase in ("no image digest", "no pushed source", "no railway source deployment", "no release gate closure"):
+    for phrase in ("no image digest", "no railway source deployment", "no release gate closure"):
         if phrase not in scope:
             errors.append(f"image plan scope must include {phrase}")
 
     source = plan.get("source", {})
     if not SHA.fullmatch(str(source.get("local_head", ""))):
         errors.append("image plan source.local_head must be a 40-character Git SHA")
-    if source.get("github_remote_configured") is True and source.get("push_status") == "NOT_PUSHED_NO_GITHUB_REMOTE":
-        errors.append("image plan push_status contradicts github_remote_configured=true")
-    if source.get("github_remote_configured") is False and source.get("push_status") != "NOT_PUSHED_NO_GITHUB_REMOTE":
-        errors.append("image plan must record no-push status while GitHub remote is absent")
+    if source.get("github_remote_configured") is not True:
+        errors.append("image plan must record GitHub remote as configured after main push")
+    if source.get("push_status") != "PUSHED_TO_GITHUB_MAIN":
+        errors.append("image plan must record GitHub main push status")
+    if source.get("github_repository") != "ArowuTest/openwa-campaign-platform":
+        errors.append("image plan GitHub repository must match accepted production source")
+    if source.get("remote_branch") != "main":
+        errors.append("image plan remote branch must be main")
+    if source.get("remote_head") != source.get("local_head") or not SHA.fullmatch(str(source.get("remote_head", ""))):
+        errors.append("image plan remote_head must match local_head")
 
     services = contract.get("services")
     shell_services = shell.get("services")
@@ -84,11 +90,11 @@ def validate() -> list[str]:
             errors.append(f"image plan source commit drift for {service}")
         if entry.get("image_digest") is not None:
             errors.append(f"image plan must not contain digest before a real build for {service}")
-        if entry.get("build_status") != "PENDING_GITHUB_REMOTE_AND_DIGEST_PINNED_BUILD":
+        if entry.get("build_status") != "PENDING_DIGEST_PINNED_BUILD_AND_RAILWAY_DEPLOYMENT":
             errors.append(f"image plan build status must remain pending for {service}")
 
     non_claims = " ".join(str(item).lower() for item in plan.get("explicit_non_claims", []))
-    for phrase in ("no image digest", "no source image", "no github push", "no release gate", "openwa-gateway"):
+    for phrase in ("no image digest", "no source image", "no railway source deployment", "no release gate", "openwa-gateway"):
         if phrase not in non_claims:
             errors.append(f"image plan non-claims must include {phrase}")
     return errors

@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "observed_at": "2026-10-02T15:35:00+01:00",
+  "railway_project": {
+    "id": "8633a0b9-3b15-4c8d-b6f2-0306b284f4dd",
+    "name": "openwa-prod"
+  },
+  "environment": {
+    "id": "546fd711-cf80-4402-89b0-cb3ae5671fa9",
+    "name": "production"
+  },
+  "services": {
+    "control-api": "751fd9e6-e26f-411d-94bb-d00bff06abda",
+    "audience-worker": "dede9d43-2cb9-413f-bacd-4f1f750b04ca",
+    "campaign-worker": "5830baa1-c94e-465c-afae-b63a4cd47620",
+    "export-worker": "b002f23f-c186-414c-8e2f-2221b39ab762",
+    "inbound-governance-worker": "8d04dff3-8d7f-4d64-b427-14cd12c66142",
+    "metrics-worker": "412f2fa2-288c-4898-9bf2-276f88890270",
+    "platform-governance-worker": "9d9fe33b-be49-4881-99c8-4a0f3cebab5e"
+  },
+  "notes": [
+    "Empty service shell only; no source deployment, variables, secrets, managed dependencies or live-provider validation claimed.",
+    "openwa-gateway remains forbidden on Railway and is not present in this project."
+  ]
+}

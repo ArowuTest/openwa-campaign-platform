@@ -54,7 +54,7 @@ const messagingModule = loadModule('gateway-messaging.service.ts', {
   './provider/provider.token': { MESSAGING_PROVIDER: Symbol('provider') },
   './session-authority.service': { SessionAuthorityService: class {} },
 });
-const lifecycleAuthorities = { runIfNotTombstoned: async (_id, operation) => operation(), tombstone: async () => undefined };
+const lifecycleAuthorities = { assertOwned() {}, runIfNotTombstoned: async (_id, operation) => operation(), tombstone: async () => undefined };
 
 test('session rate window remains serialized when concurrent sends are enabled', async () => {
   process.env.SESSION_IN_FLIGHT_LIMIT = '2';
@@ -207,7 +207,7 @@ test('send is rejected for the full duration of a provider start', async () => {
     send: async () => { providerSends += 1; return { accepted: true }; },
   };
   const idempotency = { execute: async (_request, operation) => operation() };
-  const authorities = { validate: async () => undefined, runIfNotTombstoned: async (_id, operation) => operation() };
+  const authorities = { assertOwned() {}, validate: async () => undefined, runIfNotTombstoned: async (_id, operation) => operation() };
   const gateway = new messagingModule.GatewayMessagingService(provider, idempotency, pipelines, authorities);
   const starting = gateway.startSession('session-start-send');
   await entered;
@@ -304,7 +304,7 @@ test('pre-network control rejection does not reduce provider send rate', async (
       send: async () => { providerSends += 1; return { accepted: true }; },
     };
     const idempotency = { execute: async (_request, operation) => { idempotencyCalls += 1; return operation(); } };
-    const authorities = { validate: async () => undefined, submitIfCurrent: async (_request, operation) => operation() };
+    const authorities = { assertOwned() {}, validate: async () => undefined, submitIfCurrent: async (_request, operation) => operation() };
     const gateway = new messagingModule.GatewayMessagingService(provider, idempotency, pipelines, authorities);
     await assert.rejects(() => gateway.send({ sessionId: 'session-control-reject' }), ServiceUnavailableException);
     const status = pipelines.status('session-control-reject');
@@ -340,7 +340,7 @@ test('provider send failure still reduces adaptive provider rate', async () => {
       send: async () => { throw new Error('provider submission failed'); },
     };
     const idempotency = { execute: async (_request, operation) => operation() };
-    const authorities = { validate: async () => undefined, submitIfCurrent: async (_request, operation) => operation() };
+    const authorities = { assertOwned() {}, validate: async () => undefined, submitIfCurrent: async (_request, operation) => operation() };
     const gateway = new messagingModule.GatewayMessagingService(provider, idempotency, pipelines, authorities);
     await assert.rejects(() => gateway.send({ sessionId: 'session-provider-failure' }), /provider submission failed/);
     assert.equal(pipelines.status('session-provider-failure').currentMessagesPerMinute, 10, 'provider failure did not reduce adaptive send rate');

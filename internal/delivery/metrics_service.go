@@ -55,8 +55,8 @@ func (r *PostgreSQLMetricsRepository) Get(ctx context.Context, campaignID string
 		return Metrics{}, errors.New("database is required")
 	}
 	var value Metrics
-	err := r.DB.QueryRowContext(ctx, `SELECT authorised_total,queued_total,submitted_total,sent_total,delivered_total,read_total,failed_total,unknown_total,suppressed_total,excluded_final_check_total FROM campaign_metrics WHERE campaign_id=$1::uuid`, campaignID).Scan(
-		&value.AuthorisedTotal, &value.QueuedTotal, &value.SubmittedTotal, &value.SentTotal, &value.DeliveredTotal, &value.ReadTotal, &value.FailedTotal, &value.UnknownTotal, &value.SuppressedTotal, &value.ExcludedFinalCheckTotal,
+	err := r.DB.QueryRowContext(ctx, `SELECT authorised_total,queued_total,submitted_total,gateway_accepted_total,sent_total,delivered_total,read_total,failed_total,unknown_total,suppressed_total,excluded_final_check_total FROM campaign_metrics WHERE campaign_id=$1::uuid`, campaignID).Scan(
+		&value.AuthorisedTotal, &value.QueuedTotal, &value.SubmittedTotal, &value.GatewayAcceptedTotal, &value.SentTotal, &value.DeliveredTotal, &value.ReadTotal, &value.FailedTotal, &value.UnknownTotal, &value.SuppressedTotal, &value.ExcludedFinalCheckTotal,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Metrics{}, ErrMetricsNotFound
@@ -65,8 +65,8 @@ func (r *PostgreSQLMetricsRepository) Get(ctx context.Context, campaignID string
 }
 
 func (m Metrics) ActiveObligations() int64 {
-	return m.AuthorisedTotal + m.QueuedTotal + m.SubmittedTotal
+	return m.AuthorisedTotal + m.QueuedTotal + m.SubmittedTotal + m.GatewayAcceptedTotal
 }
 func (m Metrics) TotalAccounted() int64 {
-	return m.AuthorisedTotal + m.QueuedTotal + m.SubmittedTotal + m.SentTotal + m.DeliveredTotal + m.ReadTotal + m.FailedTotal + m.UnknownTotal + m.SuppressedTotal + m.ExcludedFinalCheckTotal
+	return m.AuthorisedTotal + m.QueuedTotal + m.SubmittedTotal + m.GatewayAcceptedTotal + m.SentTotal + m.DeliveredTotal + m.ReadTotal + m.FailedTotal + m.UnknownTotal + m.SuppressedTotal + m.ExcludedFinalCheckTotal
 }

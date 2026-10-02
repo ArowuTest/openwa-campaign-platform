@@ -121,4 +121,27 @@ func TestPostgreSQLDeliveryEventUpdatesMetricsIncrementallyAndReplayIsIdempotent
 		t.Fatalf("mismatched replay mutated status=%s metrics=(%d,%d) events=%d",
 			status, replayQueued, replaySubmitted, eventCount)
 	}
+
+	acceptedEvent := Event{DeduplicationKey: "metrics-accepted-" + recipientID, Type: EventGatewayAccepted, OccurredAt: now.Add(2 * time.Second)}
+	acceptedRecipient, changed, err := repository.ApplyEvent(ctx, recipientID, acceptedEvent)
+	if err != nil || !changed || acceptedRecipient.Status != StatusGatewayAccepted {
+		t.Fatalf("gateway acceptance recipient=%+v changed=%v err=%v", acceptedRecipient, changed, err)
+	}
+	var acceptedTotal int64
+	if err := db.QueryRowContext(ctx, `SELECT submitted_total,gateway_accepted_total FROM campaign_metrics WHERE campaign_id=$1::uuid`, campaignID).Scan(&replaySubmitted, &acceptedTotal); err != nil {
+		t.Fatal(err)
+	}
+	if replaySubmitted != 0 || acceptedTotal != 1 {
+		t.Fatalf("gateway acceptance not separated from submitting: submitted=%d accepted=%d", replaySubmitted, acceptedTotal)
+	}
+	replayedAccepted, changed, err := repository.ApplyEvent(ctx, recipientID, acceptedEvent)
+	if err != nil || changed || replayedAccepted.Status != StatusGatewayAccepted {
+		t.Fatalf("gateway acceptance replay recipient=%+v changed=%v err=%v", replayedAccepted, changed, err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT submitted_total,gateway_accepted_total FROM campaign_metrics WHERE campaign_id=$1::uuid`, campaignID).Scan(&replaySubmitted, &acceptedTotal); err != nil {
+		t.Fatal(err)
+	}
+	if replaySubmitted != 0 || acceptedTotal != 1 {
+		t.Fatalf("gateway acceptance replay changed metrics: submitted=%d accepted=%d", replaySubmitted, acceptedTotal)
+	}
 }

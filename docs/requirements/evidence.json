@@ -81,16 +81,19 @@
     "notes": "PostgreSQL release rejects entitlement overflow transactionally with zero recipient/outbox rows; replay keeps exactly one recipient/outbox, and entitlement cannot be reused by another campaign."
   },
   "AC-009": {
-    "status": "PARTIAL",
+    "status": "IMPLEMENTED_TESTED",
     "evidence": [
       "internal/orchestration/postgres_release_integration_test.go",
       "internal/outbox/postgres_crash_recovery_integration_test.go",
-      "internal/outbox/publisher_test.go"
+      "internal/outbox/publisher_test.go",
+      "internal/dispatch/recovery_postgres.go",
+      "internal/dispatch/dlv_queue_loss_recovery_postgres_integration_test.go",
+      "cmd/campaign-worker/main.go"
     ],
-    "notes": "Recipient ledger and transactional outbox are created atomically and an expired publisher claim is recoverable. A queue job lost after its outbox row is already PUBLISHED cannot yet be reconstructed automatically."
+    "notes": "Recipient ledger and transactional outbox remain atomic. Campaign-worker continuously runs PostgreSQL queue repair; exact PostgreSQL evidence deletes a durable dispatch job after its authoritative outbox event is already PUBLISHED and reconstructs exactly one job with the original deduplication key, while replay creates zero duplicates."
   },
   "AC-010": {
-    "status": "PARTIAL",
+    "status": "IMPLEMENTED_TESTED",
     "evidence": [
       "internal/gateway/postgres_lease_integration_test.go",
       "internal/sender/session_heartbeat_lease_postgres_integration_test.go",
@@ -107,36 +110,49 @@
       "internal/testmessage/postgres_send_integration_test.go",
       "internal/dispatch/postgres_node_url_integration_test.go"
     ],
-    "notes": "Durable idempotency and current-process receipt checks remain at the gateway submission boundary. Seventeen portable ownership cases, nine heartbeat cases, retained Baileys guards, embedded retirement/recovery tests and current TypeScript checking pass. The two queued/final-health revocation tests require the actual intended hook and specific ownership error; those and the successful durable-send case still require Linux directory-fsync execution. Backend campaign and internal test-route SQL now reject non-current-boot leases at source; live PostgreSQL behavior and clean production builds remain unverified."
+    "notes": "Accepted lease tranche ee79e82 proves exclusive current-process ownership and durable idempotency at the gateway submission boundary. Exact Linux tests cover boot ownership, heartbeat, authority, fsync/durability and provider-send fencing; PostgreSQL routing rejects stale-boot authority."
   },
   "AC-011": {
-    "status": "PARTIAL",
+    "status": "IMPLEMENTED_TESTED",
     "evidence": [
       "tests/integration/campaign_pipeline_test.go",
       "internal/outbox/postgres_crash_recovery_integration_test.go",
-      "scripts/test-gateway-durability.js"
+      "scripts/test-gateway-durability.js",
+      "internal/dispatch/recovery_postgres.go",
+      "internal/dispatch/dlv_queue_loss_recovery_postgres_integration_test.go",
+      "internal/dispatch/task6_queue_repair_unknown_postgres_integration_test.go"
     ],
-    "notes": "Crash reclaim, job deduplication, late eligibility suppression and UNKNOWN/no-unsafe-resend behavior are tested. The published-outbox/lost-queue reconstruction gap can still strand an obligation, so silent-loss resilience is not fully closed."
+    "notes": "Crash reclaim, job deduplication and final eligibility remain enforced. Exact PostgreSQL queue-loss recovery reconstructs eligible missing obligations once, while UNKNOWN recipients are never reconstructed or resent; only an explicitly retryable state becomes repairable."
   },
   "AC-012": {
-    "status": "PARTIAL",
+    "status": "IMPLEMENTED_TESTED",
     "evidence": [
       "internal/delivery/metrics.go",
       "internal/delivery/metrics_test.go",
       "internal/delivery/metrics_idempotency_postgres_integration_test.go",
-      "internal/operations/postgres.go"
+      "internal/operations/postgres.go",
+      "database/migrations/0092_gateway_accepted_metrics.sql",
+      "internal/delivery/postgres.go",
+      "internal/execution/postgres.go"
     ],
-    "notes": "Delivery ledger states distinguish gateway accepted, sent, delivered, read, failed and UNKNOWN, but campaign metrics currently fold GATEWAY_ACCEPTED together with SUBMITTING into submitted_total rather than exposing gateway-accepted separately."
+    "notes": "Migration 0092 and delivery metric transitions expose GATEWAY_ACCEPTED separately from SUBMITTING/SENT/DELIVERED/READ/FAILED/UNKNOWN. Exact PostgreSQL evidence proves gateway acceptance increments only gateway_accepted_total and exact replay is idempotent; campaign, organisation, pool and financial reporting consume the distinct metric."
   },
   "AC-013": {
-    "status": "PARTIAL",
+    "status": "IMPLEMENTED_TESTED",
     "evidence": [
       "tests/integration/campaign_pipeline_test.go",
       "internal/dispatch/final_eligibility_postgres_integration_test.go",
       "internal/operations/postgres.go",
-      "database/migrations/0003_segments_campaigns_delivery.sql"
+      "database/migrations/0003_segments_campaigns_delivery.sql",
+      "database/migrations/0093_opt_out_metric_events.sql",
+      "internal/consent/optout.go",
+      "internal/consent/optout_metrics_postgres.go",
+      "internal/consent/optout_metrics_postgres_integration_test.go",
+      "internal/consent/ledger.go",
+      "internal/persistence/postgres/consent_ledger.go",
+      "internal/persistence/postgres/optout_atomic_reporting_postgres_integration_test.go"
     ],
-    "notes": "A post-snapshot withdrawal/suppression prevents later dispatch. Reports expose optOuts from opt_out_total, but no production writer updates opt_out_total, so the same opt-out is not guaranteed to appear in reporting."
+    "notes": "Post-snapshot opt-out fails final dispatch eligibility and production PostgreSQL commits the suppression, append-only consent event and suppression-keyed campaign opt-out event in one transaction. Reporting derives campaign and organisation opt-out counts directly from that durable event ledger, so a locked or unavailable shared campaign_metrics counter cannot roll back or hide a legitimate STOP. Fresh PostgreSQL RED-to-GREEN evidence proves the former counter-coupled path timed out under a locked campaign_metrics row, while the final path commits the opt-out, remains replay-safe, and reports optOuts=1 exactly once on both report surfaces."
   },
   "AC-014": {
     "status": "PARTIAL",
@@ -238,9 +254,10 @@
       "internal/consent/optout_policy.go",
       "internal/retention/service.go",
       "internal/operations/reporting_privacy.go",
-      "internal/worker/config/config.go"
+      "internal/worker/config/config.go",
+      "docs/requirements/BACKEND_FREEZE_RELEASE_DECISIONS.md"
     ],
-    "notes": "Maker-checker remains enforced for established runtime/security policy classes. Retry/reconciliation/UNKNOWN windows are now validated deployment configuration but are not yet approved effective-dated platform-policy records, so governance across every named policy class remains PARTIAL."
+    "notes": "Release-one backend-freeze decision keeps retry/reconciliation/UNKNOWN settings as bounded deployment configuration under production change control. Consolidating them into one effective-dated maker-checker runtime policy remains a later governance refinement; the row remains PARTIAL by design."
   },
   "ADM-004": {
     "status": "IMPLEMENTED_TESTED",
@@ -322,9 +339,10 @@
       "internal/jobs/runner.go",
       "internal/worker/config/config.go",
       "internal/delivery/reconciliation/outcome.go",
-      "internal/operations/alerting.go"
+      "internal/operations/alerting.go",
+      "docs/requirements/BACKEND_FREEZE_RELEASE_DECISIONS.md"
     ],
-    "notes": "Retry and reconciliation timing is now bounded/configurable and UNKNOWN finalisation has governed deployment windows, but these values are not yet one approved effective-dated runtime policy consumed across all workers. Requirement remains PARTIAL pending platform-policy integration."
+    "notes": "Release-one backend-freeze decision accepts the proven bounded/configurable retry, reconciliation and UNKNOWN windows for launch. Moving those settings into one approved effective-dated platform-policy record remains a later governance refinement; the row remains PARTIAL by design."
   },
   "ADM-013": {
     "status": "PARTIAL",
@@ -763,7 +781,7 @@
     "notes": "Campaigns use logical sender-pool abstractions for routing while the actual governed sender session remains internal execution evidence."
   },
   "BR-011": {
-    "status": "PARTIAL",
+    "status": "IMPLEMENTED_TESTED",
     "evidence": [
       "internal/gateway/lease.go",
       "internal/gateway/postgres_lease.go",
@@ -779,9 +797,10 @@
       "services/openwa-gateway/src/session-ownership.ts",
       "scripts/test-embedded-openwa.js",
       "internal/sender/allocator_postgres_integration_test.go",
-      "internal/dispatch/postgres_node_url_integration_test.go"
+      "internal/dispatch/postgres_node_url_integration_test.go",
+      "scripts/test-gateway-boot-ownership.js"
     ],
-    "notes": "The candidate checks current-process ownership at gateway activation/submission and now binds authoritative SQL lease consumers to the current node boot rather than merely node ID plus future expiry. Static guards pass for allocation, existing assignments, campaign materialization and internal test routes. Corresponding PostgreSQL regressions are authored but not executed; source predicates and Windows CGO-disabled tests are not operational single-worker acceptance."
+    "notes": "Accepted lease tranche ee79e82 establishes one active process owner per live WhatsApp session. PostgreSQL fencing, boot-bound signed heartbeat ownership and gateway process-local receipts jointly prevent stale owners from allocating, activating or submitting."
   },
   "BR-012": {
     "status": "BLOCKED_EXTERNAL",
@@ -2064,9 +2083,10 @@
       "internal/delivery/reconciliation/outcome.go",
       "internal/delivery/reconciliation/outcome_test.go",
       "internal/delivery/reconciliation/outcome_postgres_integration_test.go",
-      "cmd/metrics-worker/main.go"
+      "cmd/metrics-worker/main.go",
+      "docs/requirements/BACKEND_FREEZE_RELEASE_DECISIONS.md"
     ],
-    "notes": "A scheduled outcome-reconciliation loop now quarantines stale SUBMITTING as sticky UNKNOWN without resend, scans stale GATEWAY_ACCEPTED/SENT/UNKNOWN reconciliation records, and applies configured final-UNKNOWN aging; manual provider-evidence resolution remains available. Direct provider status polling/resolution for every transport is still incomplete, so the broader scheduled provider-status reconciliation requirement remains PARTIAL."
+    "notes": "Release-one backend-freeze decision retains scheduled stale-submission/UNKNOWN reconciliation, configured aging and governed manual evidence resolution, while deferring transport-specific provider polling until a reliable provider API and evidenced release need exist. The row remains PARTIAL by design and is not a release-one backend blocker."
   },
   "EVT-013": {
     "status": "PARTIAL",
@@ -2076,9 +2096,10 @@
       "internal/delivery/reconciliation/outcome.go",
       "internal/delivery/reconciliation/outcome_test.go",
       "internal/delivery/reconciliation/outcome_postgres_integration_test.go",
-      "internal/worker/config/config.go"
+      "internal/worker/config/config.go",
+      "docs/requirements/BACKEND_FREEZE_RELEASE_DECISIONS.md"
     ],
-    "notes": "Ambiguous outcomes remain sticky UNKNOWN immediately, while a configured reconciliation window and final-UNKNOWN window now govern aging; PostgreSQL evidence marks unresolved UNKNOWN as FINAL_UNKNOWN only after the configured final window without changing the sticky status or enabling resend. A distinct public provisional/final UNKNOWN lifecycle representation remains incomplete, so status stays PARTIAL."
+    "notes": "Release-one backend-freeze decision retains sticky UNKNOWN plus configured final-UNKNOWN aging/evidence without introducing a second recipient status taxonomy. The internal operator console will surface reconciliation age/evidence; the row remains PARTIAL by design and is not a release-one backend blocker."
   },
   "EVT-014": {
     "status": "PARTIAL",
@@ -2151,15 +2172,19 @@
     "notes": "Signed runtime registration reports heartbeat/build/runtime identity, capacity, session count, queue depth, CPU, memory, disk, inode, process/file-descriptor and network evidence. Fresh PostgreSQL acceptance proves the governed stale threshold marks only expired nodes unavailable."
   },
   "GWY-006": {
-    "status": "PARTIAL",
+    "status": "IMPLEMENTED_TESTED",
     "evidence": [
       "services/openwa-gateway/src/provider/embedded-openwa-engine.service.ts",
       "services/openwa-gateway/src/provider/messaging-provider.ts",
       "scripts/test-embedded-openwa.js",
       "internal/sender/governance.go",
-      "internal/operations/postgres.go"
+      "internal/operations/postgres.go",
+      "services/openwa-gateway/src/session-heartbeat-publisher.service.ts",
+      "internal/sender/session_heartbeat_atomic.go",
+      "internal/operations/gateway_session_state_postgres_integration_test.go",
+      "scripts/test-gateway-session-drain.js"
     ],
-    "notes": "The worker exposes connection/authentication lifecycle, connected/last-active timestamps and failure detail, while the control plane records heartbeat and canonical last-success evidence. There is not yet a proven signed per-session state propagation path showing forced gateway disconnect/reconnect transitions in the operations dashboard."
+    "notes": "Signed per-session heartbeat propagates current gateway lifecycle state into governed sender_sessions and the operations dashboard. Exact PostgreSQL evidence drives READY -> DISCONNECTED -> CONNECTING -> READY through signed heartbeats and proves dashboard state plus unhealthy-session counts follow the transitions."
   },
   "GWY-007": {
     "status": "IMPLEMENTED_TESTED",
@@ -3544,7 +3569,7 @@
     "notes": "The canonical sender lifecycle is enforced before gateway side effects. Allocation requires eligible READY/BUSY sender state plus a READY non-draining owner node, fresh heartbeats and a live lease; PostgreSQL evidence proves stale/expired ownership is excluded."
   },
   "SND-007": {
-    "status": "PARTIAL",
+    "status": "IMPLEMENTED_TESTED",
     "evidence": [
       "internal/gateway/lease.go",
       "internal/gateway/postgres_lease.go",
@@ -3562,12 +3587,13 @@
       "services/openwa-gateway/src/session-ownership.ts",
       "scripts/test-gateway-boot-ownership.js",
       "internal/sender/postgres.go",
-      "tests/governance/test_gateway_runtime_health_wiring.py"
+      "tests/governance/test_gateway_runtime_health_wiring.py",
+      "internal/testmessage/postgres.go"
     ],
-    "notes": "The candidate combines atomic boot-bound heartbeat ownership with process-local gateway receipts and activation/submission guards. Latest source review additionally confirmed stale-boot allocation/materialization and sticky retirement telemetry. Retirement now reports recoverable DRAINING while cleanup is pending; current focused tests pass for both engines. Allocation, assigned-session validation, campaign materialization and internal test-route SQL now require a non-empty current boot and matching lease token hash. Four static wiring regressions went RED to GREEN; PostgreSQL behavior for these new predicates is not yet executed. Full current-candidate integration, Linux regression and independent acceptance remain pending."
+    "notes": "Accepted lease tranche ee79e82 proves one boot-bound owner across signed heartbeat, PostgreSQL lease/session atomicity, allocation/materialisation and gateway current-process ownership. Exact Linux/PostgreSQL/race/build gates and blind review accepted the tranche; stale/current-boot conflicts are fenced before activation or provider submission."
   },
   "SND-008": {
-    "status": "PARTIAL",
+    "status": "IMPLEMENTED_TESTED",
     "evidence": [
       "internal/sender/session_heartbeat.go",
       "internal/sender/session_heartbeat_test.go",
@@ -3586,10 +3612,10 @@
       "internal/sender/capacity_lease.go",
       "internal/sender/capacity_lease_test.go"
     ],
-    "notes": "SENDER_HEARTBEAT_TTL remains shared by control-api, campaign-worker and gateway. Memory capacity covers nine live-lease, boot, node-health and configured-TTL scenarios. Current-boot lease predicates now also guard allocation and route materialization. Earlier atomic memory/live PostgreSQL race evidence predates later receipt and creation changes; it is historical only. Current PostgreSQL capacity/receipt/recovery and full race gates remain unverified because remote test invocations were blocked before launch."
+    "notes": "Accepted lease tranche ee79e82 uses the shared bounded SENDER_HEARTBEAT_TTL for heartbeat ownership, allocation and capacity. PostgreSQL and memory evidence prove renewal, expiry, live-lease/current-boot capacity eligibility and fencing-history preservation."
   },
   "SND-009": {
-    "status": "PARTIAL",
+    "status": "IMPLEMENTED_TESTED",
     "evidence": [
       "internal/sender/session_heartbeat.go",
       "internal/sender/session_heartbeat_test.go",
@@ -3606,9 +3632,11 @@
       "services/openwa-gateway/src/session-ownership.ts",
       "services/openwa-gateway/scripts/sync-retained-openwa.mjs",
       "scripts/test-retained-baileys-recovery.js",
-      "scripts/test-embedded-openwa.js"
+      "scripts/test-embedded-openwa.js",
+      "internal/sender/session_heartbeat_lease_postgres_integration_test.go",
+      "services/openwa-gateway/src/provider/embedded-openwa-engine.service.ts"
     ],
-    "notes": "The candidate preserves expiry-before-takeover and non-sending controlled recovery. Focused memory tests cover retirement DRAINING, completion DISCONNECTED, rejection of direct READY, and subsequent CONNECTING then READY. Both embedded engines passed ownership-loss retirement telemetry tests, including a concurrent manual stop and genuine teardown failure behavior. Successful retirement does not create a sticky provider restriction, and failed retirement is not disguised as success. The complete current PostgreSQL/Linux composed verification and acceptance remain outstanding."
+    "notes": "Accepted lease tranche ee79e82 proves a new boot cannot steal a live lease or become READY/BUSY directly after expiry. Recovery must first establish non-sending ownership; gateway engines retire on ownership loss and reconnect only after current-process ownership is re-established."
   },
   "SND-010": {
     "status": "PARTIAL",

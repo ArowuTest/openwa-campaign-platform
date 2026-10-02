@@ -9,10 +9,13 @@ import (
 	"time"
 
 	audiencefilter "campaign-platform/internal/audience/filter"
+	"campaign-platform/internal/audit"
 	"campaign-platform/internal/campaign"
+	"campaign-platform/internal/consent"
 	"campaign-platform/internal/delivery"
 	"campaign-platform/internal/dispatch"
 	"campaign-platform/internal/jobs"
+	"campaign-platform/internal/operations"
 	"campaign-platform/internal/orchestration"
 	"campaign-platform/internal/outbox"
 	"campaign-platform/internal/segment"
@@ -76,6 +79,43 @@ func (g *countingGateway) Calls() int {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	return g.calls
+}
+
+type workflowOperationsRepository struct {
+	*operations.MemoryRepository
+	report operations.CampaignReport
+}
+
+func (r *workflowOperationsRepository) CampaignReport(_ context.Context, id string, now time.Time) (operations.CampaignReport, error) {
+	if id != r.report.CampaignID {
+		return operations.CampaignReport{}, operations.ErrNotFound
+	}
+	out := r.report
+	out.GeneratedAt = now.UTC()
+	return out, nil
+}
+
+type workflowOptOutMetrics struct {
+	report *operations.CampaignReport
+	seen   map[string]struct{}
+}
+
+func (m *workflowOptOutMetrics) RecordOptOut(_ context.Context, campaignID, suppressionID string, _ time.Time) error {
+	if m.report == nil || campaignID != m.report.CampaignID {
+		return fmt.Errorf("unexpected opt-out campaign %s", campaignID)
+	}
+	if m.seen == nil {
+		m.seen = map[string]struct{}{}
+	}
+	if _, ok := m.seen[suppressionID]; ok {
+		return nil
+	}
+	m.seen[suppressionID] = struct{}{}
+	if m.report.Engagement == nil {
+		m.report.Engagement = map[string]int64{}
+	}
+	m.report.Engagement["optOuts"]++
+	return nil
 }
 
 func TestDryRunReleaseRecoveryDispatchAndFinalWithdrawal(t *testing.T) {
@@ -245,6 +285,105 @@ func TestDryRunReleaseRecoveryDispatchAndFinalWithdrawal(t *testing.T) {
 	}
 	if gateway.Calls() != 1 {
 		t.Fatalf("gateway was called again during replay: %d", gateway.Calls())
+	}
+
+	// Continue the same accepted obligation through an ambiguous provider outcome,
+	// governed operator reconciliation, opt-out reporting, report generation, audit
+	// evidence and maker-checker export. This is the release-one composed backend
+	// workflow acceptance rather than a collection of unrelated package checks.
+	var eligible delivery.Recipient
+	for _, recipient := range recipients {
+		if recipient.ContactID == "contact-eligible" {
+			eligible, err = ledger.Get(ctx, recipient.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			break
+		}
+	}
+	if eligible.ID == "" || eligible.Status != delivery.StatusGatewayAccepted {
+		t.Fatalf("eligible recipient missing accepted state: %+v", eligible)
+	}
+	unknownAt := now.Add(5 * time.Minute)
+	unknown, changed, err := ledger.ApplyEvent(ctx, eligible.ID, delivery.Event{
+		DeduplicationKey: "workflow-unknown:" + eligible.ID,
+		Type:             delivery.EventUnknown, ErrorCode: "GATEWAY_OUTCOME_UNKNOWN",
+		ErrorDetail: "provider outcome was ambiguous", OccurredAt: unknownAt,
+	})
+	if err != nil || !changed || unknown.Status != delivery.StatusUnknown || !unknown.ReconciliationRequired {
+		t.Fatalf("ambiguous outcome was not quarantined: recipient=%+v changed=%v err=%v", unknown, changed, err)
+	}
+	if gateway.Calls() != 1 {
+		t.Fatalf("UNKNOWN triggered an unsafe resend: %d", gateway.Calls())
+	}
+
+	opRepo := &workflowOperationsRepository{MemoryRepository: operations.NewMemoryRepository(), report: operations.CampaignReport{
+		CampaignID: campaignEntity.ID, OrganisationID: campaignEntity.OrganisationID, Name: "backend-freeze-campaign",
+		Status: "DISPATCHING", Audience: map[string]int64{"authorised": 2, "suppressed": 1},
+		Delivery:   map[string]int64{"queued": 0, "submitted": 0, "gatewayAccepted": 0, "sent": 1, "delivered": 0, "read": 0},
+		Engagement: map[string]int64{"optOuts": 0}, Exceptions: map[string]int64{"failed": 0, "unknown": 0},
+	}}
+	auditRepo := audit.NewMemoryRepository()
+	opService := &operations.Service{
+		Repo: opRepo, Audit: audit.NewRecorder(auditRepo), AuditRepository: auditRepo, Deliveries: ledger,
+		Clock: func() time.Time { return now.Add(6 * time.Minute) },
+	}
+	resolution, err := opService.ResolveDeliveryException(ctx, eligible.ID, operations.ResolutionConfirmSent,
+		"evidence://provider-confirmed-sent", "provider evidence confirms submission", "operator-reconciler", "workflow-reconcile")
+	if err != nil || resolution.ResultStatus != delivery.StatusSent {
+		t.Fatalf("UNKNOWN reconciliation failed: resolution=%+v err=%v", resolution, err)
+	}
+	if gateway.Calls() != 1 {
+		t.Fatalf("operator reconciliation triggered provider resend: %d", gateway.Calls())
+	}
+
+	optOutMetrics := &workflowOptOutMetrics{report: &opRepo.report}
+	optOut := &consent.OptOutProcessor{
+		Deliveries: ledger, Ledger: consent.NewLedgerService(consent.NewMemoryLedgerRepository()), Metrics: optOutMetrics,
+		Clock: func() time.Time { return now.Add(7 * time.Minute) },
+	}
+	firstOptOut, err := optOut.Process(ctx, eligible.ID, "workflow-stop-1", "STOP", "gateway:workflow-stop-1")
+	if err != nil || !firstOptOut.Recognised || firstOptOut.Replayed {
+		t.Fatalf("opt-out was not recorded: result=%+v err=%v", firstOptOut, err)
+	}
+	replayedOptOut, err := optOut.Process(ctx, eligible.ID, "workflow-stop-1", "STOP", "gateway:workflow-stop-1")
+	if err != nil || !replayedOptOut.Replayed || opRepo.report.Engagement["optOuts"] != 1 {
+		t.Fatalf("opt-out replay was not idempotent: result=%+v metric=%d err=%v", replayedOptOut, opRepo.report.Engagement["optOuts"], err)
+	}
+
+	report, err := opService.CampaignReport(ctx, campaignEntity.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Delivery["sent"] != 1 || report.Engagement["optOuts"] != 1 || report.Audience["suppressed"] != 1 {
+		t.Fatalf("campaign report lost workflow truth: %+v", report)
+	}
+
+	requested, err := opService.RequestExport(ctx, "CAMPAIGN_REPORT", campaignEntity.ID, "JSON", "release-one campaign evidence", "operator-maker", "workflow-export-request")
+	if err != nil {
+		t.Fatal(err)
+	}
+	approved, err := opService.DecideExport(ctx, requested.ID, requested.Version, true, "independent approval", "operator-checker", "workflow-export-approve")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approved.Status != operations.ExportApproved || len(approved.FrozenPayload) == 0 {
+		t.Fatalf("approved campaign export was not frozen: %+v", approved)
+	}
+	auditPage, err := auditRepo.Search(ctx, audit.Query{ObjectType: "EXPORT_REQUEST", Limit: 20})
+	if err != nil {
+		t.Fatal(err)
+	}
+	actions := map[string]bool{}
+	for _, event := range auditPage.Items {
+		actions[event.Action] = true
+	}
+	if !actions["EXPORT_REQUESTED"] || !actions["EXPORT_APPROVED"] {
+		t.Fatalf("export audit evidence incomplete: %+v", actions)
+	}
+	reconciliationAudit, err := auditRepo.Search(ctx, audit.Query{Action: "DELIVERY_EXCEPTION_RESOLVED", ObjectID: eligible.ID, Limit: 10})
+	if err != nil || len(reconciliationAudit.Items) != 1 {
+		t.Fatalf("reconciliation audit evidence missing: count=%d err=%v", len(reconciliationAudit.Items), err)
 	}
 }
 

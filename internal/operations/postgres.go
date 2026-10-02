@@ -65,24 +65,25 @@ func (r *PostgreSQLRepository) Dashboard(ctx context.Context, now time.Time) (Da
 		return d, err
 	}
 
-	var authorised, queued, submitted, sent, delivered, read, failed, unknown, suppressed int64
+	var authorised, queued, submitted, accepted, sent, delivered, read, failed, unknown, suppressed int64
 	if err := r.DB.QueryRowContext(ctx, `SELECT
  coalesce(sum(authorised_total),0),coalesce(sum(queued_total),0),coalesce(sum(submitted_total),0),
- coalesce(sum(sent_total),0),coalesce(sum(delivered_total),0),coalesce(sum(read_total),0),
+ coalesce(sum(gateway_accepted_total),0),coalesce(sum(sent_total),0),coalesce(sum(delivered_total),0),coalesce(sum(read_total),0),
  coalesce(sum(failed_total),0),coalesce(sum(unknown_total),0),coalesce(sum(suppressed_total),0)
-FROM campaign_metrics`).Scan(&authorised, &queued, &submitted, &sent, &delivered, &read, &failed, &unknown, &suppressed); err != nil {
+FROM campaign_metrics`).Scan(&authorised, &queued, &submitted, &accepted, &sent, &delivered, &read, &failed, &unknown, &suppressed); err != nil {
 		return d, err
 	}
 	d.Recipients = map[string]int64{
-		"AUTHORISED": authorised,
-		"QUEUED":     queued,
-		"SUBMITTED":  submitted,
-		"SENT":       sent,
-		"DELIVERED":  delivered,
-		"READ":       read,
-		"FAILED":     failed,
-		"UNKNOWN":    unknown,
-		"SUPPRESSED": suppressed,
+		"AUTHORISED":       authorised,
+		"QUEUED":           queued,
+		"SUBMITTED":        submitted,
+		"GATEWAY_ACCEPTED": accepted,
+		"SENT":             sent,
+		"DELIVERED":        delivered,
+		"READ":             read,
+		"FAILED":           failed,
+		"UNKNOWN":          unknown,
+		"SUPPRESSED":       suppressed,
 	}
 	d.UnknownOutcomes = unknown
 
@@ -95,7 +96,7 @@ WHERE status IN('SUBMITTING','FAILED_RETRYABLE')`).Scan(&submitting, &retryable)
 		return d, err
 	}
 	// Queue depth represents work that has not yet received a provider acceptance.
-	// GATEWAY_ACCEPTED is reported in submitted totals but is no longer queued work.
+	// GATEWAY_ACCEPTED is reported separately and is no longer queued work.
 	d.QueueDepth = authorised + queued + submitting + retryable
 
 	if err := loadStatusCounts(ctx, r.DB, `SELECT status,count(*) FROM sender_sessions GROUP BY status`, d.Senders); err != nil {
@@ -308,13 +309,16 @@ func (r *PostgreSQLRepository) CampaignReport(ctx context.Context, id string, no
 	if err != nil {
 		return v, err
 	}
-	var a, q, sub, sent, del, read, fail, unk, supp, opt int64
-	metricsErr := r.DB.QueryRowContext(ctx, `SELECT authorised_total,queued_total,submitted_total,sent_total,delivered_total,read_total,failed_total,unknown_total,suppressed_total,opt_out_total FROM campaign_metrics WHERE campaign_id=$1::uuid`, id).Scan(&a, &q, &sub, &sent, &del, &read, &fail, &unk, &supp, &opt)
+	var a, q, sub, accepted, sent, del, read, fail, unk, supp, opt int64
+	metricsErr := r.DB.QueryRowContext(ctx, `SELECT authorised_total,queued_total,submitted_total,gateway_accepted_total,sent_total,delivered_total,read_total,failed_total,unknown_total,suppressed_total FROM campaign_metrics WHERE campaign_id=$1::uuid`, id).Scan(&a, &q, &sub, &accepted, &sent, &del, &read, &fail, &unk, &supp)
 	if metricsErr != nil && !errors.Is(metricsErr, sql.ErrNoRows) {
 		return v, metricsErr
 	}
+	if err := r.DB.QueryRowContext(ctx, `SELECT count(*) FROM campaign_opt_out_metric_events WHERE campaign_id=$1::uuid`, id).Scan(&opt); err != nil {
+		return v, err
+	}
 	v.Audience = map[string]int64{"authorised": a, "suppressed": supp}
-	v.Delivery = map[string]int64{"queued": q, "submitted": sub, "sent": sent, "delivered": del, "read": read}
+	v.Delivery = map[string]int64{"queued": q, "submitted": sub, "gatewayAccepted": accepted, "sent": sent, "delivered": del, "read": read}
 	v.Engagement = map[string]int64{"optOuts": opt}
 	v.Exceptions = map[string]int64{"failed": fail, "unknown": unk}
 	v.Pools = []CampaignPoolReport{}
@@ -338,7 +342,8 @@ WITH latest_plan AS (
 SELECT p.sender_pool_id::text,sp.name,p.gateway_pool_id::text,p.provider,p.engine,p.maximum_recipients,p.reserved_messages_per_minute,p.reserved_hourly_units,p.reserved_daily_units,
  count(cr.id) FILTER (WHERE cr.id IS NOT NULL),
  count(cr.id) FILTER (WHERE cr.status IN('AUTHORISED','QUEUED','CLAIMED')),
- count(cr.id) FILTER (WHERE cr.status IN('SUBMITTING','GATEWAY_ACCEPTED')),
+ count(cr.id) FILTER (WHERE cr.status='SUBMITTING'),
+ count(cr.id) FILTER (WHERE cr.status='GATEWAY_ACCEPTED'),
  count(cr.id) FILTER (WHERE cr.status='SENT'),
  count(cr.id) FILTER (WHERE cr.status='DELIVERED'),
  count(cr.id) FILTER (WHERE cr.status='READ'),
@@ -357,11 +362,11 @@ ORDER BY sp.name,p.sender_pool_id`, id)
 	defer rows.Close()
 	for rows.Next() {
 		var pool CampaignPoolReport
-		var total, queued, submitted, psent, pdelivered, pread, pfailed, punknown int64
-		if err := rows.Scan(&pool.SenderPoolID, &pool.SenderPoolName, &pool.GatewayPoolID, &pool.Provider, &pool.Engine, &pool.MaximumRecipients, &pool.ReservedMessagesPerMinute, &pool.ReservedHourlyUnits, &pool.ReservedDailyUnits, &total, &queued, &submitted, &psent, &pdelivered, &pread, &pfailed, &punknown); err != nil {
+		var total, queued, submitted, paccepted, psent, pdelivered, pread, pfailed, punknown int64
+		if err := rows.Scan(&pool.SenderPoolID, &pool.SenderPoolName, &pool.GatewayPoolID, &pool.Provider, &pool.Engine, &pool.MaximumRecipients, &pool.ReservedMessagesPerMinute, &pool.ReservedHourlyUnits, &pool.ReservedDailyUnits, &total, &queued, &submitted, &paccepted, &psent, &pdelivered, &pread, &pfailed, &punknown); err != nil {
 			return v, err
 		}
-		pool.Recipients = map[string]int64{"total": total, "queued": queued, "submittedOrAccepted": submitted, "sent": psent, "delivered": pdelivered, "read": pread, "failed": pfailed, "unknown": punknown}
+		pool.Recipients = map[string]int64{"total": total, "queued": queued, "submitted": submitted, "gatewayAccepted": paccepted, "sent": psent, "delivered": pdelivered, "read": pread, "failed": pfailed, "unknown": punknown}
 		v.Pools = append(v.Pools, pool)
 	}
 	if err := rows.Err(); err != nil {
@@ -422,13 +427,16 @@ func (r *PostgreSQLRepository) OrganisationPerformanceReport(ctx context.Context
 	if err := rows.Close(); err != nil {
 		return v, err
 	}
-	var authorised, queued, submitted, sent, delivered, read, failed, unknown, suppressed, optOut int64
-	err = r.DB.QueryRowContext(ctx, `SELECT coalesce(sum(m.authorised_total),0),coalesce(sum(m.queued_total),0),coalesce(sum(m.submitted_total),0),coalesce(sum(m.sent_total),0),coalesce(sum(m.delivered_total),0),coalesce(sum(m.read_total),0),coalesce(sum(m.failed_total),0),coalesce(sum(m.unknown_total),0),coalesce(sum(m.suppressed_total),0),coalesce(sum(m.opt_out_total),0) FROM campaigns c LEFT JOIN campaign_metrics m ON m.campaign_id=c.id WHERE c.organisation_id=$1::uuid`, id).Scan(&authorised, &queued, &submitted, &sent, &delivered, &read, &failed, &unknown, &suppressed, &optOut)
+	var authorised, queued, submitted, accepted, sent, delivered, read, failed, unknown, suppressed, optOut int64
+	err = r.DB.QueryRowContext(ctx, `SELECT coalesce(sum(m.authorised_total),0),coalesce(sum(m.queued_total),0),coalesce(sum(m.submitted_total),0),coalesce(sum(m.gateway_accepted_total),0),coalesce(sum(m.sent_total),0),coalesce(sum(m.delivered_total),0),coalesce(sum(m.read_total),0),coalesce(sum(m.failed_total),0),coalesce(sum(m.unknown_total),0),coalesce(sum(m.suppressed_total),0) FROM campaigns c LEFT JOIN campaign_metrics m ON m.campaign_id=c.id WHERE c.organisation_id=$1::uuid`, id).Scan(&authorised, &queued, &submitted, &accepted, &sent, &delivered, &read, &failed, &unknown, &suppressed)
 	if err != nil {
 		return v, err
 	}
+	if err := r.DB.QueryRowContext(ctx, `SELECT count(*) FROM campaign_opt_out_metric_events e JOIN campaigns c ON c.id=e.campaign_id WHERE c.organisation_id=$1::uuid`, id).Scan(&optOut); err != nil {
+		return v, err
+	}
 	v.Recipients = map[string]int64{"authorised": authorised, "suppressed": suppressed, "optOuts": optOut}
-	v.Delivery = map[string]int64{"queued": queued, "submitted": submitted, "sent": sent, "delivered": delivered, "read": read, "failed": failed, "unknown": unknown}
+	v.Delivery = map[string]int64{"queued": queued, "submitted": submitted, "gatewayAccepted": accepted, "sent": sent, "delivered": delivered, "read": read, "failed": failed, "unknown": unknown}
 	commercialRows, err := r.DB.QueryContext(ctx, `SELECT currency,count(*),coalesce(sum(approved_recipients),0),coalesce(sum(total_amount_minor),0) FROM campaign_commercial_approvals WHERE organisation_id=$1::uuid AND status='APPROVED' GROUP BY currency ORDER BY currency`, id)
 	if err != nil {
 		return v, err
@@ -579,7 +587,7 @@ func (r *PostgreSQLRepository) CampaignFinancialReconciliation(ctx context.Conte
 		return v, err
 	}
 	var accepted, sent, delivered, read, failed, unknown int64
-	metricsErr := r.DB.QueryRowContext(ctx, `SELECT submitted_total,sent_total,delivered_total,read_total,failed_total,unknown_total FROM campaign_metrics WHERE campaign_id=$1::uuid`, id).Scan(&accepted, &sent, &delivered, &read, &failed, &unknown)
+	metricsErr := r.DB.QueryRowContext(ctx, `SELECT gateway_accepted_total,sent_total,delivered_total,read_total,failed_total,unknown_total FROM campaign_metrics WHERE campaign_id=$1::uuid`, id).Scan(&accepted, &sent, &delivered, &read, &failed, &unknown)
 	if metricsErr != nil && !errors.Is(metricsErr, sql.ErrNoRows) {
 		return v, metricsErr
 	}

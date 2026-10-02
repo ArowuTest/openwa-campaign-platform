@@ -146,7 +146,8 @@ func (c *PostgreSQLCalculator) Observe(ctx context.Context, campaignID string, o
  SELECT
   count(*) FILTER (WHERE status='AUTHORISED')::bigint AS authorised,
   count(*) FILTER (WHERE status IN ('QUEUED','CLAIMED'))::bigint AS queued,
-  count(*) FILTER (WHERE status IN ('SUBMITTING','GATEWAY_ACCEPTED'))::bigint AS submitted,
+  count(*) FILTER (WHERE status='SUBMITTING')::bigint AS submitted,
+  count(*) FILTER (WHERE status='GATEWAY_ACCEPTED')::bigint AS gateway_accepted,
   count(*) FILTER (WHERE status='SENT')::bigint AS sent,
   count(*) FILTER (WHERE status='DELIVERED')::bigint AS delivered,
   count(*) FILTER (WHERE status='READ')::bigint AS read,
@@ -157,26 +158,26 @@ func (c *PostgreSQLCalculator) Observe(ctx context.Context, campaignID string, o
 ), excluded AS (
  SELECT count(*)::bigint AS total FROM campaign_release_exclusions WHERE campaign_id=$1::uuid
 ), stored AS (
- SELECT authorised_total,queued_total,submitted_total,sent_total,delivered_total,
+ SELECT authorised_total,queued_total,submitted_total,gateway_accepted_total,sent_total,delivered_total,
         read_total,failed_total,unknown_total,suppressed_total,excluded_final_check_total
  FROM campaign_metrics WHERE campaign_id=$1::uuid
 )
-SELECT coalesce(canonical.authorised,0),coalesce(canonical.queued,0),coalesce(canonical.submitted,0),
+SELECT coalesce(canonical.authorised,0),coalesce(canonical.queued,0),coalesce(canonical.submitted,0),coalesce(canonical.gateway_accepted,0),
        coalesce(canonical.sent,0),coalesce(canonical.delivered,0),coalesce(canonical.read,0),
        coalesce(canonical.failed,0),coalesce(canonical.unknown,0),coalesce(canonical.suppressed,0),
        coalesce(excluded.total,0),
-       coalesce(stored.authorised_total,0),coalesce(stored.queued_total,0),coalesce(stored.submitted_total,0),
+       coalesce(stored.authorised_total,0),coalesce(stored.queued_total,0),coalesce(stored.submitted_total,0),coalesce(stored.gateway_accepted_total,0),
        coalesce(stored.sent_total,0),coalesce(stored.delivered_total,0),coalesce(stored.read_total,0),
        coalesce(stored.failed_total,0),coalesce(stored.unknown_total,0),coalesce(stored.suppressed_total,0),
        coalesce(stored.excluded_final_check_total,0)
 FROM canonical CROSS JOIN excluded LEFT JOIN stored ON true`
 	result := Observation{CampaignID: campaignID, ObservedAt: observedAt.UTC()}
 	err := c.DB.QueryRowContext(ctx, query, campaignID).Scan(
-		&result.Canonical.AuthorisedTotal, &result.Canonical.QueuedTotal, &result.Canonical.SubmittedTotal,
+		&result.Canonical.AuthorisedTotal, &result.Canonical.QueuedTotal, &result.Canonical.SubmittedTotal, &result.Canonical.GatewayAcceptedTotal,
 		&result.Canonical.SentTotal, &result.Canonical.DeliveredTotal, &result.Canonical.ReadTotal,
 		&result.Canonical.FailedTotal, &result.Canonical.UnknownTotal, &result.Canonical.SuppressedTotal,
 		&result.Canonical.ExcludedFinalCheckTotal,
-		&result.Stored.AuthorisedTotal, &result.Stored.QueuedTotal, &result.Stored.SubmittedTotal,
+		&result.Stored.AuthorisedTotal, &result.Stored.QueuedTotal, &result.Stored.SubmittedTotal, &result.Stored.GatewayAcceptedTotal,
 		&result.Stored.SentTotal, &result.Stored.DeliveredTotal, &result.Stored.ReadTotal,
 		&result.Stored.FailedTotal, &result.Stored.UnknownTotal, &result.Stored.SuppressedTotal,
 		&result.Stored.ExcludedFinalCheckTotal,

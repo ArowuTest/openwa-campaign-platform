@@ -137,10 +137,11 @@ type ConsentEvent struct {
 }
 
 var (
-	ErrGrantNotFound        = errors.New("consent grant not found")
-	ErrSuppressionNotFound  = errors.New("suppression not found")
-	ErrLedgerConflict       = errors.New("consent ledger version conflict")
-	ErrLedgerReplayConflict = errors.New("idempotency key reused with different consent evidence")
+	ErrGrantNotFound                 = errors.New("consent grant not found")
+	ErrSuppressionNotFound           = errors.New("suppression not found")
+	ErrLedgerConflict                = errors.New("consent ledger version conflict")
+	ErrLedgerReplayConflict          = errors.New("idempotency key reused with different consent evidence")
+	ErrAtomicOptOutMetricUnavailable = errors.New("atomic opt-out metric persistence is unavailable")
 )
 
 type LedgerRepository interface {
@@ -149,6 +150,10 @@ type LedgerRepository interface {
 	CreateSuppression(context.Context, Suppression) (Suppression, bool, error)
 	RevokeSuppression(context.Context, string, RevokeSuppressionInput, time.Time) (Suppression, error)
 	Events(context.Context, string, int) ([]ConsentEvent, error)
+}
+
+type AtomicOptOutMetricRepository interface {
+	CreateSuppressionWithOptOutMetric(context.Context, Suppression, string, time.Time) (Suppression, bool, error)
 }
 type LedgerService struct {
 	repository LedgerRepository
@@ -180,6 +185,32 @@ func (s *LedgerService) CreateSuppression(ctx context.Context, in SuppressionInp
 		return Suppression{}, false, err
 	}
 	return s.repository.CreateSuppression(ctx, v)
+}
+
+func (s *LedgerService) SupportsAtomicOptOutMetric() bool {
+	if s == nil || s.repository == nil {
+		return false
+	}
+	_, ok := s.repository.(AtomicOptOutMetricRepository)
+	return ok
+}
+
+func (s *LedgerService) CreateSuppressionWithOptOutMetric(ctx context.Context, in SuppressionInput, campaignID string, now time.Time) (Suppression, bool, error) {
+	if s == nil || s.repository == nil {
+		return Suppression{}, false, errors.New("consent ledger repository is required")
+	}
+	if strings.TrimSpace(campaignID) == "" || now.IsZero() {
+		return Suppression{}, false, errors.New("campaign ID and metric time are required")
+	}
+	repository, ok := s.repository.(AtomicOptOutMetricRepository)
+	if !ok {
+		return Suppression{}, false, ErrAtomicOptOutMetricUnavailable
+	}
+	v, err := newSuppression(in, now.UTC())
+	if err != nil {
+		return Suppression{}, false, err
+	}
+	return repository.CreateSuppressionWithOptOutMetric(ctx, v, strings.TrimSpace(campaignID), now.UTC())
 }
 func (s *LedgerService) RevokeSuppression(ctx context.Context, id string, in RevokeSuppressionInput) (Suppression, error) {
 	return s.repository.RevokeSuppression(ctx, id, in, s.clock().UTC())

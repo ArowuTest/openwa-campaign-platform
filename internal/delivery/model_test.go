@@ -77,10 +77,21 @@ func TestIdempotencyKeyIsDeterministic(t *testing.T) {
 	}
 }
 
+func TestMetricsExposeGatewayAcceptedSeparatelyFromSubmitting(t *testing.T) {
+	metrics := Metrics{}.Move("", StatusSubmitting)
+	if metrics.SubmittedTotal != 1 || metrics.GatewayAcceptedTotal != 0 {
+		t.Fatalf("submitting metrics=%+v", metrics)
+	}
+	metrics = metrics.Move(StatusSubmitting, StatusGatewayAccepted)
+	if metrics.SubmittedTotal != 0 || metrics.GatewayAcceptedTotal != 1 {
+		t.Fatalf("gateway accepted metrics=%+v", metrics)
+	}
+}
+
 func TestMetricsMoveUsesCurrentStateNotEventTotals(t *testing.T) {
-	metrics := Metrics{SubmittedTotal: 1}
+	metrics := Metrics{GatewayAcceptedTotal: 1}
 	metrics = metrics.Move(StatusGatewayAccepted, StatusDelivered)
-	if metrics.SubmittedTotal != 0 || metrics.DeliveredTotal != 1 {
+	if metrics.GatewayAcceptedTotal != 0 || metrics.DeliveredTotal != 1 {
 		t.Fatalf("unexpected metrics: %+v", metrics)
 	}
 }

@@ -53,11 +53,16 @@ type InboundEventReference struct {
 	ProviderMessageID       string
 }
 
+type OptOutMetricRecorder interface {
+	RecordOptOut(context.Context, string, string, time.Time) error
+}
+
 type OptOutProcessor struct {
 	Deliveries *delivery.Service
 	Ledger     *LedgerService
 	Policy     OptOutPolicy
 	Policies   OptOutPolicyProvider
+	Metrics    OptOutMetricRecorder
 	ActorID    string
 	Clock      func() time.Time
 	Inbox      *inbound.Service
@@ -145,10 +150,22 @@ func (p *OptOutProcessor) processResolved(ctx context.Context, recipient Inbound
 	if p.Clock != nil {
 		now = p.Clock().UTC()
 	}
-	suppression, created, err := p.Ledger.CreateSuppression(ctx, SuppressionInput{
+	suppressionInput := SuppressionInput{
 		ContactID: recipient.ContactID, Scope: SuppressionGlobal, Reason: "INBOUND_STOP", EffectiveAt: &now,
 		SourceReference: strings.TrimSpace(sourceReference), CreatedBy: actor, ClientRequestID: "gateway-inbound:" + strings.TrimSpace(eventID),
-	})
+	}
+	campaignID := strings.TrimSpace(recipient.CampaignID)
+	var suppression Suppression
+	var created bool
+	var err error
+	if campaignID != "" && p.Ledger.SupportsAtomicOptOutMetric() {
+		suppression, created, err = p.Ledger.CreateSuppressionWithOptOutMetric(ctx, suppressionInput, campaignID, now)
+	} else {
+		suppression, created, err = p.Ledger.CreateSuppression(ctx, suppressionInput)
+		if err == nil && p.Metrics != nil && campaignID != "" {
+			err = p.Metrics.RecordOptOut(ctx, campaignID, suppression.ID, now)
+		}
+	}
 	if err != nil {
 		return OptOutResult{}, err
 	}

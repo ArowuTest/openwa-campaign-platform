@@ -108,18 +108,19 @@ func (r *PostgreSQLRepository) ApplyEvent(ctx context.Context, id string, event 
 		}
 		delta := Delta(current.Status, next.Status)
 		_, err = tx.ExecContext(ctx, `
-INSERT INTO campaign_metrics(campaign_id,updated_at) VALUES($1,$11)
+INSERT INTO campaign_metrics(campaign_id,updated_at) VALUES($1,$12)
 ON CONFLICT (campaign_id) DO UPDATE SET
  authorised_total=GREATEST(0,campaign_metrics.authorised_total+$2),
  queued_total=GREATEST(0,campaign_metrics.queued_total+$3),
  submitted_total=GREATEST(0,campaign_metrics.submitted_total+$4),
- sent_total=GREATEST(0,campaign_metrics.sent_total+$5),
- delivered_total=GREATEST(0,campaign_metrics.delivered_total+$6),
- read_total=GREATEST(0,campaign_metrics.read_total+$7),
- failed_total=GREATEST(0,campaign_metrics.failed_total+$8),
- unknown_total=GREATEST(0,campaign_metrics.unknown_total+$9),
- suppressed_total=GREATEST(0,campaign_metrics.suppressed_total+$10),
- updated_at=$11`, current.CampaignID, delta.AuthorisedTotal, delta.QueuedTotal, delta.SubmittedTotal, delta.SentTotal, delta.DeliveredTotal, delta.ReadTotal, delta.FailedTotal, delta.UnknownTotal, delta.SuppressedTotal, next.UpdatedAt)
+ gateway_accepted_total=GREATEST(0,campaign_metrics.gateway_accepted_total+$5),
+ sent_total=GREATEST(0,campaign_metrics.sent_total+$6),
+ delivered_total=GREATEST(0,campaign_metrics.delivered_total+$7),
+ read_total=GREATEST(0,campaign_metrics.read_total+$8),
+ failed_total=GREATEST(0,campaign_metrics.failed_total+$9),
+ unknown_total=GREATEST(0,campaign_metrics.unknown_total+$10),
+ suppressed_total=GREATEST(0,campaign_metrics.suppressed_total+$11),
+ updated_at=$12`, current.CampaignID, delta.AuthorisedTotal, delta.QueuedTotal, delta.SubmittedTotal, delta.GatewayAcceptedTotal, delta.SentTotal, delta.DeliveredTotal, delta.ReadTotal, delta.FailedTotal, delta.UnknownTotal, delta.SuppressedTotal, next.UpdatedAt)
 		if err != nil {
 			return Recipient{}, false, fmt.Errorf("update campaign metrics: %w", err)
 		}

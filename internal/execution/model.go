@@ -165,8 +165,8 @@ const (
 )
 
 type Metrics struct {
-	Authorised, Queued, Submitted, Sent, Delivered, Read, Failed, Unknown, Suppressed int64
-	Pending                                                                           int64
+	Authorised, Queued, Submitted, GatewayAccepted, Sent, Delivered, Read, Failed, Unknown, Suppressed int64
+	Pending                                                                                            int64
 }
 type CompletionAssessment struct {
 	CampaignID  string          `json:"campaignId"`
@@ -187,8 +187,8 @@ func AssessCompletion(campaignID string, m Metrics, now time.Time) (CompletionAs
 	}
 	terminal := m.Sent + m.Delivered + m.Read + m.Failed + m.Unknown + m.Suppressed
 	outstanding := m.Pending
-	if outstanding == 0 && (m.Authorised > 0 || m.Queued > 0 || m.Submitted > 0) {
-		outstanding = m.Authorised + m.Queued + m.Submitted
+	if outstanding == 0 && (m.Authorised > 0 || m.Queued > 0 || m.Submitted > 0 || m.GatewayAccepted > 0) {
+		outstanding = m.Authorised + m.Queued + m.Submitted + m.GatewayAccepted
 	}
 	out := CompletionAssessment{CampaignID: campaignID, Terminal: terminal, Outstanding: outstanding, Failed: m.Failed, Unknown: m.Unknown, AssessedAt: now.UTC(), State: CompletionInProgress}
 	if outstanding == 0 {

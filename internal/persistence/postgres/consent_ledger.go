@@ -10,6 +10,8 @@ import (
 
 type ConsentLedgerRepository struct{ DB *sql.DB }
 
+var _ consent.AtomicOptOutMetricRepository = (*ConsentLedgerRepository)(nil)
+
 func (r *ConsentLedgerRepository) CreateGrant(ctx context.Context, v consent.Grant) (consent.Grant, bool, error) {
 	if r.DB == nil {
 		return consent.Grant{}, false, errors.New("database is required")
@@ -90,8 +92,41 @@ func (r *ConsentLedgerRepository) CreateSuppression(ctx context.Context, v conse
 		return consent.Suppression{}, false, err
 	}
 	defer tx.Rollback()
+	suppression, created, err := r.createSuppressionTx(ctx, tx, v)
+	if err != nil {
+		return consent.Suppression{}, false, err
+	}
+	if err = tx.Commit(); err != nil {
+		return consent.Suppression{}, false, err
+	}
+	return suppression, created, nil
+}
+
+func (r *ConsentLedgerRepository) CreateSuppressionWithOptOutMetric(ctx context.Context, v consent.Suppression, campaignID string, now time.Time) (consent.Suppression, bool, error) {
+	if r.DB == nil {
+		return consent.Suppression{}, false, errors.New("database is required")
+	}
+	tx, err := r.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return consent.Suppression{}, false, err
+	}
+	defer tx.Rollback()
+	suppression, created, err := r.createSuppressionTx(ctx, tx, v)
+	if err != nil {
+		return consent.Suppression{}, false, err
+	}
+	if err := consent.RecordOptOutMetric(ctx, tx, campaignID, suppression.ID, now); err != nil {
+		return consent.Suppression{}, false, err
+	}
+	if err = tx.Commit(); err != nil {
+		return consent.Suppression{}, false, err
+	}
+	return suppression, created, nil
+}
+
+func (r *ConsentLedgerRepository) createSuppressionTx(ctx context.Context, tx *sql.Tx, v consent.Suppression) (consent.Suppression, bool, error) {
 	var id, fingerprint string
-	err = tx.QueryRowContext(ctx, `SELECT id::text,request_fingerprint FROM suppressions WHERE created_by=$1::uuid AND client_request_id=$2`, v.CreatedBy, v.ClientRequestID).Scan(&id, &fingerprint)
+	err := tx.QueryRowContext(ctx, `SELECT id::text,request_fingerprint FROM suppressions WHERE created_by=$1::uuid AND client_request_id=$2`, v.CreatedBy, v.ClientRequestID).Scan(&id, &fingerprint)
 	if err == nil {
 		if fingerprint != v.RequestFingerprint {
 			return consent.Suppression{}, false, consent.ErrLedgerReplayConflict
@@ -107,9 +142,6 @@ func (r *ConsentLedgerRepository) CreateSuppression(ctx context.Context, v conse
 		return consent.Suppression{}, false, err
 	}
 	if err = insertConsentEvent(ctx, tx, v.ContactID, "", v.ID, "SUPPRESSION_CREATED", v.CreatedBy, v.Reason, v.SourceReference, v.CreatedAt); err != nil {
-		return consent.Suppression{}, false, err
-	}
-	if err = tx.Commit(); err != nil {
 		return consent.Suppression{}, false, err
 	}
 	return v, true, nil

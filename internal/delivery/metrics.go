@@ -4,6 +4,7 @@ type Metrics struct {
 	AuthorisedTotal         int64 `json:"authorisedTotal"`
 	QueuedTotal             int64 `json:"queuedTotal"`
 	SubmittedTotal          int64 `json:"submittedTotal"`
+	GatewayAcceptedTotal    int64 `json:"gatewayAcceptedTotal"`
 	SentTotal               int64 `json:"sentTotal"`
 	DeliveredTotal          int64 `json:"deliveredTotal"`
 	ReadTotal               int64 `json:"readTotal"`
@@ -27,8 +28,10 @@ func (m *Metrics) add(status Status, delta int64) {
 		m.AuthorisedTotal += delta
 	case StatusQueued, StatusClaimed:
 		m.QueuedTotal += delta
-	case StatusSubmitting, StatusGatewayAccepted:
+	case StatusSubmitting:
 		m.SubmittedTotal += delta
+	case StatusGatewayAccepted:
+		m.GatewayAcceptedTotal += delta
 	case StatusSent:
 		m.SentTotal += delta
 	case StatusDelivered:

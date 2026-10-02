@@ -21,7 +21,7 @@
     "pitr_required": true,
     "backup_required": true,
     "restore_rehearsal_required": true,
-    "status": "PROVISIONED_PITR_ENABLED_PENDING_ROLE_MIGRATION_RESTORE_EVIDENCE",
+    "status": "PROVISIONED_PITR_ENABLED_MIGRATED_PENDING_LOGIN_ROLE_RESTORE_EVIDENCE",
     "service_id": "cc26de87-8b13-408c-b750-42e35ebb5f52",
     "engine_major_version": 18,
     "image": "ghcr.io/railwayapp-templates/postgres-ssl:18",
@@ -65,6 +65,78 @@
         "archiver_status": "PENDING_RAILWAY_SSH_KEY",
         "reason": "Railway CLI PITR live coverage and archiver probe requires a local SSH key; service-level PITR is enabled and bucket-wired."
       }
+    },
+    "schema_apply": {
+      "status": "APPLIED",
+      "applied_at": "2026-10-02T20:24:55+01:00",
+      "method": "railway-ssh-psql-stdin",
+      "bootstrap_pre": "PASS",
+      "migrations_applied": 93,
+      "bootstrap_post": "PASS",
+      "schema_summary": {
+        "tables": 142,
+        "indexes": 484,
+        "constraints": 2207,
+        "stable_service_roles": 7,
+        "required_relations": {
+          "campaign_recipients": "present",
+          "gateway_runtime_nonces": "present",
+          "retention_jobs": "present"
+        }
+      }
+    },
+    "service_roles": {
+      "status": "STABLE_NOLOGIN_ROLES_RECONCILED",
+      "verified_at": "2026-10-02T20:30:00+01:00",
+      "stable_roles": 7,
+      "login_roles": 0,
+      "superuser_roles": 0,
+      "createdb_roles": 0,
+      "createrole_roles": 0,
+      "roles": {
+        "campaign_audience_worker": {
+          "login": false,
+          "superuser": false,
+          "createdb": false,
+          "createrole": false
+        },
+        "campaign_campaign_worker": {
+          "login": false,
+          "superuser": false,
+          "createdb": false,
+          "createrole": false
+        },
+        "campaign_control_api": {
+          "login": false,
+          "superuser": false,
+          "createdb": false,
+          "createrole": false
+        },
+        "campaign_export_worker": {
+          "login": false,
+          "superuser": false,
+          "createdb": false,
+          "createrole": false
+        },
+        "campaign_inbound_governance_worker": {
+          "login": false,
+          "superuser": false,
+          "createdb": false,
+          "createrole": false
+        },
+        "campaign_metrics_worker": {
+          "login": false,
+          "superuser": false,
+          "createdb": false,
+          "createrole": false
+        },
+        "campaign_platform_governance_worker": {
+          "login": false,
+          "superuser": false,
+          "createdb": false,
+          "createrole": false
+        }
+      }
     }
   },
   "forbidden_database_targets": [
@@ -99,12 +171,13 @@
     "database monitoring and alerting configured"
   ],
   "explicit_non_claims": [
-    "database has been provisioned, but no application DATABASE_URL values are stored in source",
-    "no service-specific login roles or stable privilege role grants have been created yet",
+    "database has been provisioned, schema migrated and stable NOLOGIN service roles reconciled, but no application DATABASE_URL values are stored in source",
+    "no rotatable service LOGIN roles have been created yet",
     "no backend service has been wired to production database credentials yet",
-    "no production migration has run",
+    "production migration has run on the fresh Railway database; accepted-baseline upgrade-path rehearsal is still pending",
     "no backup restore rehearsal has been completed",
-    "PITR is enabled and bucket-wired, but live coverage and archiver probes are pending Railway SSH key setup",
+    "PITR is enabled and bucket-wired, but live coverage and archiver probes are pending Railway SSH-key-supported coverage evidence",
+    "Railway on-demand backup create returned OAUTH_INSUFFICIENT_GRANT and remains open DR evidence",
     "no release gate is closed",
     "Supabase is not part of V1",
     "Hostinger remains gateway/session runtime only"

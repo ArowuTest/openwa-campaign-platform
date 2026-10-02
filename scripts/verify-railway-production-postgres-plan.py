@@ -24,17 +24,13 @@ EXPECTED_ROLES = {
     "platform-governance-worker": "campaign_platform_governance_worker",
 }
 SECRET_VALUE_KEYS = {"password", "secret", "token", "database_url", "dsn", "credential", "connection_string"}
-ALLOWED_PLACEHOLDERS = (
-    "external-secret",
-    "railway-reference",
-    "required",
-    "stable-nologin",
-    "non-secret",
-)
+ALLOWED_PLACEHOLDERS = ("external-secret", "railway-reference", "required", "stable-nologin", "non-secret")
 ALLOWED_DATABASE_STATUSES = {
     "PENDING_PROVISIONING",
     "PROVISIONED_PITR_ENABLED_PENDING_ROLE_MIGRATION_RESTORE_EVIDENCE",
+    "PROVISIONED_PITR_ENABLED_MIGRATED_PENDING_LOGIN_ROLE_RESTORE_EVIDENCE",
 }
+REQUIRED_RELATIONS = ("campaign_recipients", "gateway_runtime_nonces", "retention_jobs")
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -67,7 +63,7 @@ def contains_secret_value(value: object) -> bool:
 
 
 def validate_provisioned_database(database: dict[str, Any], evidence: dict[str, Any], errors: list[str]) -> None:
-    if database.get("status") != "PROVISIONED_PITR_ENABLED_PENDING_ROLE_MIGRATION_RESTORE_EVIDENCE":
+    if str(database.get("status", "")).startswith("PENDING"):
         return
     if not UUID.fullmatch(str(database.get("service_id", ""))):
         errors.append("provisioned Postgres service_id must be a UUID")
@@ -108,9 +104,9 @@ def validate_provisioned_database(database: dict[str, Any], evidence: dict[str, 
         errors.append("PITR bucket identity must be recorded")
     live_probe = pitr.get("live_probe", {})
     if live_probe.get("coverage_status") != "PENDING_RAILWAY_SSH_KEY":
-        errors.append("PITR live coverage probe must remain pending until Railway SSH key evidence exists")
+        errors.append("PITR live coverage probe must remain pending until Railway SSH-key coverage evidence exists")
     if live_probe.get("archiver_status") != "PENDING_RAILWAY_SSH_KEY":
-        errors.append("PITR archiver probe must remain pending until Railway SSH key evidence exists")
+        errors.append("PITR archiver probe must remain pending until Railway SSH-key coverage evidence exists")
 
     if evidence.get("service", {}).get("id") != database.get("service_id"):
         errors.append("Postgres evidence service id must match plan")
@@ -118,6 +114,49 @@ def validate_provisioned_database(database: dict[str, Any], evidence: dict[str, 
         errors.append("Postgres evidence must record PITR enabled")
     if evidence.get("public_exposure") != public_exposure:
         errors.append("Postgres evidence public exposure must match plan")
+
+
+def validate_migrated_database(database: dict[str, Any], evidence: dict[str, Any], errors: list[str]) -> None:
+    if database.get("status") != "PROVISIONED_PITR_ENABLED_MIGRATED_PENDING_LOGIN_ROLE_RESTORE_EVIDENCE":
+        return
+    schema_apply = database.get("schema_apply", {})
+    evidence_apply = evidence.get("schema_apply", {})
+    if schema_apply != evidence_apply:
+        errors.append("schema apply evidence must match plan")
+    if schema_apply.get("status") != "APPLIED":
+        errors.append("schema apply status must be APPLIED")
+    if schema_apply.get("bootstrap_pre") != "PASS" or schema_apply.get("bootstrap_post") != "PASS":
+        errors.append("service-role bootstrap must pass before and after migrations")
+    if schema_apply.get("migrations_applied") != 93:
+        errors.append("production schema apply must record 93 migrations")
+    summary = schema_apply.get("schema_summary", {})
+    if summary.get("tables") != 142 or summary.get("indexes") != 484 or summary.get("constraints") != 2207:
+        errors.append("production schema summary drifted from accepted migration output")
+    if summary.get("stable_service_roles") != 7:
+        errors.append("production schema summary must record seven stable service roles")
+    required_relations = summary.get("required_relations", {})
+    for relation in REQUIRED_RELATIONS:
+        if required_relations.get(relation) != "present":
+            errors.append(f"required relation is not present after migrations: {relation}")
+
+    roles = database.get("service_roles", {})
+    evidence_roles = evidence.get("service_roles", {})
+    if roles != evidence_roles:
+        errors.append("service role evidence must match plan")
+    if roles.get("status") != "STABLE_NOLOGIN_ROLES_RECONCILED":
+        errors.append("stable service roles must be reconciled")
+    if roles.get("stable_roles") != 7 or roles.get("login_roles") != 0:
+        errors.append("stable service roles must be seven NOLOGIN roles")
+    if roles.get("superuser_roles") != 0 or roles.get("createdb_roles") != 0 or roles.get("createrole_roles") != 0:
+        errors.append("stable service roles must not have elevated role attributes")
+    for role_name, attributes in roles.get("roles", {}).items():
+        if role_name not in set(EXPECTED_ROLES.values()):
+            errors.append(f"unexpected stable service role in evidence: {role_name}")
+            continue
+        if attributes.get("login") is not False or attributes.get("superuser") is not False:
+            errors.append(f"stable service role must be NOLOGIN and non-superuser: {role_name}")
+        if attributes.get("createdb") is not False or attributes.get("createrole") is not False:
+            errors.append(f"stable service role must not create DBs or roles: {role_name}")
 
 
 def validate() -> list[str]:
@@ -167,6 +206,7 @@ def validate() -> list[str]:
     if database.get("public_access") != "disabled-by-default":
         errors.append("production Postgres public access must be disabled by default")
     validate_provisioned_database(database, evidence, errors)
+    validate_migrated_database(database, evidence, errors)
 
     forbidden = set(plan.get("forbidden_database_targets", []))
     for target in ("hostinger-authoritative-postgres", "plain-docker-postgres-without-managed-volume-and-pitr", "supabase-v1-primary"):
@@ -182,7 +222,15 @@ def validate() -> list[str]:
         errors.append("production Postgres plan/evidence must not contain credential values")
 
     non_claims = " ".join(plan.get("explicit_non_claims", [])).lower()
-    for required in ("no application database_url", "no service-specific login roles", "no production migration", "no backup restore rehearsal", "no release gate"):
+    for required in (
+        "no application database_url",
+        "no rotatable service login roles",
+        "no backend service has been wired",
+        "accepted-baseline upgrade-path",
+        "no backup restore rehearsal",
+        "on-demand backup create returned oauth_insufficient_grant",
+        "no release gate",
+    ):
         if required not in non_claims:
             errors.append(f"missing explicit non-claim: {required}")
 

@@ -74,5 +74,85 @@
     "no release gate is closed",
     "Supabase is not part of V1",
     "Hostinger remains gateway/session runtime only"
+  ],
+  "schema_apply": {
+    "status": "APPLIED",
+    "applied_at": "2026-10-02T20:24:55+01:00",
+    "method": "railway-ssh-psql-stdin",
+    "bootstrap_pre": "PASS",
+    "migrations_applied": 93,
+    "bootstrap_post": "PASS",
+    "schema_summary": {
+      "tables": 142,
+      "indexes": 484,
+      "constraints": 2207,
+      "stable_service_roles": 7,
+      "required_relations": {
+        "campaign_recipients": "present",
+        "gateway_runtime_nonces": "present",
+        "retention_jobs": "present"
+      }
+    }
+  },
+  "service_roles": {
+    "status": "STABLE_NOLOGIN_ROLES_RECONCILED",
+    "verified_at": "2026-10-02T20:30:00+01:00",
+    "stable_roles": 7,
+    "login_roles": 0,
+    "superuser_roles": 0,
+    "createdb_roles": 0,
+    "createrole_roles": 0,
+    "roles": {
+      "campaign_audience_worker": {
+        "login": false,
+        "superuser": false,
+        "createdb": false,
+        "createrole": false
+      },
+      "campaign_campaign_worker": {
+        "login": false,
+        "superuser": false,
+        "createdb": false,
+        "createrole": false
+      },
+      "campaign_control_api": {
+        "login": false,
+        "superuser": false,
+        "createdb": false,
+        "createrole": false
+      },
+      "campaign_export_worker": {
+        "login": false,
+        "superuser": false,
+        "createdb": false,
+        "createrole": false
+      },
+      "campaign_inbound_governance_worker": {
+        "login": false,
+        "superuser": false,
+        "createdb": false,
+        "createrole": false
+      },
+      "campaign_metrics_worker": {
+        "login": false,
+        "superuser": false,
+        "createdb": false,
+        "createrole": false
+      },
+      "campaign_platform_governance_worker": {
+        "login": false,
+        "superuser": false,
+        "createdb": false,
+        "createrole": false
+      }
+    }
+  },
+  "open_items": [
+    "rotatable service LOGIN roles and per-service DATABASE_URL secrets are not created yet",
+    "backend Railway services are not wired to production database credentials yet",
+    "accepted-baseline to current-candidate upgrade-path migration rehearsal is still pending",
+    "Railway on-demand backup create failed with OAUTH_INSUFFICIENT_GRANT; restore rehearsal is still pending",
+    "PITR live coverage and archiver probe still need Railway SSH-key-supported evidence",
+    "RG-002 remains BLOCKED_EXTERNAL until migration, role, backup/restore and service-wiring evidence is complete"
   ]
 }

@@ -31,7 +31,7 @@ class RailwayProductionPostgresPlanTests(unittest.TestCase):
         plan = self.load_json(PLAN)
         database = plan["database"]
         self.assertEqual(database["provider"], "railway-managed-postgresql")
-        self.assertEqual(database["status"], "PROVISIONED_PITR_ENABLED_PENDING_ROLE_MIGRATION_RESTORE_EVIDENCE")
+        self.assertEqual(database["status"], "PROVISIONED_PITR_ENABLED_MIGRATED_PENDING_LOGIN_ROLE_RESTORE_EVIDENCE")
         self.assertEqual(database["service_id"], "cc26de87-8b13-408c-b750-42e35ebb5f52")
         self.assertEqual(database["name"], "Postgres")
         self.assertGreaterEqual(database["engine_major_version"], database["minimum_major_version"])
@@ -66,6 +66,39 @@ class RailwayProductionPostgresPlanTests(unittest.TestCase):
         self.assertEqual(pitr["live_probe"]["coverage_status"], "PENDING_RAILWAY_SSH_KEY")
         self.assertEqual(pitr["live_probe"]["archiver_status"], "PENDING_RAILWAY_SSH_KEY")
 
+    def test_plan_records_successful_production_schema_apply(self):
+        plan = self.load_json(PLAN)
+        apply = plan["database"]["schema_apply"]
+        self.assertEqual(apply["status"], "APPLIED")
+        self.assertEqual(apply["bootstrap_pre"], "PASS")
+        self.assertEqual(apply["bootstrap_post"], "PASS")
+        self.assertEqual(apply["migrations_applied"], 93)
+        summary = apply["schema_summary"]
+        self.assertEqual(summary["tables"], 142)
+        self.assertEqual(summary["indexes"], 484)
+        self.assertEqual(summary["constraints"], 2207)
+        self.assertEqual(summary["stable_service_roles"], 7)
+        self.assertEqual(summary["required_relations"], {
+            "campaign_recipients": "present",
+            "gateway_runtime_nonces": "present",
+            "retention_jobs": "present",
+        })
+
+    def test_plan_records_stable_nologin_roles_only(self):
+        plan = self.load_json(PLAN)
+        roles = plan["database"]["service_roles"]
+        self.assertEqual(roles["status"], "STABLE_NOLOGIN_ROLES_RECONCILED")
+        self.assertEqual(roles["stable_roles"], 7)
+        self.assertEqual(roles["login_roles"], 0)
+        self.assertEqual(roles["superuser_roles"], 0)
+        self.assertEqual(roles["createdb_roles"], 0)
+        self.assertEqual(roles["createrole_roles"], 0)
+        for attributes in roles["roles"].values():
+            self.assertFalse(attributes["login"])
+            self.assertFalse(attributes["superuser"])
+            self.assertFalse(attributes["createdb"])
+            self.assertFalse(attributes["createrole"])
+
     def test_plan_has_service_role_bindings_for_all_backend_services(self):
         plan = self.load_json(PLAN)
         self.assertEqual(plan["service_role_bindings"], {
@@ -87,9 +120,11 @@ class RailwayProductionPostgresPlanTests(unittest.TestCase):
         self.assertNotIn("password=", raw)
         non_claims = " ".join(plan["explicit_non_claims"]).lower()
         self.assertIn("no application database_url", non_claims)
-        self.assertIn("no service-specific login roles", non_claims)
-        self.assertIn("no production migration", non_claims)
+        self.assertIn("no rotatable service login roles", non_claims)
+        self.assertIn("no backend service has been wired", non_claims)
+        self.assertIn("accepted-baseline upgrade-path", non_claims)
         self.assertIn("no backup restore rehearsal", non_claims)
+        self.assertIn("on-demand backup create returned oauth_insufficient_grant", non_claims)
         self.assertIn("no release gate", non_claims)
 
     def test_evidence_matches_plan(self):
@@ -101,6 +136,8 @@ class RailwayProductionPostgresPlanTests(unittest.TestCase):
         self.assertEqual(evidence["private_network"], database["private_network"])
         self.assertEqual(evidence["public_exposure"], database["public_exposure"])
         self.assertEqual(evidence["pitr"], database["pitr"])
+        self.assertEqual(evidence["schema_apply"], database["schema_apply"])
+        self.assertEqual(evidence["service_roles"], database["service_roles"])
 
     def test_cli_verifier_accepts_current_plan(self):
         result = subprocess.run(

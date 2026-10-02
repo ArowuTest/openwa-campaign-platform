@@ -17,6 +17,7 @@ python3 scripts/verify_openapi_routes.py
 python3 scripts/verify-deployment-topology.py
 python3 scripts/verify-deployment-readiness.py
 python3 scripts/verify-railway-production-shell.py
+python3 scripts/verify-railway-production-variable-plan.py
 ./scripts/release-security-check.sh
 python3 scripts/generate-traceability.py
 git diff --exit-code -- docs/requirements/TRACEABILITY.md docs/requirements/traceability.json

@@ -43,13 +43,16 @@ deployment-readiness:
 railway-production-shell:
 	python3 scripts/verify-railway-production-shell.py
 
+railway-production-variable-plan:
+	python3 scripts/verify-railway-production-variable-plan.py
+
 governance-test:
 	python3 -m unittest discover -s tests/governance -p "test_*.py"
 
 release-gate:
 	python3 scripts/verify-release-readiness.py --production-candidate
 
-check: fmt test race vet build frontend-syntax traceability governance-check governance-test deployment-topology deployment-readiness railway-production-shell
+check: fmt test race vet build frontend-syntax traceability governance-check governance-test deployment-topology deployment-readiness railway-production-shell railway-production-variable-plan
 
 tree:
 	find . -maxdepth 4 -type f | sort

@@ -1,0 +1,103 @@
+{
+  "schema_version": 1,
+  "evidence_type": "railway-production-variable-plan",
+  "observed_at": "2026-10-02T16:35:00+01:00",
+  "railway_project": {
+    "id": "8633a0b9-3b15-4c8d-b6f2-0306b284f4dd",
+    "name": "openwa-prod"
+  },
+  "environment": {
+    "id": "546fd711-cf80-4402-89b0-cb3ae5671fa9",
+    "name": "production"
+  },
+  "scope": "non-secret deployment configuration plan only; no variable values, no secret values, no production deployment, no managed dependency, no migration, no live provider, no backup/DR, no monitoring, no load and no frontend/UAT evidence is claimed",
+  "source_contracts": {
+    "service_contract": "infrastructure/railway/service-contracts.json",
+    "production_shell": "infrastructure/railway/production-services-2026-10-02.json"
+  },
+  "services": {
+    "control-api": {
+      "service_id": "751fd9e6-e26f-411d-94bb-d00bff06abda",
+      "public_ingress": true,
+      "tls_required": true,
+      "health": {"port": 8080, "path": "/readyz"},
+      "required_environment": [
+        "ALLOWED_NETWORK_CIDRS",
+        "TRUSTED_PROXY_CIDRS",
+        "CLAMAV_ADDRESS",
+        "MEDIA_DOWNLOAD_BASE_URL",
+        "GATEWAY_RUNTIME_ALLOWED_HOSTS",
+        "CONTROL_API_INTERNAL_URL",
+        "SENDER_HEARTBEAT_TTL"
+      ],
+      "secret_classes": [
+        "database",
+        "identity",
+        "gateway-control",
+        "object-store",
+        "meta",
+        "msisdn",
+        "inbound-content",
+        "privacy",
+        "sender-proxy",
+        "media-download",
+        "profiling"
+      ]
+    },
+    "audience-worker": {
+      "service_id": "dede9d43-2cb9-413f-bacd-4f1f750b04ca",
+      "public_ingress": false,
+      "tls_required": false,
+      "health": {"port": 8091, "path": "/readyz"},
+      "required_environment": [],
+      "secret_classes": ["database", "object-store", "msisdn", "profiling"]
+    },
+    "campaign-worker": {
+      "service_id": "5830baa1-c94e-465c-afae-b63a4cd47620",
+      "public_ingress": false,
+      "tls_required": false,
+      "health": {"port": 8092, "path": "/readyz"},
+      "required_environment": ["MEDIA_DOWNLOAD_BASE_URL", "SENDER_HEARTBEAT_TTL"],
+      "secret_classes": ["database", "gateway-control", "msisdn", "meta", "profiling", "media-download"]
+    },
+    "export-worker": {
+      "service_id": "b002f23f-c186-414c-8e2f-2221b39ab762",
+      "public_ingress": false,
+      "tls_required": false,
+      "health": {"port": 8093, "path": "/readyz"},
+      "required_environment": [],
+      "secret_classes": ["database", "object-store", "privacy", "profiling"]
+    },
+    "inbound-governance-worker": {
+      "service_id": "8d04dff3-8d7f-4d64-b427-14cd12c66142",
+      "public_ingress": false,
+      "tls_required": false,
+      "health": {"port": 8094, "path": "/readyz"},
+      "required_environment": [],
+      "secret_classes": ["database", "inbound-content", "profiling"]
+    },
+    "metrics-worker": {
+      "service_id": "412f2fa2-288c-4898-9bf2-276f88890270",
+      "public_ingress": false,
+      "tls_required": false,
+      "health": {"port": 8096, "path": "/readyz"},
+      "required_environment": [],
+      "secret_classes": ["database", "profiling"]
+    },
+    "platform-governance-worker": {
+      "service_id": "9d9fe33b-be49-4881-99c8-4a0f3cebab5e",
+      "public_ingress": false,
+      "tls_required": false,
+      "health": {"port": 8095, "path": "/readyz"},
+      "required_environment": [],
+      "secret_classes": ["database", "object-store", "profiling"]
+    }
+  },
+  "explicit_non_claims": [
+    "no secret values are present",
+    "no Railway variables have been applied by this plan",
+    "no source image or code has been deployed by this plan",
+    "no release gate is closed by this plan",
+    "openwa-gateway remains excluded from Railway"
+  ]
+}

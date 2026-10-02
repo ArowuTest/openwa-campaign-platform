@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "evidence_type": "railway-production-image-plan",
+  "observed_at": "2026-10-02T16:35:00+01:00",
+  "railway_project": {
+    "id": "8633a0b9-3b15-4c8d-b6f2-0306b284f4dd",
+    "name": "openwa-prod"
+  },
+  "environment": {
+    "id": "546fd711-cf80-4402-89b0-cb3ae5671fa9",
+    "name": "production"
+  },
+  "source": {
+    "branch": "work/backend-production-engineering",
+    "local_head": "552fab0359818e2163c9f948ed181a655409d360",
+    "github_remote_configured": false,
+    "push_status": "NOT_PUSHED_NO_GITHUB_REMOTE"
+  },
+  "scope": "non-secret image build plan only; no image digest, no pushed source, no Railway source deployment, no production migration, no live provider, no backup/DR, no monitoring, no capacity and no release gate closure is claimed",
+  "services": {
+    "control-api": {
+      "service_id": "751fd9e6-e26f-411d-94bb-d00bff06abda",
+      "dockerfile": "infrastructure/docker/control-api.Dockerfile",
+      "image_variable": "CONTROL_API_IMAGE",
+      "port": 8080,
+      "health_path": "/readyz",
+      "public_ingress": true,
+      "source_commit": "552fab0359818e2163c9f948ed181a655409d360",
+      "image_digest": null,
+      "build_status": "PENDING_GITHUB_REMOTE_AND_DIGEST_PINNED_BUILD"
+    },
+    "audience-worker": {
+      "service_id": "dede9d43-2cb9-413f-bacd-4f1f750b04ca",
+      "dockerfile": "infrastructure/docker/audience-worker.Dockerfile",
+      "image_variable": "AUDIENCE_WORKER_IMAGE",
+      "port": 8091,
+      "health_path": "/readyz",
+      "public_ingress": false,
+      "source_commit": "552fab0359818e2163c9f948ed181a655409d360",
+      "image_digest": null,
+      "build_status": "PENDING_GITHUB_REMOTE_AND_DIGEST_PINNED_BUILD"
+    },
+    "campaign-worker": {
+      "service_id": "5830baa1-c94e-465c-afae-b63a4cd47620",
+      "dockerfile": "infrastructure/docker/campaign-worker.Dockerfile",
+      "image_variable": "CAMPAIGN_WORKER_IMAGE",
+      "port": 8092,
+      "health_path": "/readyz",
+      "public_ingress": false,
+      "source_commit": "552fab0359818e2163c9f948ed181a655409d360",
+      "image_digest": null,
+      "build_status": "PENDING_GITHUB_REMOTE_AND_DIGEST_PINNED_BUILD"
+    },
+    "export-worker": {
+      "service_id": "b002f23f-c186-414c-8e2f-2221b39ab762",
+      "dockerfile": "infrastructure/docker/export-worker.Dockerfile",
+      "image_variable": "EXPORT_WORKER_IMAGE",
+      "port": 8093,
+      "health_path": "/readyz",
+      "public_ingress": false,
+      "source_commit": "552fab0359818e2163c9f948ed181a655409d360",
+      "image_digest": null,
+      "build_status": "PENDING_GITHUB_REMOTE_AND_DIGEST_PINNED_BUILD"
+    },
+    "inbound-governance-worker": {
+      "service_id": "8d04dff3-8d7f-4d64-b427-14cd12c66142",
+      "dockerfile": "infrastructure/docker/inbound-governance-worker.Dockerfile",
+      "image_variable": "INBOUND_GOVERNANCE_WORKER_IMAGE",
+      "port": 8094,
+      "health_path": "/readyz",
+      "public_ingress": false,
+      "source_commit": "552fab0359818e2163c9f948ed181a655409d360",
+      "image_digest": null,
+      "build_status": "PENDING_GITHUB_REMOTE_AND_DIGEST_PINNED_BUILD"
+    },
+    "metrics-worker": {
+      "service_id": "412f2fa2-288c-4898-9bf2-276f88890270",
+      "dockerfile": "infrastructure/docker/metrics-worker.Dockerfile",
+      "image_variable": "METRICS_WORKER_IMAGE",
+      "port": 8096,
+      "health_path": "/readyz",
+      "public_ingress": false,
+      "source_commit": "552fab0359818e2163c9f948ed181a655409d360",
+      "image_digest": null,
+      "build_status": "PENDING_GITHUB_REMOTE_AND_DIGEST_PINNED_BUILD"
+    },
+    "platform-governance-worker": {
+      "service_id": "9d9fe33b-be49-4881-99c8-4a0f3cebab5e",
+      "dockerfile": "infrastructure/docker/platform-governance-worker.Dockerfile",
+      "image_variable": "PLATFORM_GOVERNANCE_WORKER_IMAGE",
+      "port": 8095,
+      "health_path": "/readyz",
+      "public_ingress": false,
+      "source_commit": "552fab0359818e2163c9f948ed181a655409d360",
+      "image_digest": null,
+      "build_status": "PENDING_GITHUB_REMOTE_AND_DIGEST_PINNED_BUILD"
+    }
+  },
+  "explicit_non_claims": [
+    "no image digest is present",
+    "no source image has been built or deployed by this plan",
+    "no GitHub push has happened because no GitHub remote is configured",
+    "no release gate is closed by this plan",
+    "openwa-gateway remains excluded from Railway"
+  ]
+}

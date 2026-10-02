@@ -21,4 +21,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: |
+            apps/admin-web/package-lock.json
+            services/openwa-gateway/package-lock.json
+      - run: npm ci --include=dev --prefix apps/admin-web
+      - run: npm ci --include=dev --prefix services/openwa-gateway
       - run: ./scripts/check.sh

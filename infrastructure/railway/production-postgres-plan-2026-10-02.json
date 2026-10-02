@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "decision": "ADR-0007-railway-authoritative-postgres",
+  "observed_at": "2026-10-02T18:12:00+01:00",
+  "railway_project": {
+    "id": "8633a0b9-3b15-4c8d-b6f2-0306b284f4dd",
+    "name": "openwa-prod"
+  },
+  "environment": {
+    "id": "546fd711-cf80-4402-89b0-cb3ae5671fa9",
+    "name": "production"
+  },
+  "database": {
+    "provider": "railway-managed-postgresql",
+    "name": "postgresql",
+    "engine": "postgresql",
+    "minimum_major_version": 17,
+    "network": "private-railway",
+    "public_access": "disabled-by-default",
+    "ssl_required": true,
+    "pitr_required": true,
+    "backup_required": true,
+    "restore_rehearsal_required": true,
+    "status": "PENDING_PROVISIONING"
+  },
+  "forbidden_database_targets": [
+    "hostinger-authoritative-postgres",
+    "plain-docker-postgres-without-managed-volume-and-pitr",
+    "supabase-v1-primary"
+  ],
+  "service_role_bindings": {
+    "control-api": "campaign_control_api",
+    "audience-worker": "campaign_audience_worker",
+    "campaign-worker": "campaign_campaign_worker",
+    "export-worker": "campaign_export_worker",
+    "inbound-governance-worker": "campaign_inbound_governance_worker",
+    "metrics-worker": "campaign_metrics_worker",
+    "platform-governance-worker": "campaign_platform_governance_worker"
+  },
+  "required_secret_shape": {
+    "DATABASE_URL": "external-secret-or-railway-reference-only",
+    "DATABASE_EXPECTED_ROLE": "stable-nologin-service-role-name",
+    "DATABASE_STARTUP_TIMEOUT": "non-secret-runtime-setting"
+  },
+  "required_evidence_before_gate_closure": [
+    "managed Railway PostgreSQL service exists in openwa-prod production",
+    "private connectivity from all seven backend services",
+    "public database exposure disabled or formally waived",
+    "SSL mode required by every application DSN",
+    "service login roles are non-superuser and mapped to exactly one stable privilege role",
+    "migrations replay cleanly on a production-equivalent database",
+    "accepted baseline to current candidate upgrade-path migration succeeds",
+    "PITR/WAL enabled and retention recorded",
+    "backup restore rehearsal completed",
+    "database monitoring and alerting configured"
+  ],
+  "explicit_non_claims": [
+    "no database has been provisioned by this file",
+    "no credentials are stored in source",
+    "no production migration has run",
+    "no release gate is closed",
+    "Supabase is not part of V1",
+    "Hostinger remains gateway/session runtime only"
+  ]
+}

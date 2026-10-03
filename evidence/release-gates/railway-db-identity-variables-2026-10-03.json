@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "evidence_type": "railway-db-identity-variable-wiring",
+  "observed_at": "2026-10-03T10:40:00+01:00",
+  "railway_project": {
+    "id": "8633a0b9-3b15-4c8d-b6f2-0306b284f4dd",
+    "name": "openwa-prod"
+  },
+  "environment": {
+    "id": "546fd711-cf80-4402-89b0-cb3ae5671fa9",
+    "name": "production"
+  },
+  "scope": "non-secret Railway service identity variables only; APP_ENV, DATABASE_DRIVER and DATABASE_EXPECTED_ROLE are applied with deploys skipped; DATABASE_URL and service-specific LOGIN role passwords are not set by this evidence",
+  "source_authority": {
+    "service_identity_doc": "docs/operations/database-service-identities.md",
+    "compose_contract": "infrastructure/compose/compose.production.yaml",
+    "railway_service_config_evidence": "evidence/release-gates/railway-service-config-2026-10-03.json"
+  },
+  "variable_names_verified": [
+    "APP_ENV",
+    "DATABASE_DRIVER",
+    "DATABASE_EXPECTED_ROLE"
+  ],
+  "values_redacted": true,
+  "skip_deploys": true,
+  "services": {
+    "control-api": {
+      "service_id": "751fd9e6-e26f-411d-94bb-d00bff06abda",
+      "expected_role": "campaign_control_api",
+      "variables_present": ["APP_ENV", "DATABASE_DRIVER", "DATABASE_EXPECTED_ROLE"],
+      "database_url_present": false,
+      "sealed_variable_names": [],
+      "latest_deployment": null
+    },
+    "audience-worker": {
+      "service_id": "dede9d43-2cb9-413f-bacd-4f1f750b04ca",
+      "expected_role": "campaign_audience_worker",
+      "variables_present": ["APP_ENV", "DATABASE_DRIVER", "DATABASE_EXPECTED_ROLE"],
+      "database_url_present": false,
+      "sealed_variable_names": [],
+      "latest_deployment": null
+    },
+    "campaign-worker": {
+      "service_id": "5830baa1-c94e-465c-afae-b63a4cd47620",
+      "expected_role": "campaign_campaign_worker",
+      "variables_present": ["APP_ENV", "DATABASE_DRIVER", "DATABASE_EXPECTED_ROLE"],
+      "database_url_present": false,
+      "sealed_variable_names": [],
+      "latest_deployment": null
+    },
+    "export-worker": {
+      "service_id": "b002f23f-c186-414c-8e2f-2221b39ab762",
+      "expected_role": "campaign_export_worker",
+      "variables_present": ["APP_ENV", "DATABASE_DRIVER", "DATABASE_EXPECTED_ROLE"],
+      "database_url_present": false,
+      "sealed_variable_names": [],
+      "latest_deployment": null
+    },
+    "inbound-governance-worker": {
+      "service_id": "8d04dff3-8d7f-4d64-b427-14cd12c66142",
+      "expected_role": "campaign_inbound_governance_worker",
+      "variables_present": ["APP_ENV", "DATABASE_DRIVER", "DATABASE_EXPECTED_ROLE"],
+      "database_url_present": false,
+      "sealed_variable_names": [],
+      "latest_deployment": null
+    },
+    "metrics-worker": {
+      "service_id": "412f2fa2-288c-4898-9bf2-276f88890270",
+      "expected_role": "campaign_metrics_worker",
+      "variables_present": ["APP_ENV", "DATABASE_DRIVER", "DATABASE_EXPECTED_ROLE"],
+      "database_url_present": false,
+      "sealed_variable_names": [],
+      "latest_deployment": null
+    },
+    "platform-governance-worker": {
+      "service_id": "9d9fe33b-be49-4881-99c8-4a0f3cebab5e",
+      "expected_role": "campaign_platform_governance_worker",
+      "variables_present": ["APP_ENV", "DATABASE_DRIVER", "DATABASE_EXPECTED_ROLE"],
+      "database_url_present": false,
+      "sealed_variable_names": [],
+      "latest_deployment": null
+    }
+  },
+  "safe_observations": [
+    "All seven backend Railway services expose APP_ENV, DATABASE_DRIVER and DATABASE_EXPECTED_ROLE variable names.",
+    "Railway returned valuesRedacted=true for variable inspection.",
+    "Variable updates were applied with skipDeploys=true.",
+    "No backend service deployment was triggered by this evidence slice.",
+    "DATABASE_URL is intentionally absent from all seven backend services until a safe secret provisioning path creates service-specific rotatable LOGIN roles and connection URLs."
+  ],
+  "explicit_non_claims": [
+    "no DATABASE_URL secret is set on any backend service",
+    "no rotatable service LOGIN role has been created by this evidence",
+    "no service-specific database password is present in source or evidence",
+    "no app service was deployed or restarted",
+    "no application readiness probe has passed",
+    "no release gate is closed"
+  ],
+  "open_items": [
+    "create rotatable service-specific PostgreSQL LOGIN roles safely without exposing passwords",
+    "set each service-specific DATABASE_URL secret outside source",
+    "prove connected login is a member of exactly one expected stable NOLOGIN service role",
+    "deploy one internal worker for readiness validation only after DATABASE_URL is safely wired"
+  ]
+}

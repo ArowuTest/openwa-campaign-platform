@@ -52,13 +52,16 @@ railway-production-image-plan:
 railway-production-postgres-plan:
 	python3 scripts/verify-railway-production-postgres-plan.py
 
+railway-service-config:
+	python3 scripts/verify-railway-service-config.py
+
 governance-test:
 	python3 -m unittest discover -s tests/governance -p "test_*.py"
 
 release-gate:
 	python3 scripts/verify-release-readiness.py --production-candidate
 
-check: fmt test race vet build frontend-syntax traceability governance-check governance-test deployment-topology deployment-readiness railway-production-shell railway-production-variable-plan railway-production-image-plan railway-production-postgres-plan
+check: fmt test race vet build frontend-syntax traceability governance-check governance-test deployment-topology deployment-readiness railway-production-shell railway-production-variable-plan railway-production-image-plan railway-production-postgres-plan railway-service-config
 
 tree:
 	find . -maxdepth 4 -type f | sort

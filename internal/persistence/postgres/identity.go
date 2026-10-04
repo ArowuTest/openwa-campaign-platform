@@ -113,53 +113,116 @@ func (r *IdentityRepository) Save(ctx context.Context, u identity.User) error {
 	return tx.Commit()
 }
 
+type bootstrapIdentityRecord struct {
+	ID    string
+	Email string
+}
+
+func resolveBootstrapIdentity(requestedID, requestedEmail string, matches []bootstrapIdentityRecord) (string, bool, error) {
+	requestedID = strings.TrimSpace(requestedID)
+	requestedEmail = strings.ToLower(strings.TrimSpace(requestedEmail))
+
+	var idMatch, emailMatch *bootstrapIdentityRecord
+	for index := range matches {
+		match := &matches[index]
+		match.ID = strings.TrimSpace(match.ID)
+		match.Email = strings.ToLower(strings.TrimSpace(match.Email))
+		if requestedID != "" && match.ID == requestedID {
+			idMatch = match
+		}
+		if requestedEmail != "" && match.Email == requestedEmail {
+			emailMatch = match
+		}
+	}
+	if idMatch == nil && emailMatch == nil {
+		return "", true, nil
+	}
+	if idMatch != nil && emailMatch != nil && idMatch.ID == emailMatch.ID && idMatch.Email == emailMatch.Email {
+		return idMatch.ID, false, nil
+	}
+	return "", false, fmt.Errorf("bootstrap identity collision: requested ID %q and email %q do not identify the same user", requestedID, requestedEmail)
+}
+
 func (r *IdentityRepository) EnsureBootstrapAdministrator(ctx context.Context, u identity.User) (identity.User, bool, error) {
 	if r == nil || r.DB == nil || r.Secrets == nil {
 		return identity.User{}, false, errors.New("persistent identity repository is not configured")
 	}
-	var count int
-	if err := r.DB.QueryRowContext(ctx, `SELECT count(*) FROM internal_users`).Scan(&count); err != nil {
-		return identity.User{}, false, err
-	}
-	if count > 0 {
-		existing, err := r.ByEmail(ctx, u.Email)
-		if err == nil {
-			return existing, false, nil
-		}
-		return identity.User{}, false, nil
-	}
-	secret, err := r.Secrets.Seal("identity:totp:"+u.ID, u.TOTPSecret)
-	if err != nil {
-		return identity.User{}, false, err
-	}
+	requestedID := strings.TrimSpace(u.ID)
+	normalizedEmail := strings.ToLower(strings.TrimSpace(u.Email))
+
 	tx, err := r.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		return identity.User{}, false, err
 	}
 	defer tx.Rollback()
-	var stillEmpty bool
-	if err = tx.QueryRowContext(ctx, `SELECT NOT EXISTS(SELECT 1 FROM internal_users)`).Scan(&stillEmpty); err != nil {
-		return identity.User{}, false, err
-	}
-	if !stillEmpty {
-		return identity.User{}, false, nil
-	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO internal_users(id,email,display_name,status,mfa_required) VALUES($1::uuid,$2,$3,'ACTIVE',$4)`, u.ID, strings.ToLower(strings.TrimSpace(u.Email)), u.DisplayName, u.MFARequired)
+
+	rows, err := tx.QueryContext(ctx, `
+SELECT id::text,email::text
+FROM internal_users
+WHERE id=$1::uuid OR lower(email::text)=lower($2)
+FOR UPDATE`, requestedID, normalizedEmail)
 	if err != nil {
 		return identity.User{}, false, err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO internal_user_credentials(user_id,password_hash,totp_secret_ciphertext) VALUES($1::uuid,$2,$3)`, u.ID, u.PasswordHash, secret)
+	matches := make([]bootstrapIdentityRecord, 0, 2)
+	for rows.Next() {
+		var match bootstrapIdentityRecord
+		if err := rows.Scan(&match.ID, &match.Email); err != nil {
+			_ = rows.Close()
+			return identity.User{}, false, err
+		}
+		matches = append(matches, match)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return identity.User{}, false, err
+	}
+	if err := rows.Close(); err != nil {
+		return identity.User{}, false, err
+	}
+
+	existingID, create, err := resolveBootstrapIdentity(requestedID, normalizedEmail, matches)
 	if err != nil {
 		return identity.User{}, false, err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO user_roles(user_id,role_id,assigned_by) SELECT $1::uuid,id,$1::uuid FROM roles WHERE code='SUPER_ADMIN'`, u.ID)
+	if !create {
+		if err := tx.Commit(); err != nil {
+			return identity.User{}, false, err
+		}
+		existing, err := r.ByID(ctx, existingID)
+		if err != nil {
+			return identity.User{}, false, fmt.Errorf("load existing bootstrap administrator %q: %w", existingID, err)
+		}
+		return existing, false, nil
+	}
+
+	secret, err := r.Secrets.Seal("identity:totp:"+requestedID, u.TOTPSecret)
 	if err != nil {
 		return identity.User{}, false, err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO internal_users(id,email,display_name,status,mfa_required) VALUES($1::uuid,$2,$3,'ACTIVE',$4)`, requestedID, normalizedEmail, u.DisplayName, u.MFARequired)
+	if err != nil {
+		return identity.User{}, false, err
+	}
+	_, err = tx.ExecContext(ctx, `INSERT INTO internal_user_credentials(user_id,password_hash,totp_secret_ciphertext) VALUES($1::uuid,$2,$3)`, requestedID, u.PasswordHash, secret)
+	if err != nil {
+		return identity.User{}, false, err
+	}
+	roleResult, err := tx.ExecContext(ctx, `INSERT INTO user_roles(user_id,role_id,assigned_by) SELECT $1::uuid,id,$1::uuid FROM roles WHERE code='SUPER_ADMIN'`, requestedID)
+	if err != nil {
+		return identity.User{}, false, err
+	}
+	roleCount, err := roleResult.RowsAffected()
+	if err != nil {
+		return identity.User{}, false, err
+	}
+	if roleCount != 1 {
+		return identity.User{}, false, errors.New("SUPER_ADMIN role is not available for bootstrap administrator")
 	}
 	if err = tx.Commit(); err != nil {
 		return identity.User{}, false, err
 	}
-	created, err := r.ByID(ctx, u.ID)
+	created, err := r.ByID(ctx, requestedID)
 	return created, true, err
 }
 

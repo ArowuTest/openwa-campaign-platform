@@ -30,7 +30,7 @@ function validate(body: SendBody): SendRequest {
   for (const field of ['gatewayPoolVersion','gatewayNodeVersion','sessionLeaseVersion','sessionConfigurationVersion'] as const) {
     if (!Number.isInteger(body[field]) || Number(body[field]) <= 0) throw new BadRequestException(`${field} must be a positive integer`);
   }
-  if (!/^[A-Za-z0-9._:-]{1,128}$/.test(String(body.gatewayAdapterVersion))) throw new BadRequestException('gatewayAdapterVersion format is invalid');
+  if (!/^[A-Za-z0-9._:+-]{1,128}$/.test(String(body.gatewayAdapterVersion))) throw new BadRequestException('gatewayAdapterVersion format is invalid');
   if (!/^[A-Za-z0-9:_-]{1,128}$/.test(String(body.gatewayNodeId))) throw new BadRequestException('gatewayNodeId format is invalid');
   if (!/^[A-Za-z0-9:_-]{1,128}$/.test(String(body.sessionId))) throw new BadRequestException('sessionId format is invalid');
   if (Number.isNaN(Date.parse(String(body.authorityExpiresAt)))) throw new BadRequestException('authorityExpiresAt is invalid');

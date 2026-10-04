@@ -125,6 +125,11 @@ SELECT pg_temp.grant_existing_tables('campaign_campaign_worker', 'SELECT', ARRAY
   'organisation_policy_versions','organisations','platform_configurations',
   'provider_capability_definitions','sender_session_leases','suppressions'
 ]);
+-- Campaign execution claims campaign rows with FOR UPDATE so lifecycle, shard,
+-- dispatch and controlled-test workers cannot race one another. The worker
+-- never updates campaign business columns directly; UPDATE is required by
+-- PostgreSQL for the row-locking clause.
+SELECT pg_temp.grant_existing_tables('campaign_campaign_worker', 'UPDATE', ARRAY['campaigns']);
 SELECT pg_temp.grant_existing_tables('campaign_campaign_worker', 'SELECT, INSERT, UPDATE, DELETE', ARRAY[
   'approved_test_recipients','campaign_capacity_assessments','campaign_dispatch_shards',
   'campaign_execution_events','campaign_execution_leases','campaign_metric_reconciliations',

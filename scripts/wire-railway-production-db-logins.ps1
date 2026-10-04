@@ -152,11 +152,11 @@ if (-not $Apply) {
     $stableIdent = Quote-PgIdent $item.Service.StableRole
     $loginLiteral = Quote-PgLiteral $item.LoginRole
     $passwordLiteral = Quote-PgLiteral $item.Password
-    $stableLiteral = Quote-PgLiteral $item.Service.StableRole
+    $commentLiteral = Quote-PgLiteral ("campaign-platform production rotatable login for {0}; member of {1}; created by operator script {2}" -f $item.Service.Name, $item.Service.StableRole, $stamp)
     [void]$sql.AppendLine("DO `$`$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = $loginLiteral) THEN RAISE EXCEPTION 'role already exists: %', $loginLiteral; END IF; END `$`$;")
     [void]$sql.AppendLine("CREATE ROLE $loginIdent LOGIN PASSWORD $passwordLiteral NOSUPERUSER NOCREATEDB NOCREATEROLE INHERIT;")
     [void]$sql.AppendLine("GRANT $stableIdent TO $loginIdent;")
-    [void]$sql.AppendLine("COMMENT ON ROLE $loginIdent IS 'campaign-platform production rotatable login for $($item.Service.Name); member of $stableLiteral; created by operator script $stamp';")
+    [void]$sql.AppendLine("COMMENT ON ROLE $loginIdent IS $commentLiteral;")
   }
   [void]$sql.AppendLine('COMMIT;')
 

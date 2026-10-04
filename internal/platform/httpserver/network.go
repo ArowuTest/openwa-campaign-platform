@@ -28,6 +28,19 @@ func (p NetworkPolicy) ClientIP(r *http.Request) (netip.Addr, bool) {
 		return peer, true
 	}
 
+	// Railway controls X-Forwarded-For and places the original client first.
+	// Its CDN can add an unlisted public hop to the right of that address, so
+	// use Railway's explicit edge marker before applying the generic proxy-chain
+	// algorithm below.
+	if strings.TrimSpace(r.Header.Get("X-Railway-Edge")) != "" {
+		if candidate, ok := firstForwardedAddress(r.Header.Get("X-Forwarded-For")); ok {
+			return candidate, true
+		}
+		// A Railway-marked request with no valid client-first hop must fail
+		// closed; falling through could accept a later forged address.
+		return netip.Addr{}, false
+	}
+
 	// Walk from the nearest hop toward the original client. Trusted proxy hops
 	// are skipped; the first non-trusted address is the effective client.
 	values := strings.Split(r.Header.Get("X-Forwarded-For"), ",")
@@ -42,6 +55,11 @@ func (p NetworkPolicy) ClientIP(r *http.Request) (netip.Addr, bool) {
 		}
 	}
 	return peer, true
+}
+
+func firstForwardedAddress(value string) (netip.Addr, bool) {
+	first, _, _ := strings.Cut(value, ",")
+	return remoteAddress(first)
 }
 
 func (p NetworkPolicy) Allows(r *http.Request) (netip.Addr, bool) {

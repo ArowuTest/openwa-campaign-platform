@@ -82,7 +82,11 @@ func (s *Server) networkAdmission(next http.Handler) http.Handler {
 			return
 		}
 		if s.deps.Identity != nil {
-			s.deps.Identity.RecordNetworkDenied(r.Context(), client.String(), authenticationAttempt(r, ""))
+			sourceIP := ""
+			if client.IsValid() {
+				sourceIP = client.String()
+			}
+			s.deps.Identity.RecordNetworkDenied(r.Context(), sourceIP, authenticationAttempt(r, ""))
 		}
 		httpx.WriteError(w, r, http.StatusForbidden, "NETWORK_ACCESS_DENIED", "Access from this network is not permitted.", nil)
 	})

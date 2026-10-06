@@ -21,43 +21,51 @@ import (
 // worker. It deliberately does not reuse the control-plane configuration because
 // workers must not require bootstrap-admin or browser-session secrets.
 type AudienceConfig struct {
-	Environment                  string
-	HealthAddr                   string
-	DatabaseDriver               string
-	DatabaseURL                  string
-	DBMaxOpen                    int
-	DBMaxIdle                    int
-	DBConnMaxLifetime            time.Duration
-	DBConnMaxIdleTime            time.Duration
-	DBPingTimeout                time.Duration
-	WorkerID                     string
-	ObjectStoreDriver            string
-	ObjectStoreRoot              string
-	MSISDNEncryptionKey          string
-	MSISDNLookupKey              string
-	Concurrency                  int
-	ClaimBatch                   int
-	PollInterval                 time.Duration
-	ClaimFailureBackoff          time.Duration
-	MaximumFailureBackoff        time.Duration
-	ValidationLeaseDuration      time.Duration
-	MaterialisationBatchSize     int
-	MaterialisationClaimBatch    int
-	MaterialisationLeaseDuration time.Duration
-	MaterialisationPollInterval  time.Duration
-	MergeConcurrency             int
-	MergeClaimBatch              int
-	MergeLeaseDuration           time.Duration
-	MergePollInterval            time.Duration
-	MergeFailureBackoff          time.Duration
-	SourceRetentionBatchSize     int
-	SourceRetentionLeaseDuration time.Duration
-	SourceRetentionPollInterval  time.Duration
-	StageBatchSize               int
-	MaxRows                      int
-	MaxIssues                    int
-	DefaultCountryISO2           string
-	ShutdownTimeout              time.Duration
+	Environment                       string
+	HealthAddr                        string
+	DatabaseDriver                    string
+	DatabaseURL                       string
+	DBMaxOpen                         int
+	DBMaxIdle                         int
+	DBConnMaxLifetime                 time.Duration
+	DBConnMaxIdleTime                 time.Duration
+	DBPingTimeout                     time.Duration
+	WorkerID                          string
+	ObjectStoreDriver                 string
+	ObjectStoreRoot                   string
+	ObjectStoreTempDir                string
+	ClamAVAddress                     string
+	ClamAVDialTimeout                 time.Duration
+	ClamAVScanTimeout                 time.Duration
+	MSISDNEncryptionKey               string
+	MSISDNLookupKey                   string
+	Concurrency                       int
+	ClaimBatch                        int
+	PollInterval                      time.Duration
+	ClaimFailureBackoff               time.Duration
+	MaximumFailureBackoff             time.Duration
+	ValidationLeaseDuration           time.Duration
+	MaterialisationBatchSize          int
+	MaterialisationClaimBatch         int
+	MaterialisationLeaseDuration      time.Duration
+	MaterialisationPollInterval       time.Duration
+	MergeConcurrency                  int
+	MergeClaimBatch                   int
+	MergeLeaseDuration                time.Duration
+	MergePollInterval                 time.Duration
+	MergeFailureBackoff               time.Duration
+	SourceRetentionBatchSize          int
+	SourceRetentionLeaseDuration      time.Duration
+	SourceRetentionPollInterval       time.Duration
+	UploadFinalisationClaimBatch      int
+	UploadFinalisationLeaseDuration   time.Duration
+	UploadFinalisationPollInterval    time.Duration
+	AudienceImportSourceRetentionDays int
+	StageBatchSize                    int
+	MaxRows                           int
+	MaxIssues                         int
+	DefaultCountryISO2                string
+	ShutdownTimeout                   time.Duration
 }
 
 func LoadAudience() (AudienceConfig, error) {
@@ -73,6 +81,8 @@ func LoadAudience() (AudienceConfig, error) {
 		WorkerID:            strings.TrimSpace(env("WORKER_ID", hostname("audience-worker"))),
 		ObjectStoreDriver:   strings.ToLower(strings.TrimSpace(env("OBJECT_STORE_DRIVER", "filesystem"))),
 		ObjectStoreRoot:     strings.TrimSpace(os.Getenv("OBJECT_STORE_ROOT")),
+		ObjectStoreTempDir:  strings.TrimSpace(os.Getenv("OBJECT_STORE_TEMP_DIR")),
+		ClamAVAddress:       strings.TrimSpace(os.Getenv("CLAMAV_ADDRESS")),
 		MSISDNEncryptionKey: strings.TrimSpace(os.Getenv("MSISDN_ENCRYPTION_KEY_BASE64")),
 		MSISDNLookupKey:     strings.TrimSpace(os.Getenv("MSISDN_LOOKUP_KEY_BASE64")),
 		DefaultCountryISO2:  strings.ToUpper(strings.TrimSpace(env("DEFAULT_COUNTRY_ISO2", "NG"))),
@@ -102,10 +112,16 @@ func LoadAudience() (AudienceConfig, error) {
 	if cfg.MaterialisationClaimBatch, err = integer("AUDIENCE_MATERIALISATION_CLAIM_BATCH", 1); err != nil {
 		return AudienceConfig{}, err
 	}
-	if cfg.StageBatchSize, err = integer("AUDIENCE_STAGE_BATCH_SIZE", 1000); err != nil {
+	if cfg.StageBatchSize, err = integer("AUDIENCE_STAGE_BATCH_SIZE", 5000); err != nil {
 		return AudienceConfig{}, err
 	}
 	if cfg.SourceRetentionBatchSize, err = integer("AUDIENCE_SOURCE_RETENTION_BATCH_SIZE", 50); err != nil {
+		return AudienceConfig{}, err
+	}
+	if cfg.UploadFinalisationClaimBatch, err = integer("AUDIENCE_UPLOAD_FINALISATION_CLAIM_BATCH", 2); err != nil {
+		return AudienceConfig{}, err
+	}
+	if cfg.AudienceImportSourceRetentionDays, err = integer("AUDIENCE_IMPORT_SOURCE_RETENTION_DAYS", 30); err != nil {
 		return AudienceConfig{}, err
 	}
 	if cfg.MaxRows, err = integer("MAX_IMPORT_ROWS", 2_000_000); err != nil {
@@ -156,6 +172,18 @@ func LoadAudience() (AudienceConfig, error) {
 	if cfg.SourceRetentionPollInterval, err = duration("AUDIENCE_SOURCE_RETENTION_POLL_INTERVAL", time.Minute); err != nil {
 		return AudienceConfig{}, err
 	}
+	if cfg.UploadFinalisationLeaseDuration, err = duration("AUDIENCE_UPLOAD_FINALISATION_LEASE_DURATION", 5*time.Minute); err != nil {
+		return AudienceConfig{}, err
+	}
+	if cfg.UploadFinalisationPollInterval, err = duration("AUDIENCE_UPLOAD_FINALISATION_POLL_INTERVAL", time.Second); err != nil {
+		return AudienceConfig{}, err
+	}
+	if cfg.ClamAVDialTimeout, err = duration("CLAMAV_DIAL_TIMEOUT", 5*time.Second); err != nil {
+		return AudienceConfig{}, err
+	}
+	if cfg.ClamAVScanTimeout, err = duration("CLAMAV_SCAN_TIMEOUT", 10*time.Minute); err != nil {
+		return AudienceConfig{}, err
+	}
 	if cfg.ShutdownTimeout, err = duration("WORKER_SHUTDOWN_TIMEOUT", 30*time.Second); err != nil {
 		return AudienceConfig{}, err
 	}
@@ -194,6 +222,21 @@ func (c AudienceConfig) Validate() error {
 	case "s3", "minio":
 	default:
 		return errors.New("OBJECT_STORE_DRIVER must be filesystem, s3, or minio")
+	}
+	if c.ObjectStoreTempDir != "" && (c.Environment == "staging" || c.Environment == "production") && !filepath.IsAbs(c.ObjectStoreTempDir) {
+		return errors.New("deployed workers require an absolute OBJECT_STORE_TEMP_DIR when configured")
+	}
+	if strings.TrimSpace(c.ClamAVAddress) == "" {
+		return errors.New("CLAMAV_ADDRESS is required for audience upload finalisation")
+	}
+	if _, _, err := net.SplitHostPort(strings.TrimSpace(c.ClamAVAddress)); err != nil {
+		return errors.New("CLAMAV_ADDRESS must be in host:port form")
+	}
+	if c.ClamAVDialTimeout <= 0 || c.ClamAVDialTimeout > time.Minute {
+		return errors.New("CLAMAV_DIAL_TIMEOUT must be positive and no more than one minute")
+	}
+	if c.ClamAVScanTimeout < time.Minute || c.ClamAVScanTimeout > time.Hour {
+		return errors.New("CLAMAV_SCAN_TIMEOUT must be between one minute and one hour")
 	}
 	if err := validateKey("MSISDN_ENCRYPTION_KEY_BASE64", c.MSISDNEncryptionKey, 32, true); err != nil {
 		return err
@@ -251,6 +294,18 @@ func (c AudienceConfig) Validate() error {
 	}
 	if c.SourceRetentionPollInterval <= 0 || c.SourceRetentionPollInterval > time.Hour {
 		return errors.New("AUDIENCE_SOURCE_RETENTION_POLL_INTERVAL must be positive and no more than one hour")
+	}
+	if c.UploadFinalisationClaimBatch < 1 || c.UploadFinalisationClaimBatch > 16 {
+		return errors.New("AUDIENCE_UPLOAD_FINALISATION_CLAIM_BATCH must be between 1 and 16")
+	}
+	if c.UploadFinalisationLeaseDuration < 15*time.Second || c.UploadFinalisationLeaseDuration > 30*time.Minute {
+		return errors.New("AUDIENCE_UPLOAD_FINALISATION_LEASE_DURATION must be between 15 seconds and 30 minutes")
+	}
+	if c.UploadFinalisationPollInterval <= 0 || c.UploadFinalisationPollInterval > time.Minute {
+		return errors.New("AUDIENCE_UPLOAD_FINALISATION_POLL_INTERVAL must be positive and no more than one minute")
+	}
+	if c.AudienceImportSourceRetentionDays < 1 || c.AudienceImportSourceRetentionDays > 3650 {
+		return errors.New("AUDIENCE_IMPORT_SOURCE_RETENTION_DAYS must be between 1 and 3650")
 	}
 	if c.MaxRows < 1 || c.MaxRows > 20_000_000 {
 		return errors.New("MAX_IMPORT_ROWS must be between 1 and 20000000")

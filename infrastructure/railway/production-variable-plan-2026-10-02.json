@@ -49,7 +49,7 @@
       "public_ingress": false,
       "tls_required": false,
       "health": {"port": 8091, "path": "/readyz"},
-      "required_environment": [],
+      "required_environment": ["CLAMAV_ADDRESS"],
       "secret_classes": ["database", "object-store", "msisdn", "profiling"]
     },
     "campaign-worker": {

@@ -13,6 +13,7 @@ func validAudienceEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("DATABASE_URL", "postgres://example")
 	t.Setenv("OBJECT_STORE_ROOT", t.TempDir())
+	t.Setenv("CLAMAV_ADDRESS", "127.0.0.1:3310")
 	t.Setenv("MSISDN_ENCRYPTION_KEY_BASE64", base64.StdEncoding.EncodeToString(make([]byte, 32)))
 	t.Setenv("MSISDN_LOOKUP_KEY_BASE64", base64.StdEncoding.EncodeToString(make([]byte, 32)))
 }
@@ -26,11 +27,31 @@ func TestLoadAudienceAcceptsStrictConfiguration(t *testing.T) {
 	if cfg.Concurrency != 2 || cfg.ClaimBatch != 2 {
 		t.Fatalf("unexpected defaults: %+v", cfg)
 	}
+	if cfg.UploadFinalisationClaimBatch != 2 || cfg.UploadFinalisationLeaseDuration != 5*time.Minute || cfg.AudienceImportSourceRetentionDays != 30 {
+		t.Fatalf("unexpected upload-finalisation defaults: %+v", cfg)
+	}
+	if cfg.ClamAVAddress != "127.0.0.1:3310" {
+		t.Fatalf("unexpected ClamAV address: %q", cfg.ClamAVAddress)
+	}
+}
+
+func TestLoadAudienceRejectsUnsafeUploadFinalisationConfiguration(t *testing.T) {
+	validAudienceEnv(t)
+	t.Setenv("AUDIENCE_UPLOAD_FINALISATION_LEASE_DURATION", "5s")
+	if _, err := LoadAudience(); err == nil || !strings.Contains(err.Error(), "FINALISATION_LEASE") {
+		t.Fatalf("expected finalisation lease bound error, got %v", err)
+	}
+	t.Setenv("AUDIENCE_UPLOAD_FINALISATION_LEASE_DURATION", "5m")
+	t.Setenv("AUDIENCE_IMPORT_SOURCE_RETENTION_DAYS", "0")
+	if _, err := LoadAudience(); err == nil || !strings.Contains(err.Error(), "SOURCE_RETENTION_DAYS") {
+		t.Fatalf("expected source retention bound error, got %v", err)
+	}
 }
 
 func TestLoadAudienceRejectsMissingStableKeys(t *testing.T) {
 	t.Setenv("DATABASE_URL", "postgres://example")
 	t.Setenv("OBJECT_STORE_ROOT", t.TempDir())
+	t.Setenv("CLAMAV_ADDRESS", "127.0.0.1:3310")
 	_, err := LoadAudience()
 	if err == nil || !strings.Contains(err.Error(), "MSISDN_ENCRYPTION_KEY_BASE64") {
 		t.Fatalf("expected key error, got %v", err)

@@ -34,15 +34,25 @@ func NewObjectStoreFromEnvironment(defaultRoot string) (ObjectStore, error) {
 			}
 			pathStyle = parsed
 		}
+		directUploadAllowed := false
+		if raw := strings.TrimSpace(os.Getenv("S3_DIRECT_UPLOAD_ENABLED")); raw != "" {
+			parsed, err := strconv.ParseBool(raw)
+			if err != nil {
+				return nil, errors.New("S3_DIRECT_UPLOAD_ENABLED must be true or false")
+			}
+			directUploadAllowed = parsed
+		}
 		endpoint := strings.TrimSpace(os.Getenv("S3_ENDPOINT"))
 		allowInsecure, _ := strconv.ParseBool(strings.TrimSpace(os.Getenv("S3_ALLOW_INSECURE")))
 		if strings.HasPrefix(strings.ToLower(endpoint), "http://") && !allowInsecure {
 			return nil, errors.New("HTTP S3 endpoints require S3_ALLOW_INSECURE=true")
 		}
 		return NewS3Store(S3Options{
-			Endpoint: endpoint, Bucket: os.Getenv("S3_BUCKET"), Region: os.Getenv("S3_REGION"),
+			Endpoint: endpoint, DirectUploadEndpoint: strings.TrimSpace(os.Getenv("S3_DIRECT_UPLOAD_ENDPOINT")),
+			Bucket: os.Getenv("S3_BUCKET"), Region: os.Getenv("S3_REGION"),
 			AccessKey: os.Getenv("S3_ACCESS_KEY_ID"), SecretKey: os.Getenv("S3_SECRET_ACCESS_KEY"), SessionToken: os.Getenv("S3_SESSION_TOKEN"),
-			PathStyle: pathStyle, TempDir: os.Getenv("OBJECT_STORE_TEMP_DIR"), Client: &http.Client{Timeout: 5 * time.Minute},
+			PathStyle: pathStyle, DirectUploadAllowed: directUploadAllowed,
+			TempDir: os.Getenv("OBJECT_STORE_TEMP_DIR"), Client: &http.Client{Timeout: 5 * time.Minute},
 		})
 	default:
 		return nil, errors.New("OBJECT_STORE_DRIVER must be filesystem or s3")

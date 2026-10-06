@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,6 +21,7 @@ var ErrUnsupportedImportFormat = errors.New("import format is not yet supported 
 type ValidationWork struct {
 	ImportID           string
 	ObjectKey          string
+	UploadSessionID    string
 	OriginalFilename   string
 	DetectedMediaType  string
 	FileSHA256         string
@@ -33,6 +35,10 @@ type ValidationClaimer interface {
 	ClaimReady(context.Context, int) ([]ValidationWork, error)
 }
 
+type UploadSessionReader interface {
+	Get(context.Context, string) (UploadSession, error)
+}
+
 // ValidationWorker claims clean quarantined files directly from PostgreSQL.
 // Claiming is deliberately independent of Redis so a lost queue notification
 // cannot strand an import. The database lease is the authoritative ownership
@@ -41,7 +47,9 @@ type ValidationWorker struct {
 	Claimer               ValidationClaimer
 	Staging               StagingRepository
 	Store                 storage.ObjectStore
+	UploadSessions        UploadSessionReader
 	Ingest                *IngestService
+	TempDir               string
 	Options               PreviewOptions
 	Concurrency           int
 	ClaimBatch            int
@@ -139,16 +147,8 @@ func (w *ValidationWorker) Run(ctx context.Context) error {
 }
 
 func (w *ValidationWorker) process(ctx context.Context, work ValidationWork) error {
-	if strings.TrimSpace(work.ImportID) == "" || strings.TrimSpace(work.ObjectKey) == "" {
+	if strings.TrimSpace(work.ImportID) == "" {
 		return errors.New("validation work is incomplete")
-	}
-	object, metadata, err := w.Store.Open(ctx, work.ObjectKey)
-	if err != nil {
-		return w.failBeforeProcessing(work, fmt.Errorf("open import object: %w", err))
-	}
-	defer object.Close()
-	if metadata.Size != work.ByteSize || !strings.EqualFold(metadata.SHA256, work.FileSHA256) {
-		return w.failBeforeProcessing(work, errors.New("quarantined import object no longer matches immutable file evidence"))
 	}
 	mapping, err := decodeColumnMapping(work.Mapping)
 	if err != nil {
@@ -158,6 +158,24 @@ func (w *ValidationWorker) process(ctx context.Context, work ValidationWork) err
 	options.Mapping = mapping
 	if strings.TrimSpace(options.DefaultCountryISO2) == "" {
 		options.DefaultCountryISO2 = work.DefaultCountryISO2
+	}
+	if strings.TrimSpace(work.UploadSessionID) != "" {
+		return w.processUploadSession(ctx, work, mapping, options)
+	}
+	if strings.TrimSpace(work.ObjectKey) == "" {
+		return errors.New("validation work is missing its source object")
+	}
+	return w.processLegacyObject(ctx, work, mapping, options)
+}
+
+func (w *ValidationWorker) processLegacyObject(ctx context.Context, work ValidationWork, mapping ColumnMapping, options PreviewOptions) error {
+	object, metadata, err := w.Store.Open(ctx, work.ObjectKey)
+	if err != nil {
+		return w.failBeforeProcessing(work, fmt.Errorf("open import object: %w", err))
+	}
+	defer object.Close()
+	if metadata.Size != work.ByteSize || !strings.EqualFold(metadata.SHA256, work.FileSHA256) {
+		return w.failBeforeProcessing(work, errors.New("quarantined import object no longer matches immutable file evidence"))
 	}
 	switch {
 	case strings.EqualFold(work.DetectedMediaType, "text/csv"):
@@ -170,6 +188,63 @@ func (w *ValidationWorker) process(ctx context.Context, work ValidationWork) err
 		err = fmt.Errorf("%w: %s", ErrUnsupportedImportFormat, work.DetectedMediaType)
 	}
 	return err
+}
+
+func (w *ValidationWorker) processUploadSession(ctx context.Context, work ValidationWork, mapping ColumnMapping, options PreviewOptions) error {
+	if w.UploadSessions == nil {
+		return w.failBeforeProcessing(work, errors.New("upload session reader is required for resumable import validation"))
+	}
+	session, err := w.UploadSessions.Get(ctx, work.UploadSessionID)
+	if err != nil {
+		return w.failBeforeProcessing(work, fmt.Errorf("load upload session: %w", err))
+	}
+	if session.State != UploadSessionImportCreated ||
+		session.LinkedImportID != work.ImportID ||
+		session.ExpectedBytes != work.ByteSize ||
+		!strings.EqualFold(session.FinalSHA256, work.FileSHA256) ||
+		!strings.EqualFold(session.DetectedMediaType, work.DetectedMediaType) {
+		return w.failBeforeProcessing(work, errors.New("resumable import source is not terminally linked to immutable upload evidence"))
+	}
+	source := &UploadCompositeSource{Store: w.Store}
+	switch {
+	case strings.EqualFold(work.DetectedMediaType, "text/csv"):
+		reader, err := source.Open(ctx, session)
+		if err != nil {
+			return w.failBeforeProcessing(work, fmt.Errorf("open resumable CSV source: %w", err))
+		}
+		defer reader.Close()
+		_, err = w.Ingest.ProcessClaimed(ctx, work.ImportID, work.Lease, reader, options)
+		return err
+	case strings.EqualFold(work.DetectedMediaType, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"):
+		reader, err := source.Open(ctx, session)
+		if err != nil {
+			return w.failBeforeProcessing(work, fmt.Errorf("open resumable XLSX source: %w", err))
+		}
+		defer reader.Close()
+		temporary, err := os.CreateTemp(w.TempDir, "campaign-platform-validation-*.xlsx")
+		if err != nil {
+			return w.failBeforeProcessing(work, err)
+		}
+		name := temporary.Name()
+		defer os.Remove(name)
+		defer temporary.Close()
+		count, err := io.Copy(temporary, io.LimitReader(reader, work.ByteSize+1))
+		if err != nil {
+			return w.failBeforeProcessing(work, err)
+		}
+		if count != work.ByteSize {
+			return w.failBeforeProcessing(work, fmt.Errorf("%w: copied %d bytes, expected %d", ErrUploadPartIncomplete, count, work.ByteSize))
+		}
+		if _, err := temporary.Seek(0, io.SeekStart); err != nil {
+			return w.failBeforeProcessing(work, err)
+		}
+		_, err = w.Ingest.ProcessClaimedWithProcessor(ctx, work.ImportID, work.Lease, func(processCtx context.Context, consumer CandidateConsumer) (PreviewResult, error) {
+			return ProcessXLSX(processCtx, temporary, count, mapping.Worksheet, options, consumer)
+		})
+		return err
+	default:
+		return w.failBeforeProcessing(work, fmt.Errorf("%w: %s", ErrUnsupportedImportFormat, work.DetectedMediaType))
+	}
 }
 
 func (w *ValidationWorker) failBeforeProcessing(work ValidationWork, cause error) error {

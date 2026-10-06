@@ -55,11 +55,11 @@ func (r *PostgreSQLImportRepository) Create(ctx context.Context, batch ImportBat
 		_, err = tx.ExecContext(ctx, `
 INSERT INTO audience_imports(
  id,organisation_id,consent_review_id,purpose_id,channel,wording_version,source_name,source_system,default_country_iso2,
- object_key,original_filename,detected_media_type,file_sha256,byte_size,template_version,mapping_definition_id,mapping,update_policy,status,
+ object_key,upload_session_id,original_filename,detected_media_type,file_sha256,byte_size,template_version,mapping_definition_id,mapping,update_policy,status,
  malware_scan_status,content_signature_valid,client_request_id,uploaded_by,source_expires_at,version,created_at,updated_at
-) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,$6,$7,NULLIF($8,''),NULLIF($9,'')::char(2),$10,$11,$12,$13,$14,$15,NULLIF($16,'')::uuid,$17::jsonb,$18,$19,$20,$21,$22,NULLIF($23,'')::uuid,$24,$25,$26,$26)`,
+) VALUES($1::uuid,$2::uuid,$3::uuid,$4::uuid,$5,$6,$7,NULLIF($8,''),NULLIF($9,'')::char(2),$10,NULLIF($11,'')::uuid,$12,$13,$14,$15,$16,NULLIF($17,'')::uuid,$18::jsonb,$19,$20,$21,$22,$23,NULLIF($24,'')::uuid,$25,$26,$27,$27)`,
 			batch.ID, batch.OrganisationID, batch.ConsentReviewID, batch.PurposeID, batch.Channel, batch.WordingVersion, batch.SourceName, batch.SourceSystem, batch.DefaultCountryISO2,
-			batch.ObjectKey, batch.OriginalFilename, batch.DetectedMediaType, batch.FileSHA256, batch.ByteSize, batch.TemplateVersion, batch.MappingDefinitionID, string(batch.Mapping), batch.UpdatePolicy, batch.Status,
+			batch.ObjectKey, batch.UploadSessionID, batch.OriginalFilename, batch.DetectedMediaType, batch.FileSHA256, batch.ByteSize, batch.TemplateVersion, batch.MappingDefinitionID, string(batch.Mapping), batch.UpdatePolicy, batch.Status,
 			batch.MalwareStatus, batch.ContentSignatureValid, batch.ClientRequestID, batch.UploadedBy, batch.SourceExpiresAt, batch.Version, batch.CreatedAt)
 		if err != nil {
 			return result{}, fmt.Errorf("insert audience import: %w", err)
@@ -229,7 +229,7 @@ func (r *PostgreSQLImportRepository) Cancel(ctx context.Context, identifier, act
 	})
 }
 
-const importSelect = `SELECT id::text,organisation_id::text,consent_review_id::text,purpose_id::text,upper(channel),wording_version,source_name,coalesce(source_system,''),coalesce(default_country_iso2::text,''),object_key,original_filename,coalesce(detected_media_type,''),file_sha256,byte_size,coalesce(template_version,''),coalesce(mapping_definition_id::text,''),mapping,coalesce(update_policy,'NEWEST_SOURCE'),status,coalesce(malware_scan_status,'PENDING'),coalesce(content_signature_valid,false),coalesce(client_request_id,''),uploaded_rows,valid_rows,invalid_rows,duplicate_rows,suppressed_rows,inserted_contacts,updated_contacts,coalesce(uploaded_by::text,''),coalesce(approved_by::text,''),approved_at,coalesce(failure_reason,''),source_expires_at,source_deleted_at,rolled_back_at,coalesce(rolled_back_by::text,''),coalesce(rollback_reason,''),version,created_at,updated_at FROM audience_imports`
+const importSelect = `SELECT id::text,organisation_id::text,consent_review_id::text,purpose_id::text,upper(channel),wording_version,source_name,coalesce(source_system,''),coalesce(default_country_iso2::text,''),object_key,coalesce(upload_session_id::text,''),original_filename,coalesce(detected_media_type,''),file_sha256,byte_size,coalesce(template_version,''),coalesce(mapping_definition_id::text,''),mapping,coalesce(update_policy,'NEWEST_SOURCE'),status,coalesce(malware_scan_status,'PENDING'),coalesce(content_signature_valid,false),coalesce(client_request_id,''),uploaded_rows,valid_rows,invalid_rows,duplicate_rows,suppressed_rows,inserted_contacts,updated_contacts,coalesce(uploaded_by::text,''),coalesce(approved_by::text,''),approved_at,coalesce(failure_reason,''),source_expires_at,source_deleted_at,rolled_back_at,coalesce(rolled_back_by::text,''),coalesce(rollback_reason,''),version,created_at,updated_at FROM audience_imports`
 
 type importScanner interface{ Scan(...any) error }
 
@@ -238,7 +238,7 @@ func scanImport(row importScanner) (ImportBatch, error) {
 	var status, malware, updatePolicy string
 	var approvedAt, sourceExpiresAt, sourceDeletedAt, rolledBackAt sql.NullTime
 	var mapping []byte
-	err := row.Scan(&value.ID, &value.OrganisationID, &value.ConsentReviewID, &value.PurposeID, &value.Channel, &value.WordingVersion, &value.SourceName, &value.SourceSystem, &value.DefaultCountryISO2, &value.ObjectKey, &value.OriginalFilename, &value.DetectedMediaType, &value.FileSHA256, &value.ByteSize, &value.TemplateVersion, &value.MappingDefinitionID, &mapping, &updatePolicy, &status, &malware, &value.ContentSignatureValid, &value.ClientRequestID, &value.UploadedRows, &value.ValidRows, &value.InvalidRows, &value.DuplicateRows, &value.SuppressedRows, &value.InsertedContacts, &value.UpdatedContacts, &value.UploadedBy, &value.ApprovedBy, &approvedAt, &value.FailureReason, &sourceExpiresAt, &sourceDeletedAt, &rolledBackAt, &value.RolledBackBy, &value.RollbackReason, &value.Version, &value.CreatedAt, &value.UpdatedAt)
+	err := row.Scan(&value.ID, &value.OrganisationID, &value.ConsentReviewID, &value.PurposeID, &value.Channel, &value.WordingVersion, &value.SourceName, &value.SourceSystem, &value.DefaultCountryISO2, &value.ObjectKey, &value.UploadSessionID, &value.OriginalFilename, &value.DetectedMediaType, &value.FileSHA256, &value.ByteSize, &value.TemplateVersion, &value.MappingDefinitionID, &mapping, &updatePolicy, &status, &malware, &value.ContentSignatureValid, &value.ClientRequestID, &value.UploadedRows, &value.ValidRows, &value.InvalidRows, &value.DuplicateRows, &value.SuppressedRows, &value.InsertedContacts, &value.UpdatedContacts, &value.UploadedBy, &value.ApprovedBy, &approvedAt, &value.FailureReason, &sourceExpiresAt, &sourceDeletedAt, &rolledBackAt, &value.RolledBackBy, &value.RollbackReason, &value.Version, &value.CreatedAt, &value.UpdatedAt)
 	if err != nil {
 		return ImportBatch{}, err
 	}

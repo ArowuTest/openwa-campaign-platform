@@ -114,6 +114,7 @@ func (r *retentionRepositoryStub) FailSourceDeletion(_ context.Context, item Sou
 
 type retentionObjectStore struct {
 	deleteErrors map[string]error
+	deleted      []string
 }
 
 func (s *retentionObjectStore) Put(context.Context, string, io.Reader, int64) (storage.Metadata, error) {
@@ -126,6 +127,7 @@ func (s *retentionObjectStore) Stat(context.Context, string) (storage.Metadata, 
 	return storage.Metadata{}, errors.New("not implemented")
 }
 func (s *retentionObjectStore) Delete(_ context.Context, key string) error {
+	s.deleted = append(s.deleted, key)
 	return s.deleteErrors[key]
 }
 
@@ -145,6 +147,26 @@ func TestSourceRetentionWorkerRecordsDeleteFailuresAndCompletesSuccesses(t *test
 	}
 	if processed != 1 || len(repository.completed) != 1 || repository.completed[0] != "i1" || len(repository.failed) != 1 || repository.failed[0] != "i2" {
 		t.Fatalf("processed=%d completed=%v failed=%v", processed, repository.completed, repository.failed)
+	}
+}
+
+func TestSourceRetentionWorkerDeletesEveryResumableUploadPartBeforeCompletion(t *testing.T) {
+	repository := &retentionRepositoryStub{items: []SourceDeletionWork{{
+		ImportID: "i-resumable", ObjectKey: "imports/upload-sessions/session/manifest",
+		ObjectKeys: []string{"imports/uploads/session/part-000001.bin", "imports/uploads/session/part-000002.bin"},
+		LeaseOwner: "w", LeaseVersion: 2,
+	}}}
+	store := &retentionObjectStore{deleteErrors: map[string]error{}}
+	worker := &SourceRetentionWorker{Repository: repository, Objects: store, WorkerID: "retention-worker"}
+	processed, err := worker.Process(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if processed != 1 || len(repository.completed) != 1 || len(repository.failed) != 0 {
+		t.Fatalf("processed=%d completed=%v failed=%v", processed, repository.completed, repository.failed)
+	}
+	if len(store.deleted) != 2 || store.deleted[0] != "imports/uploads/session/part-000001.bin" || store.deleted[1] != "imports/uploads/session/part-000002.bin" {
+		t.Fatalf("deleted=%v", store.deleted)
 	}
 }
 

@@ -15,8 +15,10 @@ import (
 	"campaign-platform/internal/audience/materialisation"
 	"campaign-platform/internal/geography"
 	"campaign-platform/internal/observability"
+	"campaign-platform/internal/organisation"
 	"campaign-platform/internal/persistence/database"
 	postgresrepo "campaign-platform/internal/persistence/postgres"
+	"campaign-platform/internal/security/malware"
 	"campaign-platform/internal/segment"
 	sharedcrypto "campaign-platform/internal/shared/crypto"
 	"campaign-platform/internal/storage"
@@ -66,15 +68,35 @@ func main() {
 		os.Exit(1)
 	}
 
+	uploadSessions := &importer.PostgreSQLUploadSessionRepository{DB: db}
+	organisations := organisation.NewService(&postgresrepo.OrganisationRepository{DB: db})
+	uploadFinaliser := &importer.UploadFinalisationWorker{
+		Repository:      uploadSessions,
+		Source:          &importer.UploadCompositeSource{Store: objectStore},
+		Scanner:         malware.ClamAVScanner{Address: cfg.ClamAVAddress, DialTimeout: cfg.ClamAVDialTimeout, ScanTimeout: cfg.ClamAVScanTimeout},
+		Imports:         &importer.ImportService{Repository: &importer.PostgreSQLImportRepository{DB: db}, Organisations: organisations},
+		WorkerID:        cfg.WorkerID + "-upload-finaliser",
+		LeaseDuration:   cfg.UploadFinalisationLeaseDuration,
+		ClaimBatch:      cfg.UploadFinalisationClaimBatch,
+		PollInterval:    cfg.UploadFinalisationPollInterval,
+		SourceRetention: time.Duration(cfg.AudienceImportSourceRetentionDays) * 24 * time.Hour,
+		TempDir:         cfg.ObjectStoreTempDir,
+		OnError: func(work importer.UploadFinalisationWork, err error) {
+			logger.Error("audience upload finalisation failed", "uploadSessionId", work.Session.ID, "error", err)
+		},
+	}
+
 	staging := &importer.PostgreSQLStagingRepository{
 		DB: db, WorkerID: cfg.WorkerID, LeaseDuration: cfg.ValidationLeaseDuration,
 	}
 	catalogue := geography.DefaultCatalogue()
 	worker := &importer.ValidationWorker{
-		Claimer: staging,
-		Staging: staging,
-		Store:   objectStore,
-		Ingest:  &importer.IngestService{Repository: staging, BatchSize: cfg.StageBatchSize},
+		Claimer:        staging,
+		Staging:        staging,
+		Store:          objectStore,
+		UploadSessions: uploadSessions,
+		Ingest:         &importer.IngestService{Repository: staging, BatchSize: cfg.StageBatchSize},
+		TempDir:        cfg.ObjectStoreTempDir,
 		Options: importer.PreviewOptions{
 			DefaultCountryISO2: cfg.DefaultCountryISO2,
 			MaxRows:            cfg.MaxRows,
@@ -143,7 +165,7 @@ func main() {
 	}
 
 	health := workerruntime.NewHealth("audience-worker", db, func() int64 {
-		return worker.Active() + materialisationWorker.Active() + mergeWorker.Active() + sourceRetentionWorker.Active()
+		return uploadFinaliser.Active() + worker.Active() + materialisationWorker.Active() + mergeWorker.Active() + sourceRetentionWorker.Active()
 	})
 	healthServer := &http.Server{
 		Addr: cfg.HealthAddr, Handler: health.Handler(),
@@ -164,7 +186,8 @@ func main() {
 		name string
 		err  error
 	}
-	workerErrors := make(chan workerResult, 4)
+	workerErrors := make(chan workerResult, 5)
+	go func() { workerErrors <- workerResult{name: "upload-finalisation", err: uploadFinaliser.Run(rootCtx)} }()
 	go func() { workerErrors <- workerResult{name: "validation", err: worker.Run(rootCtx)} }()
 	go func() { workerErrors <- workerResult{name: "materialisation", err: materialisationWorker.Run(rootCtx)} }()
 	go func() { workerErrors <- workerResult{name: "merge", err: mergeWorker.Run(rootCtx)} }()
@@ -172,7 +195,9 @@ func main() {
 		workerErrors <- workerResult{name: "source-retention", err: sourceRetentionWorker.Run(rootCtx)}
 	}()
 	logger.Info("audience workers started",
-		"workerId", cfg.WorkerID, "validationConcurrency", cfg.Concurrency,
+		"workerId", cfg.WorkerID,
+		"uploadFinalisationClaimBatch", cfg.UploadFinalisationClaimBatch, "uploadFinalisationLeaseDuration", cfg.UploadFinalisationLeaseDuration.String(),
+		"validationConcurrency", cfg.Concurrency,
 		"validationClaimBatch", cfg.ClaimBatch, "validationLeaseDuration", cfg.ValidationLeaseDuration.String(),
 		"materialisationBatchSize", cfg.MaterialisationBatchSize, "materialisationClaimBatch", cfg.MaterialisationClaimBatch,
 		"mergeConcurrency", cfg.MergeConcurrency, "mergeClaimBatch", cfg.MergeClaimBatch,
@@ -199,7 +224,7 @@ func main() {
 	if err := healthServer.Shutdown(shutdownCtx); err != nil {
 		logger.Error("audience worker health shutdown failed", "error", err)
 	}
-	for stoppedWorkers < 4 {
+	for stoppedWorkers < 5 {
 		select {
 		case result := <-workerErrors:
 			stoppedWorkers++
@@ -207,7 +232,7 @@ func main() {
 				runErr = result.err
 			}
 		case <-shutdownCtx.Done():
-			logger.Error("audience worker shutdown timed out", "validationActive", worker.Active(), "materialisationActive", materialisationWorker.Active(), "mergeActive", mergeWorker.Active(), "sourceRetentionActive", sourceRetentionWorker.Active())
+			logger.Error("audience worker shutdown timed out", "uploadFinalisationActive", uploadFinaliser.Active(), "validationActive", worker.Active(), "materialisationActive", materialisationWorker.Active(), "mergeActive", mergeWorker.Active(), "sourceRetentionActive", sourceRetentionWorker.Active())
 			os.Exit(1)
 		}
 	}
@@ -215,5 +240,5 @@ func main() {
 		logger.Error("audience worker stopped with error", "error", runErr)
 		os.Exit(1)
 	}
-	logger.Info("audience workers stopped", "validationActive", worker.Active(), "materialisationActive", materialisationWorker.Active(), "mergeActive", mergeWorker.Active(), "sourceRetentionActive", sourceRetentionWorker.Active())
+	logger.Info("audience workers stopped", "uploadFinalisationActive", uploadFinaliser.Active(), "validationActive", worker.Active(), "materialisationActive", materialisationWorker.Active(), "mergeActive", mergeWorker.Active(), "sourceRetentionActive", sourceRetentionWorker.Active())
 }

@@ -63,6 +63,7 @@ type Dependencies struct {
 	Organisations                  *organisation.Service
 	OrganisationPolicies           *organisation.PolicyAdministration
 	ConsentReviews                 *consent.Service
+	ConsentPurposes                *consent.PurposeService
 	ConsentLedger                  *consent.LedgerService
 	OptOutProcessor                *consent.OptOutProcessor
 	OptOutPolicies                 *consent.OptOutPolicyAdministration
@@ -115,6 +116,7 @@ type Dependencies struct {
 	AudienceReconciliation         *importer.ReconciliationService
 	AudienceSourceTrust            *importer.SourceTrustService
 	AudienceImportIntake           *importer.IntakeService
+	AudienceUploadSessions         *importer.UploadSessionService
 	MaxImportFileBytes             int64
 	DeliveryEvents                 *delivery.Service
 	UnmatchedDeliveryEvents        delivery.UnmatchedEventStore
@@ -220,6 +222,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/organisation-policies/{id}/submit", s.require("organisation.write", s.submitOrganisationPolicy))
 	mux.Handle("POST /api/v1/organisation-policies/{id}/decision", s.require("organisation.approve", s.decideOrganisationPolicy))
 	mux.Handle("GET /api/v1/consent-reviews", s.require("consent.read", s.listConsentReviews))
+	mux.Handle("GET /api/v1/consent-purposes", s.require("consent.read", s.listConsentPurposes))
 	mux.Handle("POST /api/v1/consent-reviews", s.require("consent.write", s.createConsentReview))
 	mux.Handle("GET /api/v1/consent-reviews/{id}", s.require("consent.read", s.getConsentReview))
 	mux.Handle("POST /api/v1/consent-reviews/{id}/submit", s.require("consent.write", s.submitConsentReview))
@@ -243,6 +246,13 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/inbound-replies/{id}/review", s.require("inbound.review", s.reviewInboundReply))
 	mux.Handle("POST /api/v1/inbound-replies/{id}/legal-hold", s.require("privacy.admin", s.setInboundReplyLegalHold))
 	mux.Handle("GET /api/v1/consent-events", s.require("consent.read", s.listConsentEvents))
+	mux.Handle("POST /api/v1/audience-import-upload-sessions", s.require("audience.write", s.createAudienceUploadSession))
+	mux.Handle("GET /api/v1/audience-import-upload-sessions/{id}", s.require("audience.read", s.getAudienceUploadSession))
+	mux.Handle("POST /api/v1/audience-import-upload-sessions/{id}/parts/{part}/target", s.require("audience.write", s.createAudienceUploadPartTarget))
+	mux.Handle("PUT /api/v1/audience-import-upload-sessions/{id}/parts/{part}", s.require("audience.write", s.putAudienceUploadPart))
+	mux.Handle("POST /api/v1/audience-import-upload-sessions/{id}/parts/{part}/confirm", s.require("audience.write", s.confirmAudienceUploadPart))
+	mux.Handle("POST /api/v1/audience-import-upload-sessions/{id}/complete", s.require("audience.write", s.completeAudienceUploadSession))
+	mux.Handle("POST /api/v1/audience-import-upload-sessions/{id}/abort", s.require("audience.write", s.abortAudienceUploadSession))
 	mux.Handle("POST /api/v1/audience-imports/preview", s.require("audience.write", s.previewAudienceImport))
 	mux.Handle("POST /api/v1/audience-imports", s.require("audience.write", s.intakeAudienceImport))
 	mux.Handle("GET /api/v1/audience-imports/{id}", s.require("audience.read", s.getAudienceImport))

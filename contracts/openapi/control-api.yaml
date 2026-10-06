@@ -876,6 +876,31 @@ paths:
                   nextCursor: { type: string }
                   hasMore: { type: boolean }
         '404': { $ref: '#/components/responses/NotFound' }
+  /consent-purposes:
+    get:
+      operationId: listConsentPurposes
+      summary: List governed consent purposes for audience and campaign selection
+      parameters:
+        - { name: organisationId, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: consentReviewId, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: includeInactive, in: query, required: false, schema: { type: boolean, default: false } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
+      responses:
+        '200':
+          description: Governed consent-purpose inventory
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ConsentPurpose' } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
+        '400': { description: Invalid page or includeInactive value }
+        '503': { description: Consent-purpose inventory unavailable }
   /consent-reviews:
     get:
       operationId: listConsentReviews
@@ -1703,6 +1728,161 @@ paths:
         '400': { description: Invalid request }
         '401': { description: Authentication required }
         '403': { description: Permission denied }
+  /audience-import-upload-sessions:
+    post:
+      operationId: createAudienceImportUploadSession
+      summary: Create or replay a resumable governed audience-source upload session
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, minLength: 16, maxLength: 128, pattern: '^[A-Za-z0-9._:-]+$' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateAudienceUploadSessionRequest' }
+      responses:
+        '200':
+          description: Existing exact upload session replayed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AudienceUploadSessionEnvelope' }
+        '201':
+          description: Upload session created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AudienceUploadSessionEnvelope' }
+        '400': { description: Invalid governed upload request }
+        '409': { description: Idempotency key reused with different upload metadata }
+        '413': { description: Source exceeds configured upload limit }
+        '503': { description: Resumable upload is unavailable }
+  /audience-import-upload-sessions/{id}:
+    get:
+      operationId: getAudienceImportUploadSession
+      summary: Resume or inspect a durable audience-source upload session
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Upload session returned
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AudienceUploadSessionEnvelope' }
+        '404': { description: Upload session not found }
+        '503': { description: Resumable upload is unavailable }
+  /audience-import-upload-sessions/{id}/parts/{part}:
+    put:
+      operationId: putAudienceImportUploadPart
+      summary: Upload or replay one bounded immutable source part through the relay transport
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: part, in: path, required: true, schema: { type: integer, minimum: 1, maximum: 1024 } }
+        - name: X-Content-SHA256
+          in: header
+          required: true
+          schema: { type: string, pattern: '^[0-9a-f]{64}$' }
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        '200':
+          description: Part accepted or exact replay converged
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AudienceUploadPartEnvelope' }
+        '404': { description: Upload session not found }
+        '409': { description: Part conflicts with immutable evidence already recorded }
+        '410': { description: Upload session expired }
+        '413': { description: Part exceeds the server-declared size }
+        '422': { description: Part or session state is invalid }
+  /audience-import-upload-sessions/{id}/parts/{part}/target:
+    post:
+      operationId: createAudienceImportDirectUploadPartTarget
+      summary: Create a short-lived one-part direct object-store upload target when that transport is enabled
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: part, in: path, required: true, schema: { type: integer, minimum: 1, maximum: 1024 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DirectUploadPartRequest' }
+      responses:
+        '200':
+          description: Short-lived target issued, or the exact part was already durably recorded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AudienceDirectUploadPartTargetEnvelope' }
+        '404': { description: Upload session not found }
+        '409': { description: Direct transport unavailable or part conflicts with immutable evidence }
+        '410': { description: Upload session expired }
+        '422': { description: Part or session state is invalid }
+  /audience-import-upload-sessions/{id}/parts/{part}/confirm:
+    post:
+      operationId: confirmAudienceImportDirectUploadPart
+      summary: Verify the directly uploaded quarantine object and record immutable part progress
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: part, in: path, required: true, schema: { type: integer, minimum: 1, maximum: 1024 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DirectUploadPartRequest' }
+      responses:
+        '200':
+          description: Direct part confirmed or exact replay converged
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AudienceUploadPartEnvelope' }
+        '404': { description: Upload session not found }
+        '409': { description: Direct transport unavailable, object absent, or immutable part evidence conflicts }
+        '410': { description: Upload session expired }
+        '422': { description: Part or session state is invalid }
+  /audience-import-upload-sessions/{id}/complete:
+    post:
+      operationId: completeAudienceImportUploadSession
+      summary: Verify durable part accounting and mark the source ready for asynchronous finalisation
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UploadSessionVersionRequest' }
+      responses:
+        '200':
+          description: Upload session marked UPLOADED
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AudienceUploadSessionEnvelope' }
+        '404': { description: Upload session not found }
+        '409': { description: Optimistic version conflict }
+        '410': { description: Upload session expired }
+        '422': { description: Upload manifest is incomplete or session state is invalid }
+  /audience-import-upload-sessions/{id}/abort:
+    post:
+      operationId: abortAudienceImportUploadSession
+      summary: Abort a resumable upload before asynchronous finalisation takes ownership
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AbortUploadSessionRequest' }
+      responses:
+        '200':
+          description: Upload session aborted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AudienceUploadSessionEnvelope' }
+        '404': { description: Upload session not found }
+        '409': { description: Optimistic version conflict }
+        '422': { description: Session cannot be aborted from its current state }
   /audience-imports:
     post:
       operationId: intakeAudienceImport
@@ -4038,6 +4218,153 @@ components:
           maxItems: 0
           items: { type: string }
           description: Empty while identity authority remains platform-scoped.
+    AudienceImportColumnMapping:
+      type: object
+      additionalProperties: false
+      required: [msisdn]
+      properties:
+        worksheet: { type: string }
+        msisdn: { type: string, minLength: 1, maxLength: 250 }
+        country: { type: string, maxLength: 250 }
+        state: { type: string, maxLength: 250 }
+        lga: { type: string, maxLength: 250 }
+        age: { type: string, maxLength: 250 }
+        gender: { type: string, maxLength: 250 }
+    CreateAudienceUploadSessionRequest:
+      type: object
+      additionalProperties: false
+      required: [organisationId, consentReviewId, purposeId, channel, wordingVersion, sourceName, originalFilename, templateVersion, mapping, updatePolicy, expectedBytes]
+      properties:
+        organisationId: { type: string, format: uuid }
+        consentReviewId: { type: string, format: uuid }
+        purposeId: { type: string, format: uuid }
+        channel: { type: string, enum: [WHATSAPP] }
+        wordingVersion: { type: string, minLength: 1, maxLength: 250 }
+        sourceName: { type: string, minLength: 1, maxLength: 500 }
+        sourceSystem: { type: string, maxLength: 250 }
+        defaultCountryIso2: { type: string, pattern: '^[A-Za-z]{2}$' }
+        originalFilename: { type: string, minLength: 1, maxLength: 255 }
+        templateVersion: { type: string, minLength: 1, maxLength: 250 }
+        mappingDefinitionId: { type: string, format: uuid }
+        mapping: { $ref: '#/components/schemas/AudienceImportColumnMapping' }
+        updatePolicy: { type: string, enum: [INSERT_ONLY, FILL_NULL, NEWEST_SOURCE, TRUSTED_SOURCE, MANUAL_CONFLICT] }
+        expectedBytes: { type: integer, format: int64, minimum: 1 }
+    AudienceUploadPart:
+      type: object
+      additionalProperties: false
+      required: [number, offset, expectedBytes, state]
+      properties:
+        number: { type: integer, minimum: 1, maximum: 1024 }
+        offset: { type: integer, format: int64, minimum: 0 }
+        expectedBytes: { type: integer, format: int64, minimum: 1, maximum: 33554432 }
+        state: { type: string, enum: [PENDING, UPLOADED] }
+        sha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        uploadedBytes: { type: integer, format: int64, minimum: 0 }
+        uploadedAt: { type: string, format: date-time }
+      description: Storage object keys are intentionally not exposed.
+    AudienceUploadSession:
+      type: object
+      additionalProperties: false
+      required: [id, organisationId, consentReviewId, purposeId, channel, wordingVersion, sourceName, originalFilename, templateVersion, mapping, updatePolicy, uploadedBy, expectedBytes, uploadedBytes, partSize, partCount, uploadedParts, state, version, expiresAt, createdAt, updatedAt, parts]
+      properties:
+        id: { type: string, format: uuid }
+        organisationId: { type: string, format: uuid }
+        consentReviewId: { type: string, format: uuid }
+        purposeId: { type: string, format: uuid }
+        channel: { type: string, enum: [WHATSAPP] }
+        wordingVersion: { type: string }
+        sourceName: { type: string }
+        sourceSystem: { type: string }
+        defaultCountryIso2: { type: string, pattern: '^[A-Z]{2}$' }
+        originalFilename: { type: string }
+        templateVersion: { type: string }
+        mappingDefinitionId: { type: string, format: uuid }
+        mapping: { $ref: '#/components/schemas/AudienceImportColumnMapping' }
+        updatePolicy: { type: string, enum: [INSERT_ONLY, FILL_NULL, NEWEST_SOURCE, TRUSTED_SOURCE, MANUAL_CONFLICT] }
+        uploadedBy: { type: string, format: uuid }
+        expectedBytes: { type: integer, format: int64, minimum: 1 }
+        uploadedBytes: { type: integer, format: int64, minimum: 0 }
+        partSize: { type: integer, format: int64, minimum: 5242880, maximum: 33554432 }
+        partCount: { type: integer, minimum: 1, maximum: 1024 }
+        uploadedParts: { type: integer, minimum: 0, maximum: 1024 }
+        state: { type: string, enum: [CREATED, UPLOADING, UPLOADED, FINALISING, IMPORT_CREATED, ABORTED, EXPIRED, FAILED] }
+        version: { type: integer, format: int64, minimum: 1 }
+        failureReason: { type: string }
+        expiresAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        parts:
+          type: array
+          maxItems: 1024
+          items: { $ref: '#/components/schemas/AudienceUploadPart' }
+      description: Client request keys and storage object keys are never serialized.
+    AudienceUploadSessionEnvelope:
+      type: object
+      additionalProperties: false
+      required: [transport, transports, preferredTransport, session]
+      properties:
+        transport:
+          type: string
+          enum: [DIRECT_S3, RELAY]
+          description: Backward-compatible alias of preferredTransport.
+        transports:
+          type: array
+          minItems: 1
+          maxItems: 2
+          uniqueItems: true
+          items: { type: string, enum: [DIRECT_S3, RELAY] }
+        preferredTransport: { type: string, enum: [DIRECT_S3, RELAY] }
+        session: { $ref: '#/components/schemas/AudienceUploadSession' }
+    DirectUploadPartRequest:
+      type: object
+      additionalProperties: false
+      required: [sha256]
+      properties:
+        sha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+    DirectUploadTarget:
+      type: object
+      additionalProperties: false
+      required: [method, url, headers, expectedBytes, expiresAt]
+      properties:
+        method: { type: string, enum: [PUT] }
+        url:
+          type: string
+          format: uri
+          description: Ephemeral one-part upload capability. Never persist or log this value.
+        headers:
+          type: object
+          additionalProperties: { type: string }
+          description: Exact signed request headers required by the object store.
+        expectedBytes: { type: integer, format: int64, minimum: 1, maximum: 33554432 }
+        expiresAt: { type: string, format: date-time }
+    AudienceDirectUploadPartTargetEnvelope:
+      type: object
+      additionalProperties: false
+      required: [partNumber, alreadyUploaded]
+      properties:
+        partNumber: { type: integer, minimum: 1, maximum: 1024 }
+        alreadyUploaded: { type: boolean }
+        target: { $ref: '#/components/schemas/DirectUploadTarget' }
+    AudienceUploadPartEnvelope:
+      type: object
+      additionalProperties: false
+      required: [changed, session]
+      properties:
+        changed: { type: boolean }
+        session: { $ref: '#/components/schemas/AudienceUploadSession' }
+    UploadSessionVersionRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 1 }
+    AbortUploadSessionRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, reason]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 1 }
+        reason: { type: string, minLength: 8, maxLength: 1000 }
     MetaSenderDraftRequest:
       type: object
       required: [organisationId, senderPoolId, wabaId, phoneNumberId, displayName, businessPhoneDisplay, credentialKey, graphApiVersion, reason]
@@ -4318,6 +4645,24 @@ components:
         expectedVersion: { type: integer, minimum: 1 }
         status: { type: string, enum: [ACTIVE, SUSPENDED, UNDER_REVIEW, CLOSED] }
         reason: { type: string, minLength: 1 }
+    ConsentPurpose:
+      type: object
+      additionalProperties: false
+      required: [id, code, name, channel, wordingVersion, active, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        organisationId: { type: string, format: uuid }
+        consentReviewId: { type: string, format: uuid }
+        code: { type: string, minLength: 1 }
+        name: { type: string, minLength: 1 }
+        description: { type: string }
+        channel: { type: string, enum: [WHATSAPP] }
+        wordingVersion: { type: string, minLength: 1 }
+        permittedMessageCategory: { type: string }
+        expiresAfterDays: { type: integer, minimum: 1 }
+        active: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
     CreateConsentReview:
       type: object
       additionalProperties: false

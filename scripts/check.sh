@@ -15,6 +15,7 @@ node scripts/check-typescript-syntax.js
 node scripts/test-gateway-durability.js
 python3 scripts/verify_openapi_routes.py
 python3 scripts/verify-deployment-topology.py
+python3 scripts/verify-admin-web-hosting.py
 python3 scripts/verify-deployment-readiness.py
 python3 scripts/verify-railway-production-shell.py
 python3 scripts/verify-railway-production-variable-plan.py

@@ -77,6 +77,8 @@ type Dependencies struct {
 	Identity                       *identity.Service
 	IdentityAdministration         *identity.AdministrationService
 	SecureCookies                  bool
+	Environment                    string
+	Classification                 string
 	MSISDNProtector                *sharedcrypto.MSISDNProtector
 	Messages                       *message.Service
 	TestMessages                   *testmessage.Service
@@ -1669,7 +1671,16 @@ func (s *Server) transitionCampaign(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "CAMPAIGN_EVIDENCE_INVALID", "Authoritative campaign evidence did not satisfy the requested transition.", map[string]any{"detail": err.Error()})
 		return
 	}
-	entity, err := s.deps.Campaigns.Transition(r.Context(), r.PathValue("id"), input)
+	var entity campaign.Campaign
+	if input.Action == campaign.ActionApproveFinal {
+		if s.deps.Execution == nil {
+			httpx.WriteError(w, r, http.StatusServiceUnavailable, "PILOT_ADMISSION_UNAVAILABLE", "Campaign pilot admission is unavailable.", nil)
+			return
+		}
+		entity, err = s.deps.Execution.ApproveFinal(r.Context(), r.PathValue("id"), input)
+	} else {
+		entity, err = s.deps.Campaigns.Transition(r.Context(), r.PathValue("id"), input)
+	}
 	if errors.Is(err, campaign.ErrNotFound) {
 		httpx.WriteError(w, r, http.StatusNotFound, "CAMPAIGN_NOT_FOUND", "The campaign was not found.", nil)
 		return
@@ -2954,6 +2965,10 @@ func (s *Server) getCampaignMetrics(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, value)
 }
 
+type releaseCampaignRequest struct {
+	ExpectedVersion int64
+}
+
 func (s *Server) releaseCampaignAudience(w http.ResponseWriter, r *http.Request) {
 	if s.deps.Releases == nil {
 		httpx.WriteError(w, r, http.StatusServiceUnavailable, "RELEASE_SERVICE_UNAVAILABLE", "Campaign audience release is unavailable.", nil)
@@ -2965,7 +2980,15 @@ func (s *Server) releaseCampaignAudience(w http.ResponseWriter, r *http.Request)
 		httpx.WriteError(w, r, http.StatusForbidden, "STEP_UP_REQUIRED", "Recent multi-factor verification is required to release campaign recipients.", nil)
 		return
 	}
-	result, err := s.deps.Releases.Release(r.Context(), r.PathValue("id"))
+	var input releaseCampaignRequest
+	if !decodeStrictJSON(w, r, &input) {
+		return
+	}
+	if input.ExpectedVersion <= 0 {
+		httpx.WriteError(w, r, http.StatusBadRequest, "EXPECTED_VERSION_REQUIRED", "Expected campaign version is required.", nil)
+		return
+	}
+	result, err := s.deps.Releases.ReleaseGuarded(r.Context(), r.PathValue("id"), input.ExpectedVersion)
 	if errors.Is(err, campaign.ErrNotFound) {
 		httpx.WriteError(w, r, http.StatusNotFound, "CAMPAIGN_NOT_FOUND", "The campaign was not found.", nil)
 		return

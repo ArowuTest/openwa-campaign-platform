@@ -6,9 +6,8 @@ export default function AudienceBuilderPage() {
       <div className="toolbar">
         <div>
           <h1>Audience builder</h1>
-          <p className="muted">Create reusable segments using governed demographic, geography, consent and engagement filters.</p>
+          <p className="muted">Build, validate, estimate and save reusable segments using the current governed filter registry.</p>
         </div>
-        <button className="primary" type="button">Save segment</button>
       </div>
       <FilterBuilder />
     </>

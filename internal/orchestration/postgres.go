@@ -144,22 +144,25 @@ func (s *PostgreSQLStore) authoriseOnce(ctx context.Context, cmd Command, checke
 	}
 	defer tx.Rollback()
 
-	var maximum int64
+	var maximum, campaignVersion int64
 	var status, snapshotID, messageVersionID, organisationID, purposeID, organisationStatus, reviewStatus, reviewChannel string
 	var reviewExpiresAt time.Time
 	const campaignQuery = `
-SELECT c.maximum_unique_recipients, c.status, coalesce(c.audience_snapshot_id::text,''),
+SELECT c.maximum_unique_recipients, c.version, c.status, coalesce(c.audience_snapshot_id::text,''),
        coalesce(c.approved_message_version_id::text,''), c.organisation_id::text, c.purpose_id::text,
        o.status, cr.status, cr.channel, cr.expires_at
 FROM campaigns c
 JOIN organisations o ON o.id = c.organisation_id
 JOIN consent_reviews cr ON cr.id = c.consent_review_id
 WHERE c.id=$1::uuid FOR UPDATE OF c`
-	if err := tx.QueryRowContext(ctx, campaignQuery, cmd.CampaignID).Scan(&maximum, &status, &snapshotID, &messageVersionID, &organisationID, &purposeID, &organisationStatus, &reviewStatus, &reviewChannel, &reviewExpiresAt); err != nil {
+	if err := tx.QueryRowContext(ctx, campaignQuery, cmd.CampaignID).Scan(&maximum, &campaignVersion, &status, &snapshotID, &messageVersionID, &organisationID, &purposeID, &organisationStatus, &reviewStatus, &reviewChannel, &reviewExpiresAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Result{}, errors.New("campaign not found")
 		}
 		return Result{}, fmt.Errorf("lock campaign: %w", err)
+	}
+	if cmd.ExpectedCampaignVersion > 0 && campaignVersion != cmd.ExpectedCampaignVersion {
+		return Result{}, ErrReleaseConflict
 	}
 	if status != "SCHEDULED" && status != "DISPATCHING" {
 		return Result{}, fmt.Errorf("campaign status %s cannot release recipients", status)

@@ -28,6 +28,7 @@ type Coordinator struct {
 	Committer           LifecycleCommitter
 	SafetyMarginPercent int
 	RoutingPlans        *RoutingAdministration
+	TestMessages        PilotTestMessageReader
 	Maintenance         *platformpolicy.MaintenanceAdministration
 	Clock               func() time.Time
 }
@@ -102,7 +103,7 @@ func (c *Coordinator) assess(ctx context.Context, id string, record bool) (Capac
 			if multiErr != nil {
 				return CapacityEvidence{}, Metrics{}, multiErr
 			}
-			evidence = CapacityEvidence{CampaignID: entity.ID, PoolID: plan.ID, EvidenceVersion: plan.CapacityEvidenceVersion, RemainingRecipients: remaining, AvailableMessagesPerMinute: multi.EffectiveMessagesPerMinute, AvailableDailyCapacity: multi.EffectiveDailyUnits, SafetyMarginPercent: c.SafetyMarginPercent, RequiredMessagesPerMinute: multi.RequiredMessagesPerMinute, EffectiveMessagesPerMinute: float64(multi.EffectiveMessagesPerMinute), ForecastCompletionAt: multi.ForecastCompletionAt, DeadlineAt: *entity.CompletionDeadlineAt, Decision: multi.Decision, Reasons: multi.Reasons, EvaluatedAt: multi.EvaluatedAt}
+			evidence = CapacityEvidence{CampaignID: entity.ID, PoolID: plan.ID, routingPlanID: plan.ID, EvidenceVersion: plan.CapacityEvidenceVersion, RemainingRecipients: remaining, AvailableMessagesPerMinute: multi.EffectiveMessagesPerMinute, AvailableDailyCapacity: multi.EffectiveDailyUnits, SafetyMarginPercent: c.SafetyMarginPercent, RequiredMessagesPerMinute: multi.RequiredMessagesPerMinute, EffectiveMessagesPerMinute: float64(multi.EffectiveMessagesPerMinute), ForecastCompletionAt: multi.ForecastCompletionAt, DeadlineAt: *entity.CompletionDeadlineAt, Decision: multi.Decision, Reasons: multi.Reasons, EvaluatedAt: multi.EvaluatedAt}
 		} else if errors.Is(listErr, ErrRoutingPlanNotFound) {
 			if entity.Transport.Provider == campaign.ProviderMeta {
 				return CapacityEvidence{}, Metrics{}, errors.New("Meta Cloud execution requires an approved routing plan")
@@ -183,6 +184,69 @@ func (c *Coordinator) commitLifecycle(
 	return c.Committer.Commit(ctx, value)
 }
 
+func (c *Coordinator) ApproveFinal(ctx context.Context, id string, input campaign.TransitionInput) (campaign.Campaign, error) {
+	if c == nil || c.Committer == nil {
+		return campaign.Campaign{}, ErrLifecycleCommitterRequired
+	}
+	if input.Action != campaign.ActionApproveFinal {
+		return campaign.Campaign{}, errors.New("final approval requires APPROVE_FINAL action")
+	}
+	entity, err := c.Campaigns.Get(ctx, strings.TrimSpace(id))
+	if err != nil {
+		return campaign.Campaign{}, err
+	}
+	if input.ExpectedVersion != entity.Version {
+		return campaign.Campaign{}, campaign.ErrConflict
+	}
+	pilot, err := c.ValidateDayOnePilot(ctx, entity)
+	if err != nil {
+		return campaign.Campaign{}, err
+	}
+	planID := ""
+	reservationOperation := ReservationNone
+	details := map[string]any{}
+	if entity.Transport.Provider == campaign.ProviderOpenWA {
+		planID = pilot.RoutingPlanID
+		reservationOperation = ReservationValidateHeld
+		details["acceptedTestMessageId"] = pilot.AcceptedTestMessageID
+		details["routingPlanId"] = pilot.RoutingPlanID
+		details["routingPlanVersion"] = pilot.RoutingPlanVersion
+		details["reservationId"] = pilot.ReservationID
+	}
+	return c.commitLifecycle(
+		ctx, id, input, "CAMPAIGN_FINAL_APPROVED", details,
+		planID, reservationOperation, nil,
+	)
+}
+
+func startRoutingPlanActivation(
+	entity campaign.Campaign,
+	pilot PilotAdmissionEvidence,
+	evidence CapacityEvidence,
+) (string, ReservationOperation, error) {
+	if entity.Transport.Provider == campaign.ProviderOpenWA {
+		planID := strings.TrimSpace(pilot.RoutingPlanID)
+		if planID == "" {
+			return "", ReservationNone, fmt.Errorf("%w: OpenWA start requires a pilot-bound routing plan", ErrPilotAdmission)
+		}
+		return planID, ReservationActivate, nil
+	}
+	if planID := strings.TrimSpace(evidence.routingPlanID); planID != "" {
+		// Bind activation to the exact plan that Plan() validated and assessed.
+		// Never re-read "latest" here: a scheduled operator may release that
+		// plan and approve a replacement before lifecycle commit. Activating the
+		// assessed plan makes that race fail closed because released reservations
+		// are not activatable.
+		return planID, ReservationActivate, nil
+	}
+	if entity.Transport.Provider == campaign.ProviderMeta {
+		return "", ReservationNone, errors.New("Meta Cloud start requires the assessed routing plan identity")
+	}
+	// Preserve the existing execution behavior for legacy/noncanonical
+	// transports that truly used the single-pool admission path.
+	return "", ReservationNone, nil
+}
+
 func (c *Coordinator) Start(ctx context.Context, id, actor, reason string, expected int64) (campaign.Campaign, CapacityEvidence, error) {
 	return c.start(ctx, id, actor, reason, expected, nil)
 }
@@ -205,6 +269,13 @@ func (c *Coordinator) start(
 	if err != nil {
 		return campaign.Campaign{}, CapacityEvidence{}, err
 	}
+	if expected != entity.Version {
+		return campaign.Campaign{}, CapacityEvidence{}, campaign.ErrConflict
+	}
+	pilot, err := c.ValidateDayOnePilot(ctx, entity)
+	if err != nil {
+		return campaign.Campaign{}, CapacityEvidence{}, err
+	}
 	if err := c.checkMaintenance(ctx, platformpolicy.OperationCampaignStart, entity); err != nil {
 		return campaign.Campaign{}, CapacityEvidence{}, err
 	}
@@ -222,16 +293,9 @@ func (c *Coordinator) start(
 	if ev.Decision != DecisionAdmit {
 		return campaign.Campaign{}, ev, fmt.Errorf("campaign admission decision is %s: %v", ev.Decision, ev.Reasons)
 	}
-	planID := ""
-	reservationOperation := ReservationNone
-	if c.RoutingPlans != nil {
-		plan, planErr := c.RoutingPlans.LatestByCampaign(ctx, id)
-		if planErr == nil {
-			planID = plan.ID
-			reservationOperation = ReservationActivate
-		} else if !errors.Is(planErr, ErrRoutingPlanNotFound) {
-			return campaign.Campaign{}, ev, fmt.Errorf("load routing plan for activation: %w", planErr)
-		}
+	planID, reservationOperation, err := startRoutingPlanActivation(entity, pilot, ev)
+	if err != nil {
+		return campaign.Campaign{}, ev, err
 	}
 	entity, err = c.commitLifecycle(
 		ctx, id,
@@ -243,6 +307,10 @@ func (c *Coordinator) start(
 		map[string]any{
 			"capacityEvidenceVersion": ev.EvidenceVersion,
 			"forecastCompletionAt":    ev.ForecastCompletionAt,
+			"acceptedTestMessageId":   pilot.AcceptedTestMessageID,
+			"routingPlanId":           pilot.RoutingPlanID,
+			"routingPlanVersion":      pilot.RoutingPlanVersion,
+			"reservationId":           pilot.ReservationID,
 		},
 		planID, reservationOperation, lease,
 	)
@@ -263,6 +331,13 @@ func (c *Coordinator) Resume(ctx context.Context, id, actor, reason string, expe
 		return campaign.Campaign{}, CapacityEvidence{}, ErrLifecycleCommitterRequired
 	}
 	entity, err := c.Campaigns.Get(ctx, strings.TrimSpace(id))
+	if err != nil {
+		return campaign.Campaign{}, CapacityEvidence{}, err
+	}
+	if expected != entity.Version {
+		return campaign.Campaign{}, CapacityEvidence{}, campaign.ErrConflict
+	}
+	pilot, err := c.ValidateDayOnePilot(ctx, entity)
 	if err != nil {
 		return campaign.Campaign{}, CapacityEvidence{}, err
 	}
@@ -290,7 +365,13 @@ func (c *Coordinator) Resume(ctx context.Context, id, actor, reason string, expe
 			Reason: reason, ExpectedVersion: expected,
 		},
 		"CAMPAIGN_RESUMED",
-		map[string]any{"forecastCompletionAt": ev.ForecastCompletionAt},
+		map[string]any{
+			"forecastCompletionAt":  ev.ForecastCompletionAt,
+			"acceptedTestMessageId": pilot.AcceptedTestMessageID,
+			"routingPlanId":         pilot.RoutingPlanID,
+			"routingPlanVersion":    pilot.RoutingPlanVersion,
+			"reservationId":         pilot.ReservationID,
+		},
 		"", ReservationNone, nil,
 	)
 	return entity, ev, err

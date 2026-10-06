@@ -1,7 +1,10 @@
 'use client';
 
+import Link from 'next/link';
 import { FormEvent, useEffect, useState } from 'react';
+
 import { StatusBadge } from '../../components/status-badge';
+import { apiRequest } from '../../lib/api';
 
 type Campaign = {
   id: string;
@@ -13,7 +16,18 @@ type Campaign = {
   requestedStartAt?: string;
   completionDeadlineAt?: string;
   createdAt: string;
+  transport?: { provider?: string; engine?: string; senderPoolId?: string };
 };
+
+const capabilities = [
+  'SEND_TEXT',
+  'SEND_IMAGE',
+  'SEND_VIDEO',
+  'SEND_DOCUMENT',
+  'DELIVERY_EVENTS',
+  'READ_EVENTS',
+  'INBOUND_MESSAGES'
+] as const;
 
 export function CampaignManager() {
   const [items, setItems] = useState<Campaign[]>([]);
@@ -21,61 +35,95 @@ export function CampaignManager() {
   const [busy, setBusy] = useState(false);
 
   async function load() {
-    const response = await fetch('/api/v1/campaigns', { cache: 'no-store' });
-    if (!response.ok) return;
-    const payload = await response.json();
+    const payload = await apiRequest<{ items: Campaign[] }>('/v1/campaigns');
     setItems(payload.items ?? []);
   }
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    let cancelled = false;
+    void apiRequest<{ items: Campaign[] }>('/v1/campaigns')
+      .then((payload) => {
+        if (!cancelled) setItems(payload.items ?? []);
+      })
+      .catch(() => {
+        if (!cancelled) setItems([]);
+      });
+    return () => { cancelled = true; };
+  }, []);
 
   async function create(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setBusy(true);
     setMessage('');
-    const data = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const data = new FormData(form);
     const start = String(data.get('requestedStartAt') ?? '');
     const deadline = String(data.get('completionDeadlineAt') ?? '');
+    const requiredCapabilities = capabilities.filter((capability) => data.get('capability:' + capability) === 'on');
+
     const payload = {
-      organisationId: data.get('organisationId'),
-      name: data.get('name'),
-      purposeId: data.get('purposeId'),
-      consentReviewId: data.get('consentReviewId'),
-      requestedStartAt: start ? new Date(start).toISOString() : null,
-      completionDeadlineAt: deadline ? new Date(deadline).toISOString() : null,
+      organisationId: String(data.get('organisationId') ?? '').trim(),
+      name: String(data.get('name') ?? '').trim(),
+      purposeId: String(data.get('purposeId') ?? '').trim(),
+      consentReviewId: String(data.get('consentReviewId') ?? '').trim(),
+      requestedStartAt: start ? new Date(start).toISOString() : undefined,
+      completionDeadlineAt: deadline ? new Date(deadline).toISOString() : undefined,
+      timezone: String(data.get('timezone') ?? 'UTC').trim() || 'UTC',
+      quietHoursStart: String(data.get('quietHoursStart') ?? '').trim() || undefined,
+      quietHoursEnd: String(data.get('quietHoursEnd') ?? '').trim() || undefined,
       maximumUniqueRecipients: Number(data.get('maximumUniqueRecipients')),
       maximumMessagesPerRecipient: 1,
-      senderPool: data.get('senderPool'),
-      createdBy: data.get('createdBy')
+      transport: {
+        channel: 'WHATSAPP',
+        provider: 'OPENWA',
+        engine: String(data.get('engine') ?? ''),
+        routingMode: 'SENDER_POOL',
+        gatewayPoolId: String(data.get('gatewayPoolId') ?? '').trim(),
+        senderPoolId: String(data.get('senderPoolId') ?? '').trim(),
+        adapterVersion: String(data.get('adapterVersion') ?? '').trim(),
+        requiredCapabilities,
+        fallbackMode: 'NONE',
+        routingPolicyVersion: String(data.get('routingPolicyVersion') ?? '').trim(),
+        capacityEvidenceVersion: String(data.get('capacityEvidenceVersion') ?? '').trim()
+      }
     };
-    const response = await fetch('/api/v1/campaigns', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
-    });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok) setMessage(result.message ?? result.details?.detail ?? 'Campaign could not be created');
-    else {
-      setMessage('Campaign created in DRAFT. It cannot be sent until every approval gate is complete.');
-      event.currentTarget.reset();
+
+    try {
+      await apiRequest<Campaign>('/v1/campaigns', {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      });
+      setMessage('Campaign created in DRAFT with one governed OpenWA sender pool. It cannot dispatch until every server-side approval and pilot gate is complete.');
+      form.reset();
       await load();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? cause.message : 'Campaign could not be created');
+    } finally {
+      setBusy(false);
     }
-    setBusy(false);
   }
 
   return (
     <div className="split-layout">
       <section className="card">
-        <h2>Campaign register</h2>
-        {items.length === 0 ? <div className="empty-state"><strong>No campaigns</strong><p>Create the first campaign using the controlled form.</p></div> : (
+        <div className="section-heading">
+          <div>
+            <h2>Campaign register</h2>
+            <p className="muted">Open a campaign to manage evidence, controlled testing, capacity holds and execution.</p>
+          </div>
+          <span className="pill">{items.length} campaigns</span>
+        </div>
+        {items.length === 0 ? <div className="empty-state"><strong>No campaigns</strong><p>Create the first campaign using the governed Day‑1 form.</p></div> : (
           <div className="table-wrap">
             <table>
-              <thead><tr><th>Campaign</th><th>Status</th><th>Audience limit</th><th>Eligible</th><th>Window</th></tr></thead>
+              <thead><tr><th>Campaign</th><th>Status</th><th>Route</th><th>Audience</th><th>Window</th></tr></thead>
               <tbody>{items.map((item) => (
                 <tr key={item.id}>
-                  <td><strong>{item.name}</strong><small>{item.id}</small></td>
+                  <td><Link className="table-link" href={'/campaigns/' + item.id}><strong>{item.name}</strong></Link><small>{item.id}</small></td>
                   <td><StatusBadge status={item.status} /></td>
-                  <td>{item.maximumUniqueRecipients.toLocaleString()}</td>
-                  <td>{item.eligibleAudienceCount.toLocaleString()}</td>
-                  <td>{item.requestedStartAt ? new Date(item.requestedStartAt).toLocaleString() : 'Not set'}<small>{item.completionDeadlineAt ? `Deadline: ${new Date(item.completionDeadlineAt).toLocaleString()}` : ''}</small></td>
+                  <td>{item.transport?.engine || '—'}<small>{item.transport?.senderPoolId || 'No pool bound'}</small></td>
+                  <td>{item.eligibleAudienceCount.toLocaleString()} / {item.maximumUniqueRecipients.toLocaleString()}</td>
+                  <td>{item.requestedStartAt ? new Date(item.requestedStartAt).toLocaleString() : 'Not set'}<small>{item.completionDeadlineAt ? 'Deadline: ' + new Date(item.completionDeadlineAt).toLocaleString() : ''}</small></td>
                 </tr>
               ))}</tbody>
             </table>
@@ -84,21 +132,60 @@ export function CampaignManager() {
       </section>
 
       <form className="card form-stack" onSubmit={create}>
-        <h2>Create draft campaign</h2>
-        <div className="alert alert-information">External organisations do not create or launch campaigns. Every identifier below refers to an internally reviewed record.</div>
-        <label>Campaign name<input name="name" required /></label>
+        <div>
+          <h2>Create draft campaign</h2>
+          <p className="muted">Day 1 uses exactly one engine-specific OpenWA sender pool. Several READY sessions may serve that pool; mixed engines and automatic fallback are not enabled.</p>
+        </div>
+        <div className="alert alert-information">Operator identity is taken from your authenticated session. Client organisations never create or launch campaigns directly.</div>
+
+        <label>Campaign name<input name="name" maxLength={250} required /></label>
         <label>Organisation ID<input name="organisationId" required /></label>
         <label>Consent purpose ID<input name="purposeId" required /></label>
         <label>Approved consent-review ID<input name="consentReviewId" required /></label>
         <label>Maximum unique recipients<input name="maximumUniqueRecipients" type="number" min="1" required /></label>
-        <label>Sender pool<input name="senderPool" required placeholder="EVENTS-NG" /></label>
+
+        <fieldset>
+          <legend>Exact OpenWA transport</legend>
+          <label>Engine
+            <select name="engine" defaultValue="WHATSAPP_WEB_JS" required>
+              <option value="WHATSAPP_WEB_JS">WhatsApp Web JS / Chromium</option>
+              <option value="BAILEYS">Baileys</option>
+            </select>
+          </label>
+          <label>Sender pool ID<input name="senderPoolId" required /></label>
+          <label>Gateway pool ID<input name="gatewayPoolId" required /></label>
+          <label>Adapter version<input name="adapterVersion" placeholder="0.13.0+platform.1" required /></label>
+          <label>Routing policy version<input name="routingPolicyVersion" required /></label>
+          <label>Capacity evidence version<input name="capacityEvidenceVersion" required /></label>
+          <small>Routing mode is fixed to SENDER_POOL and fallback is fixed to NONE for Day 1.</small>
+        </fieldset>
+
+        <fieldset>
+          <legend>Required capabilities</legend>
+          {capabilities.map((capability) => (
+            <label className="check" key={capability}>
+              <input
+                type="checkbox"
+                name={'capability:' + capability}
+                defaultChecked={capability === 'SEND_TEXT' || capability === 'DELIVERY_EVENTS'}
+              />
+              <span>{capability.replaceAll('_', ' ')}</span>
+            </label>
+          ))}
+        </fieldset>
+
         <div className="grid grid-2">
           <label>Requested start<input name="requestedStartAt" type="datetime-local" required /></label>
           <label>Completion deadline<input name="completionDeadlineAt" type="datetime-local" required /></label>
         </div>
-        <label>Creator user ID<input name="createdBy" required /></label>
-        <button className="primary" disabled={busy}>{busy ? 'Creating…' : 'Create draft campaign'}</button>
-        {message ? <div className="alert">{message}</div> : null}
+        <label>Campaign timezone<input name="timezone" defaultValue="UTC" required /></label>
+        <div className="grid grid-2">
+          <label>Quiet hours start<input name="quietHoursStart" type="time" /></label>
+          <label>Quiet hours end<input name="quietHoursEnd" type="time" /></label>
+        </div>
+
+        <button className="primary" disabled={busy}>{busy ? 'Creating…' : 'Create governed draft'}</button>
+        {message ? <div className="alert" role="status">{message}</div> : null}
       </form>
     </div>
   );

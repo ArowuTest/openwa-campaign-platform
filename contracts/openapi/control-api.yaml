@@ -549,8 +549,22 @@ paths:
     post:
       operationId: estimateCohort
       summary: Calculate the current eligible audience count for a governed cohort
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CompileCohortRequest' }
       responses:
-        '200': { description: Cohort estimate returned }
+        '200':
+          description: Cohort estimate returned
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [eligibleCount, calculatedAt]
+                properties:
+                  eligibleCount: { type: integer, format: int64, minimum: 0 }
+                  calculatedAt: { type: string, format: date-time }
         '400': { description: Invalid request }
         '401': { description: Authentication required }
         '403': { description: Permission denied }
@@ -578,8 +592,16 @@ paths:
     post:
       operationId: createSegment
       summary: Create a saved governed audience segment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateSegmentRequest' }
       responses:
         '201': { description: Segment created }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
         '422': { description: Segment rejected }
   /segments/{id}:
     get:
@@ -1842,9 +1864,13 @@ paths:
   /auth/me:
     get:
       operationId: me
-      summary: me
+      summary: Return the authoritative browser operator/session context
       responses:
-        '200': { description: Request completed }
+        '200':
+          description: Authenticated operator context returned
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthenticatedOperatorContext' }
         '400': { description: Invalid request }
         '401': { description: Authentication required }
         '403': { description: Permission denied }
@@ -1999,11 +2025,23 @@ paths:
       summary: releaseCampaignAudience
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedVersion]
+              properties:
+                expectedVersion: { type: integer, minimum: 1 }
       responses:
         '200': { description: Request completed }
         '400': { description: Invalid request }
         '401': { description: Authentication required }
         '403': { description: Permission denied }
+        '409': { description: Campaign version, pilot evidence or entitlement conflict }
+        '422': { description: Pilot admission or release evidence rejected }
   /consent-events:
     get:
       operationId: listConsentEvents
@@ -3975,6 +4013,31 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
   schemas:
+    AuthenticatedOperatorContext:
+      type: object
+      additionalProperties: false
+      required: [id, email, displayName, permissions, sessionId, environment, classification, scopeType, organisationIds]
+      properties:
+        id: { type: string }
+        email: { type: string, format: email }
+        displayName: { type: string }
+        permissions:
+          type: array
+          uniqueItems: true
+          items: { type: string }
+        sessionId: { type: string }
+        lastLoginAt: { type: string, format: date-time, nullable: true }
+        environment: { type: string, minLength: 1, maxLength: 64 }
+        classification: { type: string, minLength: 1, maxLength: 64 }
+        scopeType:
+          type: string
+          enum: [PLATFORM]
+          description: Current identity authority is platform-scoped; organisation-scoped user bindings are not yet implemented.
+        organisationIds:
+          type: array
+          maxItems: 0
+          items: { type: string }
+          description: Empty while identity authority remains platform-scoped.
     MetaSenderDraftRequest:
       type: object
       required: [organisationId, senderPoolId, wabaId, phoneNumberId, displayName, businessPhoneDisplay, credentialKey, graphApiVersion, reason]
@@ -4213,6 +4276,7 @@ components:
           items: { $ref: '#/components/schemas/FilterGroup' }
     CompileCohortRequest:
       type: object
+      additionalProperties: false
       required: [definition, organisationId, purposeId]
       properties:
         definition: { $ref: '#/components/schemas/FilterGroup' }
@@ -4220,6 +4284,15 @@ components:
         purposeId: { type: string, format: uuid }
         channel: { type: string, default: WHATSAPP }
         asOf: { type: string, format: date-time }
+    CreateSegmentRequest:
+      type: object
+      additionalProperties: false
+      required: [organisationId, name, definition]
+      properties:
+        organisationId: { type: string, format: uuid }
+        name: { type: string, minLength: 1, maxLength: 160 }
+        description: { type: string, maxLength: 2000 }
+        definition: { $ref: '#/components/schemas/FilterGroup' }
     CreateOrganisation:
       type: object
       required: [legalName]

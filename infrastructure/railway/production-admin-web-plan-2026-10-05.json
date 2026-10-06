@@ -1,0 +1,181 @@
+{
+  "schema_version": 1,
+  "evidence_type": "railway-admin-web-hosting-plan",
+  "observed_at": "2026-10-06T02:03:31+01:00",
+  "scope": "non-secret combined champion+hosting candidate plan and read-only Railway reconciliation only; no Railway service was created, no variable was set, no domain was allocated, no source/image was pushed, no deployment was triggered and no release gate is claimed",
+  "source_contracts": {
+    "frontend_service_contract": "infrastructure/railway/admin-web-service-contract.json",
+    "backend_service_contract": "infrastructure/railway/service-contracts.json",
+    "deployment_topology": "config/deployment-topology.json"
+  },
+  "merge_provenance": {
+    "champion_parent": {
+      "branch": "work/champion-integration-20261005-v3",
+      "base_head": "1511b73f6fff123dca49835fb2a0ddcb9d3093fc",
+      "candidate_fingerprint_sha256": "4d17a10cd130201a5a7473202c689d8ac3fc845dd5f3546ceb31f0a1629d7c8b",
+      "role": "full Day-1 operator console plus atomic pilot-admission/auth backend candidate"
+    },
+    "hosting_parent": {
+      "branch": "work/admin-web-hosting-20261005",
+      "base_head": "1511b73f6fff123dca49835fb2a0ddcb9d3093fc",
+      "candidate_fingerprint_sha256": "2be3e40b1b529101afb5c51735398df4948d14416c2f7b90af6e84eebbb4bb24",
+      "fingerprint_excludes": "evidence/release-gates/admin-web-hosting-2026-10-05.json",
+      "role": "hardened Railway admin-web runtime proxy and deployment contract"
+    },
+    "merge_method": "Champion candidate replayed byte-for-byte onto the combined worktree; hosting non-overlap integrated; api.ts merged surgically to preserve champion safe client behavior while forcing same-origin /api; hosting tests added to unified frontend test gate; campaign evidence tables made keyboard-focusable after production-image accessibility QA; Railway client identity hardened to documented X-Railway-Edge + X-Real-IP; Start bound to the exact capacity-assessed routing plan.",
+    "parent_worktrees_modified": false
+  },
+  "local_candidate": {
+    "branch": "work/champion-hosting-integration-20261005",
+    "base_head": "1511b73f6fff123dca49835fb2a0ddcb9d3093fc",
+    "current_head": "1511b73f6fff123dca49835fb2a0ddcb9d3093fc",
+    "candidate_fingerprint_sha256": "8e25f064ddddff1f1e6d124ea9e5f65d46d584b07e640b5d79c758e774b50b96",
+    "candidate_fingerprint_scope": "tracked diff plus sorted untracked file paths and SHA-256 values, excluding production-admin-web-plan-2026-10-05.json and the hosting/integrated evidence manifests to avoid self-reference",
+    "dirty": true,
+    "committed": false,
+    "pushed": false,
+    "deployed": false,
+    "full_operator_console": true,
+    "static_page_routes": 14,
+    "runtime_routes": [
+      "/api/[...path]",
+      "/healthz"
+    ],
+    "local_image_tag": "openwa-admin-web-integrated-candidate:local",
+    "local_image_id": "sha256:ad53591d6f3fbfe81db4fc538b774ac5bd95d459c5ce54c3a607a69a554b81e9",
+    "local_image_registry_digest": null
+  },
+  "railway_observation": {
+    "project": {
+      "id": "8633a0b9-3b15-4c8d-b6f2-0306b284f4dd",
+      "name": "openwa-prod"
+    },
+    "environment": {
+      "id": "546fd711-cf80-4402-89b0-cb3ae5671fa9",
+      "name": "production"
+    },
+    "staged_changes": null,
+    "pending_work": [
+      {
+        "id": "patch:d2cfbecd-82cc-4ead-9cf4-e617071112d6",
+        "kind": "EnvironmentPatch",
+        "status": "staged",
+        "changes_count": 0,
+        "note": "Railway status surfaces an old empty pending-work patch object; get_staged_changes reports no actionable staged resources."
+      }
+    ],
+    "admin_web_present": false,
+    "control_api": {
+      "id": "751fd9e6-e26f-411d-94bb-d00bff06abda",
+      "state": "live",
+      "latest_deployment": {
+        "id": "744eaac1-0b54-4839-a5d5-6ac5194f6584",
+        "status": "SUCCESS",
+        "created_at": "2026-10-04T19:42:21.566Z"
+      },
+      "source": {
+        "repo": "ArowuTest/openwa-campaign-platform",
+        "branch": "main",
+        "commit_sha": "cc125fbfacfd171d179440a780fc4062a8c54c0a"
+      },
+      "public_domain": "control-api-production-22c0.up.railway.app",
+      "port": 8080,
+      "railway_private_domain_variable_available": true,
+      "railway_port_variable_available": true,
+      "trusted_proxy_covers_railway_private_ula": true,
+      "trusted_proxy_historical_same_day_boolean_evidence": true,
+      "trusted_proxy_current_read_redacted": true,
+      "trusted_proxy_current_reconfirmed": false,
+      "trusted_proxy_value_disclosed": false,
+      "trusted_proxy_observation": "Earlier same-day hosting evidence recorded boolean coverage of Railway private ULA without persisting the CIDR. Current Railway connector read redacts variable values, so this was not independently reconfirmed in the final read."
+    },
+    "live_application_services": [
+      "control-api",
+      "audience-worker",
+      "campaign-worker",
+      "export-worker",
+      "inbound-governance-worker",
+      "metrics-worker",
+      "platform-governance-worker"
+    ],
+    "live_managed_dependencies": [
+      "Postgres",
+      "Redis",
+      "ClamAV"
+    ],
+    "buckets": [
+      "Postgres-PITR",
+      "campaign-objects"
+    ]
+  },
+  "service": {
+    "name": "admin-web",
+    "service_id": null,
+    "create_status": "PENDING_ACCEPTED_SOURCE_AND_EXPLICIT_AUTHORIZATION",
+    "dockerfile": "infrastructure/docker/admin-web.Dockerfile",
+    "image_variable": "ADMIN_WEB_IMAGE",
+    "image_digest": null,
+    "port": 3000,
+    "health_path": "/healthz",
+    "public_ingress": true,
+    "tls_required": true,
+    "required_environment_names": [
+      "ADMIN_WEB_CONTROL_API_URL"
+    ],
+    "recommended_environment_values": {
+      "ADMIN_WEB_CONTROL_API_URL": "http://${{control-api.RAILWAY_PRIVATE_DOMAIN}}:${{control-api.PORT}}"
+    },
+    "forbidden_environment_names": [
+      "CONTROL_API_INTERNAL_URL",
+      "NEXT_PUBLIC_CONTROL_API_BASE"
+    ],
+    "secret_classes": [],
+    "custom_domain": null,
+    "deploy_status": "PENDING_ACCEPTED_SOURCE_COMMIT_PUSH_AND_EXPLICIT_DEPLOY_AUTHORIZATION"
+  },
+  "deployment_preconditions": {
+    "accepted_source_committed": false,
+    "accepted_source_pushed": false,
+    "control_api_source_matches_accepted_commit": false,
+    "trusted_proxy_current_reconfirmed": false,
+    "actionable_staged_changes_absent": true,
+    "explicit_deploy_authorization": false
+  },
+  "source_gap": {
+    "production_control_api_source": "cc125fbfacfd171d179440a780fc4062a8c54c0a",
+    "canonical_local_backend_head": "1511b73f6fff123dca49835fb2a0ddcb9d3093fc",
+    "combined_candidate_head": "1511b73f6fff123dca49835fb2a0ddcb9d3093fc with uncommitted combined diff",
+    "note": "Railway cannot deploy this combined candidate until it is accepted, committed, made available to the deployment source, and deployment is explicitly authorized."
+  },
+  "explicit_non_claims": [
+    "admin-web Railway service does not yet exist",
+    "no frontend registry image digest is present",
+    "no public frontend domain is allocated or validated",
+    "no production admin-web variable value has been applied",
+    "no browser smoke test has run against Railway admin-web",
+    "no source commit contains this combined candidate",
+    "no push or deployment has occurred",
+    "no release gate is closed"
+  ],
+  "review": {
+    "status": "ACCEPTED_BY_BLIND_ROLE_REVIEWS",
+    "acceptance_claimed": true,
+    "security": {
+      "verdict": "APPROVE",
+      "initialFinding": "F-02: Railway client IP trust incorrectly derived from X-Forwarded-For.",
+      "remediation": "admin-web and control-api now use X-Railway-Edge + validated X-Real-IP; Railway-marked requests ignore X-Forwarded-For.",
+      "rereviewWorkId": "work-1791241416648-b1e987"
+    },
+    "releaseGovernance": {
+      "verdict": "APPROVE",
+      "findings": [],
+      "workId": "work-1791241561052-85a982"
+    },
+    "concurrency": {
+      "verdict": "APPROVE",
+      "initialFinding": "C1: Start could assess one routing plan then re-read a newer latest plan before activation.",
+      "remediation": "CapacityEvidence carries the exact assessed routingPlanID; Start activates that exact plan and never re-reads latest; Meta fails closed without assessed plan identity.",
+      "rereviewWorkId": "work-1791248490634-50b4a2"
+    }
+  }
+}

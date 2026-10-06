@@ -15,9 +15,10 @@ var ErrExecutionLeaseConflict = errors.New("execution lease ownership or fence c
 type ReservationOperation string
 
 const (
-	ReservationNone     ReservationOperation = "NONE"
-	ReservationActivate ReservationOperation = "ACTIVATE"
-	ReservationRelease  ReservationOperation = "RELEASE"
+	ReservationNone         ReservationOperation = "NONE"
+	ReservationValidateHeld ReservationOperation = "VALIDATE_HELD"
+	ReservationActivate     ReservationOperation = "ACTIVATE"
+	ReservationRelease      ReservationOperation = "RELEASE"
 )
 
 type ExecutionLeaseFence struct {
@@ -71,7 +72,7 @@ func (v LifecycleCommit) Validate() error {
 	}
 	switch v.ReservationOperation {
 	case ReservationNone:
-	case ReservationActivate, ReservationRelease:
+	case ReservationValidateHeld, ReservationActivate, ReservationRelease:
 		if strings.TrimSpace(v.RoutingPlanID) == "" {
 			return errors.New("routing plan is required for reservation mutation")
 		}

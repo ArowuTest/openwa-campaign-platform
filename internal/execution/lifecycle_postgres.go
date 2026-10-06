@@ -80,6 +80,10 @@ FOR UPDATE
 	}
 	routing := &PostgreSQLRoutingPlanStore{DB: c.DB}
 	switch value.ReservationOperation {
+	case ReservationValidateHeld:
+		err = validateHeldRoutingReservations(
+			ctx, tx, value.RoutingPlanID, value.Campaign.ID,
+		)
 	case ReservationActivate:
 		err = routing.ActivateReservationsInTx(
 			ctx, tx, value.RoutingPlanID, value.Campaign.ID, value.OccurredAt,

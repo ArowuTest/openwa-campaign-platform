@@ -376,7 +376,7 @@ services:
     tmpfs:
       - /tmp:size=128m,noexec,nosuid
     environment:
-      CONTROL_API_INTERNAL_URL: http://control-api:8080
+      ADMIN_WEB_CONTROL_API_URL: http://control-api:8080
     depends_on:
       control-api: { condition: service_healthy }
     healthcheck:
@@ -384,7 +384,7 @@ services:
         - CMD
         - node
         - -e
-        - "require('http').get('http://127.0.0.1:3000',r=>process.exit(r.statusCode<500?0:1)).on('error',()=>process.exit(1))"
+        - "require('http').get('http://127.0.0.1:3000/healthz',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
       interval: 15s
       timeout: 5s
       retries: 5

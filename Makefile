@@ -1,4 +1,4 @@
-.PHONY: format fmt test race vet build frontend-syntax traceability governance-check governance-test deployment-topology deployment-readiness release-gate check tree package bundle
+.PHONY: format fmt test race vet build frontend-syntax traceability governance-check governance-test deployment-topology admin-web-hosting deployment-readiness release-gate check tree package bundle
 
 VERSION := $(shell cat VERSION)
 
@@ -37,6 +37,9 @@ governance-check:
 deployment-topology:
 	python3 scripts/verify-deployment-topology.py
 
+admin-web-hosting:
+	python3 scripts/verify-admin-web-hosting.py
+
 deployment-readiness:
 	python3 scripts/verify-deployment-readiness.py
 
@@ -64,7 +67,7 @@ governance-test:
 release-gate:
 	python3 scripts/verify-release-readiness.py --production-candidate
 
-check: fmt test race vet build frontend-syntax traceability governance-check governance-test deployment-topology deployment-readiness railway-production-shell railway-production-variable-plan railway-production-image-plan railway-production-postgres-plan railway-service-config railway-db-identity-variables
+check: fmt test race vet build frontend-syntax traceability governance-check governance-test deployment-topology admin-web-hosting deployment-readiness railway-production-shell railway-production-variable-plan railway-production-image-plan railway-production-postgres-plan railway-service-config railway-db-identity-variables
 
 tree:
 	find . -maxdepth 4 -type f | sort

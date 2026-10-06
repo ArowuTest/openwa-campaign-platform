@@ -34,7 +34,7 @@ func TestNetworkPolicyResolvesClientThroughExplicitTrustedProxy(t *testing.T) {
 	}
 }
 
-func TestNetworkPolicyResolvesClientFromTrustedRailwayForwardingChain(t *testing.T) {
+func TestNetworkPolicyResolvesClientFromTrustedRailwayRealIP(t *testing.T) {
 	policy := NetworkPolicy{
 		AllowedCIDRs:      []netip.Prefix{netip.MustParsePrefix("187.7.31.238/32")},
 		TrustedProxyCIDRs: []netip.Prefix{netip.MustParsePrefix("fc00::/7")},
@@ -42,15 +42,15 @@ func TestNetworkPolicyResolvesClientFromTrustedRailwayForwardingChain(t *testing
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/internal/gateway-nodes/node-1/runtime", nil)
 	r.RemoteAddr = "[fd12:0:8:0:1000::1]:8080"
 	r.Header.Set("X-Railway-Edge", "ord1")
-	r.Header.Set("X-Real-IP", "152.233.29.4")
-	r.Header.Set("X-Forwarded-For", "187.7.31.238, 152.233.29.4")
+	r.Header.Set("X-Real-IP", "187.7.31.238")
+	r.Header.Set("X-Forwarded-For", "10.1.2.3, 152.233.29.4")
 	client, allowed := policy.Allows(r)
 	if !allowed || client.String() != "187.7.31.238" {
-		t.Fatalf("trusted Railway forwarding chain was not resolved: client=%s allowed=%v", client, allowed)
+		t.Fatalf("trusted Railway real IP was not resolved: client=%s allowed=%v", client, allowed)
 	}
 }
 
-func TestNetworkPolicyFailsClosedForMalformedRailwayForwardingChain(t *testing.T) {
+func TestNetworkPolicyFailsClosedForMalformedRailwayRealIP(t *testing.T) {
 	policy := NetworkPolicy{
 		AllowedCIDRs:      []netip.Prefix{netip.MustParsePrefix("187.7.31.238/32")},
 		TrustedProxyCIDRs: []netip.Prefix{netip.MustParsePrefix("fc00::/7")},
@@ -58,10 +58,11 @@ func TestNetworkPolicyFailsClosedForMalformedRailwayForwardingChain(t *testing.T
 	r := httptest.NewRequest(http.MethodPost, "/api/v1/internal/gateway-nodes/node-1/runtime", nil)
 	r.RemoteAddr = "[fd12:0:8:0:1000::1]:8080"
 	r.Header.Set("X-Railway-Edge", "ord1")
-	r.Header.Set("X-Forwarded-For", ", 187.7.31.238")
+	r.Header.Set("X-Real-IP", "not-an-ip")
+	r.Header.Set("X-Forwarded-For", "187.7.31.238")
 	client, allowed := policy.Allows(r)
 	if allowed || client.IsValid() {
-		t.Fatalf("malformed Railway forwarding chain was accepted: client=%s allowed=%v", client, allowed)
+		t.Fatalf("malformed Railway real IP was accepted: client=%s allowed=%v", client, allowed)
 	}
 }
 

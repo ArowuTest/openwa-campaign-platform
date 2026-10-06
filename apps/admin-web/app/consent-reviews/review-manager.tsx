@@ -2,6 +2,8 @@
 
 import { FormEvent, useState } from 'react';
 
+import { apiRequest } from '../../lib/api';
+
 export function ConsentReviewManager() {
   const [message, setMessage] = useState('');
   const [saving, setSaving] = useState(false);
@@ -26,17 +28,18 @@ export function ConsentReviewManager() {
       permittedMessageCategory: data.get('permittedMessageCategory'),
       restrictions: data.get('restrictions')
     };
-    const response = await fetch('/api/v1/consent-reviews', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
-    });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      setMessage(result.message ?? 'Consent review could not be created');
-    } else {
+    try {
+      const result = await apiRequest<{ name: string }>('/v1/consent-reviews', {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      });
       setMessage(`Review ${result.name} created and awaiting a compliance decision.`);
       event.currentTarget.reset();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? cause.message : 'Consent review could not be created');
+    } finally {
+      setSaving(false);
     }
-    setSaving(false);
   }
 
   return (

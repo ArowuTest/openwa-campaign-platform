@@ -11,7 +11,10 @@ import (
 	"campaign-platform/internal/shared/httpx"
 )
 
-const sessionCookieName = "campaign_session"
+const (
+	sessionCookieName = "campaign_session"
+	csrfCookieName    = "campaign_csrf"
+)
 
 type loginRequest struct {
 	Email    string `json:"email"`
@@ -39,7 +42,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if result.SessionToken != "" {
-		s.setSessionCookie(w, result.SessionToken, result.ExpiresAt)
+		s.setAuthenticationCookies(w, result.SessionToken, result.CSRFToken, result.ExpiresAt)
 	}
 	httpx.WriteJSON(w, http.StatusOK, result)
 }
@@ -55,7 +58,7 @@ func (s *Server) verifyMFA(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, http.StatusUnauthorized, "MFA_FAILED", "The multi-factor code could not be verified.", nil)
 		return
 	}
-	s.setSessionCookie(w, result.SessionToken, result.ExpiresAt)
+	s.setAuthenticationCookies(w, result.SessionToken, result.CSRFToken, result.ExpiresAt)
 	httpx.WriteJSON(w, http.StatusOK, result)
 }
 
@@ -64,8 +67,7 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 	if token != "" {
 		s.deps.Identity.Revoke(token)
 	}
-	http.SetCookie(w, &http.Cookie{Name: sessionCookieName, Value: "", Path: "/", MaxAge: -1,
-		HttpOnly: true, Secure: s.deps.SecureCookies, SameSite: http.SameSiteStrictMode})
+	s.clearAuthenticationCookies(w)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -75,10 +77,20 @@ func (s *Server) me(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, http.StatusUnauthorized, "AUTHENTICATION_REQUIRED", "Authentication is required.", nil)
 		return
 	}
+	environment := strings.ToLower(strings.TrimSpace(s.deps.Environment))
+	if environment == "" {
+		environment = "unknown"
+	}
+	classification := strings.ToUpper(strings.TrimSpace(s.deps.Classification))
+	if classification == "" {
+		classification = "INTERNAL"
+	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"id": principal.User.ID, "email": principal.User.Email, "displayName": principal.User.DisplayName,
 		"permissions": principal.User.PermissionList(), "sessionId": principal.SessionID,
 		"lastLoginAt": principal.User.LastLoginAt,
+		"environment": environment, "classification": classification,
+		"scopeType": "PLATFORM", "organisationIds": []string{},
 	})
 }
 
@@ -125,9 +137,18 @@ func bearerOrCookie(r *http.Request) string {
 	return ""
 }
 
-func (s *Server) setSessionCookie(w http.ResponseWriter, token string, expiresAt time.Time) {
-	http.SetCookie(w, &http.Cookie{Name: sessionCookieName, Value: token, Path: "/", Expires: expiresAt,
+func (s *Server) setAuthenticationCookies(w http.ResponseWriter, sessionToken, csrfToken string, expiresAt time.Time) {
+	http.SetCookie(w, &http.Cookie{Name: sessionCookieName, Value: sessionToken, Path: "/", Expires: expiresAt,
 		HttpOnly: true, Secure: s.deps.SecureCookies, SameSite: http.SameSiteStrictMode})
+	http.SetCookie(w, &http.Cookie{Name: csrfCookieName, Value: csrfToken, Path: "/", Expires: expiresAt,
+		HttpOnly: false, Secure: s.deps.SecureCookies, SameSite: http.SameSiteStrictMode})
+}
+
+func (s *Server) clearAuthenticationCookies(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{Name: sessionCookieName, Value: "", Path: "/", MaxAge: -1,
+		HttpOnly: true, Secure: s.deps.SecureCookies, SameSite: http.SameSiteStrictMode})
+	http.SetCookie(w, &http.Cookie{Name: csrfCookieName, Value: "", Path: "/", MaxAge: -1,
+		HttpOnly: false, Secure: s.deps.SecureCookies, SameSite: http.SameSiteStrictMode})
 }
 
 func isUnsafeMethod(method string) bool {
@@ -189,7 +210,7 @@ func (s *Server) revokeAllSessions(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: sessionCookieName, Value: "", Path: "/", MaxAge: -1, HttpOnly: true, Secure: s.deps.SecureCookies, SameSite: http.SameSiteStrictMode})
+	s.clearAuthenticationCookies(w)
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"revoked": count})
 }
 

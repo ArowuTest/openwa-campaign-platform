@@ -1,0 +1,29 @@
+# Production frontend overlay for the Railway-hosted internal operator console.
+# Merge with compose.production.yaml for local/reference validation only.
+services:
+  admin-web:
+    image: ${ADMIN_WEB_IMAGE:?ADMIN_WEB_IMAGE must be digest-pinned}
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    tmpfs:
+      - /tmp:size=128m,noexec,nosuid
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      HOSTNAME: 0.0.0.0
+      ADMIN_WEB_CONTROL_API_URL: ${ADMIN_WEB_CONTROL_API_URL:?Railway private control-api URL is required}
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "require('http').get('http://127.0.0.1:3000/healthz',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - private

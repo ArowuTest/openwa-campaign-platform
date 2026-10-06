@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "provider": "railway",
+  "service": {
+    "name": "admin-web",
+    "dockerfile": "infrastructure/docker/admin-web.Dockerfile",
+    "port": 3000,
+    "health_path": "/healthz",
+    "public_ingress": true,
+    "tls_required": true,
+    "required_environment": [
+      "ADMIN_WEB_CONTROL_API_URL"
+    ],
+    "recommended_environment_values": {
+      "ADMIN_WEB_CONTROL_API_URL": "http://${{control-api.RAILWAY_PRIVATE_DOMAIN}}:${{control-api.PORT}}"
+    },
+    "secret_classes": [],
+    "upstream_service": "control-api",
+    "upstream_network": "railway-private",
+    "browser_api_prefix": "/api",
+    "network_admission_owner": "control-api",
+    "forwarded_client_context": "sanitized-railway-edge-x-real-ip"
+  },
+  "forbidden_environment": [
+    "CONTROL_API_INTERNAL_URL",
+    "DATABASE_URL",
+    "META_CLOUD_CREDENTIALS_JSON",
+    "GATEWAY_COMMAND_SECRET",
+    "GATEWAY_RUNTIME_SECRET",
+    "MSISDN_ENCRYPTION_KEY_BASE64",
+    "MSISDN_LOOKUP_KEY_BASE64",
+    "NEXT_PUBLIC_CONTROL_API_BASE"
+  ]
+}

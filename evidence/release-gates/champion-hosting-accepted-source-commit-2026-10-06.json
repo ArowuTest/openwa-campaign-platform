@@ -1,0 +1,74 @@
+{
+  "schema_version": 1,
+  "evidence_type": "openwa-accepted-integrated-source-commit",
+  "observed_at": "2026-10-06T02:06:00+01:00",
+  "branch": "work/champion-hosting-integration-20261005",
+  "accepted_source_commit": "f264237829e1caf4b0bac06c3aacd961885fc7c8",
+  "accepted_source_subject": "feat: integrate governed admin console and Railway hosting",
+  "base_commit": "1511b73f6fff123dca49835fb2a0ddcb9d3093fc",
+  "source_runtime_fingerprint_sha256": "8e25f064ddddff1f1e6d124ea9e5f65d46d584b07e640b5d79c758e774b50b96",
+  "acceptance": {
+    "security": {
+      "verdict": "APPROVE",
+      "corrected_finding": "F-02 Railway trust path now uses X-Railway-Edge + X-Real-IP and ignores X-Forwarded-For for Railway-marked requests.",
+      "work_id": "work-1791241416648-b1e987"
+    },
+    "release_governance": {
+      "verdict": "APPROVE",
+      "findings": [],
+      "work_id": "work-1791241561052-85a982"
+    },
+    "concurrency": {
+      "verdict": "APPROVE",
+      "corrected_finding": "C1 Start now activates the exact capacity-assessed routing plan instead of re-reading LatestByCampaign.",
+      "work_id": "work-1791248490634-50b4a2"
+    }
+  },
+  "deterministic_gates": {
+    "frontend": "PASS 21/21 tests; lint; typecheck; Next 16.3.8 production build",
+    "production_image_accessibility": "PASS 0 violations on dashboard/campaign/senders/operations/reports at desktop and mobile",
+    "backend": "PASS gofmt; go test ./...; go test -race ./...; go vet ./...; go build ./...",
+    "openapi": "PASS 294/294",
+    "governance": "PASS 65/65",
+    "security": "PASS npm audit 0; node-security; committed-secret scan; SBOM 33 components; diff-check",
+    "hosting": "PASS Railway-private runtime proxy, /healthz, read-only/no-capabilities/no-new-privileges container smoke"
+  },
+  "local_image": {
+    "tag": "openwa-admin-web-integrated-candidate:local",
+    "id": "sha256:ad53591d6f3fbfe81db4fc538b774ac5bd95d459c5ce54c3a607a69a554b81e9",
+    "registry_published": false
+  },
+  "git_state": {
+    "committed": true,
+    "pushed": false,
+    "deployed": false,
+    "remote_push_performed": false
+  },
+  "railway_read_only_truth": {
+    "admin_web_present": false,
+    "actionable_staged_changes": null,
+    "control_api_live": true,
+    "control_api_latest_deployment_status": "SUCCESS",
+    "control_api_source_commit": "cc125fbfacfd171d179440a780fc4062a8c54c0a",
+    "accepted_source_available_to_railway": false
+  },
+  "external_open_gates": [
+    "push accepted source to GitHub",
+    "create Railway admin-web service",
+    "publish/resolve deployable image/source",
+    "set ADMIN_WEB_CONTROL_API_URL service reference",
+    "allocate/validate frontend TLS domain",
+    "run real Railway browser smoke/accessibility",
+    "approved real organisation and test MSISDN",
+    "pair real OpenWA session",
+    "live text/media send, delivery/read, inbound, reconnect and UNKNOWN evidence",
+    "backup/restore, monitoring, capacity, security and rollback release certification"
+  ],
+  "explicit_non_claims": [
+    "No push has occurred.",
+    "No Railway admin-web service has been created.",
+    "No production deployment has occurred.",
+    "No live WhatsApp/provider UAT has occurred.",
+    "No production release gate is closed."
+  ]
+}

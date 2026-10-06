@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "evidence_type": "openwa-railway-integrated-deployment-smoke",
+  "observed_at": "2026-10-06T07:16:23+01:00",
+  "project_id": "8633a0b9-3b15-4c8d-b6f2-0306b284f4dd",
+  "environment_id": "546fd711-cf80-4402-89b0-cb3ae5671fa9",
+  "environment": "production",
+  "source": {
+    "repo": "ArowuTest/openwa-campaign-platform",
+    "branch": "work/backend-production-engineering",
+    "deployed_commit": "daa9f3ddede0ecc5b7d6a52e579fba140a0c5e8d",
+    "authorization_commit": "f56b630",
+    "all_eight_services_exact_commit_verified": true
+  },
+  "railway_workflow": {
+    "patch_id": "d2cfbecd-82cc-4ead-9cf4-e617071112d6",
+    "workflow_id": "commitChanges/546fd711-cf80-4402-89b0-cb3ae5671fa9/d2cfbecd-82cc-4ead-9cf4-e617071112d6",
+    "destructive": false
+  },
+  "trusted_proxy_reconfirmation": {
+    "present": true,
+    "prefix_count": 5,
+    "parse_errors": 0,
+    "covers_railway_private_ula_sample": true,
+    "has_ula_trust": true,
+    "overbroad_ipv6_trust": false,
+    "value_disclosed": false
+  },
+  "deployments": [
+    {"service": "control-api", "deployment_id": "861898f4-2957-4d11-b2dd-b929c9409a16", "status": "SUCCESS"},
+    {"service": "audience-worker", "deployment_id": "4ab3c3ad-5519-427d-988d-7cae0ad4a38f", "status": "SUCCESS"},
+    {"service": "campaign-worker", "deployment_id": "33d8c01a-6f8e-44fe-a5ed-0b829f283bbd", "status": "SUCCESS"},
+    {"service": "export-worker", "deployment_id": "3c1b0031-56c9-40e8-8309-abf600653101", "status": "SUCCESS"},
+    {"service": "inbound-governance-worker", "deployment_id": "5d5b0ea8-0485-4fe2-9590-d5107cf2a76b", "status": "SUCCESS"},
+    {"service": "metrics-worker", "deployment_id": "9a614726-1447-4e91-853e-ed6696adfe70", "status": "SUCCESS"},
+    {"service": "platform-governance-worker", "deployment_id": "b1b868da-71ff-4ca3-af8a-28afb32f8b46", "status": "SUCCESS"},
+    {"service": "admin-web", "deployment_id": "e2277f25-a9ae-4c7f-9399-dbe58071a716", "status": "SUCCESS"}
+  ],
+  "admin_web": {
+    "domain": "admin-web-production-016f.up.railway.app",
+    "effective_runtime_port": 8080,
+    "healthcheck_path": "/healthz",
+    "initial_domain_target_port": 3000,
+    "initial_result": "HTTP_502_CONNECTION_REFUSED",
+    "root_cause": "Railway injected PORT=8080 while the initial public domain target was 3000.",
+    "remediation": "Public domain target changed to 8080; repository deployment packet/verifier regression updated to reject 3000.",
+    "post_fix_routes": {
+      "/healthz": 200,
+      "/": 200,
+      "/campaigns": 200,
+      "/senders": 200,
+      "/operations": 200,
+      "/reports": 200
+    },
+    "same_origin_auth_boundary": {
+      "endpoint": "/api/v1/auth/me",
+      "unauthenticated_status": 403,
+      "protected_route_behavior": "redirect_to_login_with_returnTo",
+      "expected": true
+    },
+    "accessibility": {
+      "desktop_login_redirect": {"violations": 0, "passes": 25, "incomplete": 0},
+      "mobile_390x844_login_redirect": {"violations": 0, "passes": 25, "incomplete": 0}
+    }
+  },
+  "environment_health": {
+    "affected_services_online": 8,
+    "services_with_issues": 0,
+    "recent_failures": 0
+  },
+  "non_claims": [
+    "Authenticated operator workflow UAT has not yet been completed with approved credentials.",
+    "No real WhatsApp provider send, delivery/read, inbound reply, reconnect, or UNKNOWN exercise is claimed.",
+    "Production release certification is not claimed by this infrastructure smoke evidence."
+  ]
+}

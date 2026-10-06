@@ -62,6 +62,11 @@ class DeploymentUATPreparationTests(unittest.TestCase):
         self.assertEqual(operations[-1]["commit_sha"], packet["accepted_source_commit"])
         self.assertEqual(packet["commit_operation"]["action"], "accept_deploy")
         self.assertTrue(packet["commit_operation"]["requires_explicit_user_authorization"])
+        generate_domain = next(
+            item for item in packet["post_deploy_operations"]
+            if item["action"] == "generate_domain"
+        )
+        self.assertEqual(generate_domain["target_port"], 8080)
 
     def test_deployment_packet_verifier_passes_ready_and_fails_closed_without_authorization(self):
         result = self.run_python(VERIFY_DEPLOY)
@@ -84,6 +89,20 @@ class DeploymentUATPreparationTests(unittest.TestCase):
         self.assertIn("remote_source_ready", blocked.stderr)
         self.assertIn("explicit_deploy_authorization", blocked.stderr)
         self.assertIn("READY_TO_STAGE", blocked.stderr)
+
+    def test_deployment_packet_rejects_wrong_public_domain_port(self):
+        data = json.loads(DEPLOY_PACKET.read_text(encoding="utf-8"))
+        generate_domain = next(
+            item for item in data["post_deploy_operations"]
+            if item["action"] == "generate_domain"
+        )
+        generate_domain["target_port"] = 3000
+        with tempfile.TemporaryDirectory() as td:
+            candidate = Path(td) / "deployment.json"
+            candidate.write_text(json.dumps(data), encoding="utf-8")
+            result = self.run_python(VERIFY_DEPLOY, "--packet", candidate)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("target_port must match Railway runtime PORT 8080", result.stderr)
 
     def test_repository_check_includes_deployment_packet_validator(self):
         check = (ROOT / "scripts/check.sh").read_text(encoding="utf-8")

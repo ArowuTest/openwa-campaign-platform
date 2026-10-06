@@ -96,7 +96,7 @@ After acceptance:
 1. poll the environment until all seven backend/control services and admin-web are settled SUCCESS;
 2. confirm the deployed backend source is the accepted commit;
 3. confirm `admin-web /healthz` returns 200;
-4. generate/attach the frontend domain only after the service is healthy;
+4. generate/attach the frontend domain only after the service is healthy; set the domain target port to the service's effective Railway `PORT` value rather than the Dockerfile's fallback port (production observation on 2026-10-06: `PORT=8080`);
 5. run authenticated browser smoke/accessibility against the real Railway frontend:
    - `/`
    - `/campaigns`

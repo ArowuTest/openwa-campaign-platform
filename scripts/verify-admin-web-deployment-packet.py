@@ -25,6 +25,7 @@ EXPECTED_FOLLOWUP_TREE = "b1e34346843f196532ef221271def4ca6e348a66"
 EXPECTED_EVIDENCE_SHA256 = "e2acd4f65385d3e9eab4489531f7d4c78372eb3b4ab5ebeffaae6abbc53d2a3c"
 EXPECTED_PRODUCTION_CONTROL_API_COMMIT = "cc125fbfacfd171d179440a780fc4062a8c54c0a"
 EXPECTED_VARIABLE = "http://${{control-api.RAILWAY_PRIVATE_DOMAIN}}:${{control-api.PORT}}"
+EXPECTED_ADMIN_WEB_DOMAIN_PORT = 8080
 EXPECTED_BACKEND = {
     "control-api": "751fd9e6-e26f-411d-94bb-d00bff06abda",
     "audience-worker": "dede9d43-2cb9-413f-bacd-4f1f750b04ca",
@@ -215,6 +216,27 @@ def validate(packet: dict) -> list[str]:
             errors.append("commit_operation must target production accept_deploy")
         if commit_op.get("requires_explicit_user_authorization") is not True:
             errors.append("accept_deploy must require explicit user authorization")
+
+    post_deploy = packet.get("post_deploy_operations")
+    if not isinstance(post_deploy, list):
+        errors.append("post_deploy_operations must be a list")
+    else:
+        domain_ops = [
+            item for item in post_deploy
+            if isinstance(item, dict) and item.get("action") == "generate_domain"
+        ]
+        if len(domain_ops) != 1:
+            errors.append("post_deploy_operations must contain exactly one generate_domain operation")
+        else:
+            domain_op = domain_ops[0]
+            if domain_op.get("target") != "admin-web":
+                errors.append("generate_domain must target admin-web")
+            if domain_op.get("target_port") != EXPECTED_ADMIN_WEB_DOMAIN_PORT:
+                errors.append(
+                    f"generate_domain target_port must match Railway runtime PORT {EXPECTED_ADMIN_WEB_DOMAIN_PORT}"
+                )
+            if domain_op.get("requires_successful_admin_web_deployment") is not True:
+                errors.append("generate_domain must require successful admin-web deployment")
 
     non_claims = " ".join(str(item).lower() for item in packet.get("explicit_non_claims", []))
     for phrase in ("no accepted commit has been pushed", "no railway change has been staged", "no admin-web service exists", "no deployment has been accepted", "no live-provider uat"):

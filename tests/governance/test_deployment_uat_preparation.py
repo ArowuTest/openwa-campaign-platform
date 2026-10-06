@@ -25,7 +25,7 @@ class DeploymentUATPreparationTests(unittest.TestCase):
     def test_deployment_packet_is_staged_only_and_pins_accepted_source(self):
         packet = json.loads(DEPLOY_PACKET.read_text(encoding="utf-8"))
         self.assertEqual(packet["schema_version"], 1)
-        self.assertEqual(packet["state"], "BLOCKED_UNPUSHED")
+        self.assertEqual(packet["state"], "READY_TO_STAGE")
         self.assertEqual(
             packet["accepted_source_commit"],
             "daa9f3ddede0ecc5b7d6a52e579fba140a0c5e8d",
@@ -45,8 +45,8 @@ class DeploymentUATPreparationTests(unittest.TestCase):
         self.assertEqual(packet["service_name"], "admin-web")
         self.assertEqual(packet["environment_id"], "546fd711-cf80-4402-89b0-cb3ae5671fa9")
         self.assertEqual(packet["project_id"], "8633a0b9-3b15-4c8d-b6f2-0306b284f4dd")
-        self.assertFalse(packet["remote_source_ready"])
-        self.assertFalse(packet["explicit_deploy_authorization"])
+        self.assertTrue(packet["remote_source_ready"])
+        self.assertTrue(packet["explicit_deploy_authorization"])
         self.assertFalse(packet["deploy_committed"])
         self.assertEqual(packet["variable_plan"], {
             "ADMIN_WEB_CONTROL_API_URL": "http://${{control-api.RAILWAY_PRIVATE_DOMAIN}}:${{control-api.PORT}}"
@@ -63,15 +63,27 @@ class DeploymentUATPreparationTests(unittest.TestCase):
         self.assertEqual(packet["commit_operation"]["action"], "accept_deploy")
         self.assertTrue(packet["commit_operation"]["requires_explicit_user_authorization"])
 
-    def test_deployment_packet_verifier_passes_plan_but_ready_mode_fails_until_push(self):
+    def test_deployment_packet_verifier_passes_ready_and_fails_closed_without_authorization(self):
         result = self.run_python(VERIFY_DEPLOY)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("Deployment packet valid", result.stdout)
 
         ready = self.run_python(VERIFY_DEPLOY, "--ready")
-        self.assertNotEqual(ready.returncode, 0)
-        self.assertIn("remote_source_ready", ready.stderr)
-        self.assertIn("explicit_deploy_authorization", ready.stderr)
+        self.assertEqual(ready.returncode, 0, ready.stderr)
+        self.assertIn("ready to stage", ready.stdout.lower())
+
+        blocked_data = json.loads(DEPLOY_PACKET.read_text(encoding="utf-8"))
+        blocked_data["state"] = "BLOCKED_UNPUSHED"
+        blocked_data["remote_source_ready"] = False
+        blocked_data["explicit_deploy_authorization"] = False
+        with tempfile.TemporaryDirectory() as td:
+            candidate = Path(td) / "deployment.json"
+            candidate.write_text(json.dumps(blocked_data), encoding="utf-8")
+            blocked = self.run_python(VERIFY_DEPLOY, "--packet", candidate, "--ready")
+        self.assertNotEqual(blocked.returncode, 0)
+        self.assertIn("remote_source_ready", blocked.stderr)
+        self.assertIn("explicit_deploy_authorization", blocked.stderr)
+        self.assertIn("READY_TO_STAGE", blocked.stderr)
 
     def test_repository_check_includes_deployment_packet_validator(self):
         check = (ROOT / "scripts/check.sh").read_text(encoding="utf-8")

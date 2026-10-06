@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "evidence_type": "openwa-deployment-uat-preparation-acceptance",
+  "observed_at": "2026-10-06T02:47:30+01:00",
+  "branch": "work/deployment-uat-prep-20261006",
+  "base_head": "daa9f3ddede0ecc5b7d6a52e579fba140a0c5e8d",
+  "state": "PREPARATION_ACCEPTED_EXECUTION_BLOCKED",
+  "deterministic_verification": {
+    "governance": "PASS 207/207",
+    "deployment_packet": "PASS including live Git lineage f264237 -> daa9f3d",
+    "python_compile": "PASS",
+    "committed_secret_scan": "PASS",
+    "diff_check": "PASS",
+    "ready_mode": "EXPECTED RED until remote source + explicit deploy authorization"
+  },
+  "review": {
+    "substantive_work_id": "work-1791251029561-582941",
+    "substantive_result": "Reviewer inspected deployment/UAT packet; selected BLOCK solely because remote_source_ready=false and explicit_deploy_authorization=false, which are intentional preparation-state safeguards. No preparation-design defect was identified.",
+    "adjudication": "D1/D2 are expected fail-closed execution preconditions, not source defects. D3 confirmed all seven backend/control services plus admin-web are pinned/staged to accepted commit.",
+    "adjudication_retry_work_id": "work-1791251138676-8cd282",
+    "adjudication_retry_result": "provider 403 authorization_denied; no finding returned"
+  },
+  "accepted_artifacts": [
+    "infrastructure/railway/admin-web-deployment-execution-2026-10-06.json",
+    "scripts/verify-admin-web-deployment-packet.py",
+    "evidence/release-gates/champion-hosting-commit-lineage-2026-10-06.json",
+    "evidence/templates/openwa-live-provider-uat-template.json",
+    "scripts/verify-live-provider-uat-evidence.py",
+    "docs/runbooks/railway-admin-web-and-live-uat.md",
+    "tests/governance/test_deployment_uat_preparation.py"
+  ],
+  "execution_guards": [
+    "remote_source_ready must be true before staging",
+    "explicit_deploy_authorization must be true before staging",
+    "all seven backend/control services and admin-web pin to daa9f3d",
+    "accept_deploy remains a separate explicit-authorisation step",
+    "admin-web receives no secret classes",
+    "UAT evidence rejects full MSISDN/QR/secret material",
+    "release certification requires reconciled UNKNOWN plus operational PASS evidence"
+  ],
+  "git_state": {
+    "committed": false,
+    "pushed": false,
+    "deployed": false
+  },
+  "explicit_non_claims": [
+    "No push occurred.",
+    "No Railway change was staged or applied.",
+    "No admin-web service was created.",
+    "No live-provider UAT was performed.",
+    "No production release gate was closed."
+  ]
+}

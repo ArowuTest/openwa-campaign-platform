@@ -1,0 +1,194 @@
+{
+  "schema_version": 1,
+  "evidence_type": "openwa-railway-integrated-deployment-execution-packet",
+  "observed_at": "2026-10-06T02:12:00+01:00",
+  "state": "BLOCKED_UNPUSHED",
+  "project_id": "8633a0b9-3b15-4c8d-b6f2-0306b284f4dd",
+  "environment_id": "546fd711-cf80-4402-89b0-cb3ae5671fa9",
+  "repo": "ArowuTest/openwa-campaign-platform",
+  "source_branch": "work/backend-production-engineering",
+  "accepted_source_commit": "daa9f3ddede0ecc5b7d6a52e579fba140a0c5e8d",
+  "production_control_api_source_commit": "cc125fbfacfd171d179440a780fc4062a8c54c0a",
+  "remote_source_ready": false,
+  "explicit_deploy_authorization": false,
+  "deploy_committed": false,
+  "service_name": "admin-web",
+  "variable_plan": {
+    "ADMIN_WEB_CONTROL_API_URL": "http://${{control-api.RAILWAY_PRIVATE_DOMAIN}}:${{control-api.PORT}}"
+  },
+  "forbidden_admin_web_variables": [
+    "CONTROL_API_INTERNAL_URL",
+    "NEXT_PUBLIC_CONTROL_API_BASE",
+    "DATABASE_URL",
+    "META_CLOUD_CREDENTIALS_JSON",
+    "GATEWAY_COMMAND_SECRET",
+    "GATEWAY_RUNTIME_SECRET",
+    "MSISDN_ENCRYPTION_KEY_BASE64",
+    "MSISDN_LOOKUP_KEY_BASE64"
+  ],
+  "backend_source_updates": [
+    {
+      "service_name": "control-api",
+      "service_id": "751fd9e6-e26f-411d-94bb-d00bff06abda",
+      "action": "connect_service_source",
+      "repo": "ArowuTest/openwa-campaign-platform",
+      "branch": "work/backend-production-engineering",
+      "commit_sha": "daa9f3ddede0ecc5b7d6a52e579fba140a0c5e8d",
+      "environment_id": "546fd711-cf80-4402-89b0-cb3ae5671fa9",
+      "staged": true
+    },
+    {
+      "service_name": "audience-worker",
+      "service_id": "dede9d43-2cb9-413f-bacd-4f1f750b04ca",
+      "action": "connect_service_source",
+      "repo": "ArowuTest/openwa-campaign-platform",
+      "branch": "work/backend-production-engineering",
+      "commit_sha": "daa9f3ddede0ecc5b7d6a52e579fba140a0c5e8d",
+      "environment_id": "546fd711-cf80-4402-89b0-cb3ae5671fa9",
+      "staged": true
+    },
+    {
+      "service_name": "campaign-worker",
+      "service_id": "5830baa1-c94e-465c-afae-b63a4cd47620",
+      "action": "connect_service_source",
+      "repo": "ArowuTest/openwa-campaign-platform",
+      "branch": "work/backend-production-engineering",
+      "commit_sha": "daa9f3ddede0ecc5b7d6a52e579fba140a0c5e8d",
+      "environment_id": "546fd711-cf80-4402-89b0-cb3ae5671fa9",
+      "staged": true
+    },
+    {
+      "service_name": "export-worker",
+      "service_id": "b002f23f-c186-414c-8e2f-2221b39ab762",
+      "action": "connect_service_source",
+      "repo": "ArowuTest/openwa-campaign-platform",
+      "branch": "work/backend-production-engineering",
+      "commit_sha": "daa9f3ddede0ecc5b7d6a52e579fba140a0c5e8d",
+      "environment_id": "546fd711-cf80-4402-89b0-cb3ae5671fa9",
+      "staged": true
+    },
+    {
+      "service_name": "inbound-governance-worker",
+      "service_id": "8d04dff3-8d7f-4d64-b427-14cd12c66142",
+      "action": "connect_service_source",
+      "repo": "ArowuTest/openwa-campaign-platform",
+      "branch": "work/backend-production-engineering",
+      "commit_sha": "daa9f3ddede0ecc5b7d6a52e579fba140a0c5e8d",
+      "environment_id": "546fd711-cf80-4402-89b0-cb3ae5671fa9",
+      "staged": true
+    },
+    {
+      "service_name": "metrics-worker",
+      "service_id": "412f2fa2-288c-4898-9bf2-276f88890270",
+      "action": "connect_service_source",
+      "repo": "ArowuTest/openwa-campaign-platform",
+      "branch": "work/backend-production-engineering",
+      "commit_sha": "daa9f3ddede0ecc5b7d6a52e579fba140a0c5e8d",
+      "environment_id": "546fd711-cf80-4402-89b0-cb3ae5671fa9",
+      "staged": true
+    },
+    {
+      "service_name": "platform-governance-worker",
+      "service_id": "9d9fe33b-be49-4881-99c8-4a0f3cebab5e",
+      "action": "connect_service_source",
+      "repo": "ArowuTest/openwa-campaign-platform",
+      "branch": "work/backend-production-engineering",
+      "commit_sha": "daa9f3ddede0ecc5b7d6a52e579fba140a0c5e8d",
+      "environment_id": "546fd711-cf80-4402-89b0-cb3ae5671fa9",
+      "staged": true
+    }
+  ],
+  "staged_operations": [
+    {
+      "action": "create_service",
+      "name": "admin-web",
+      "project_id": "8633a0b9-3b15-4c8d-b6f2-0306b284f4dd",
+      "environment_id": "546fd711-cf80-4402-89b0-cb3ae5671fa9",
+      "staged": true,
+      "image": null
+    },
+    {
+      "action": "update_service",
+      "target": "admin-web",
+      "environment_id": "546fd711-cf80-4402-89b0-cb3ae5671fa9",
+      "staged": true,
+      "dockerfile_path": "infrastructure/docker/admin-web.Dockerfile",
+      "healthcheck_path": "/healthz",
+      "private_network_endpoint": "admin-web"
+    },
+    {
+      "action": "set_variables",
+      "target": "admin-web",
+      "environment_id": "546fd711-cf80-4402-89b0-cb3ae5671fa9",
+      "staged": true,
+      "variables": {
+        "ADMIN_WEB_CONTROL_API_URL": "http://${{control-api.RAILWAY_PRIVATE_DOMAIN}}:${{control-api.PORT}}"
+      }
+    },
+    {
+      "action": "connect_service_source",
+      "target": "admin-web",
+      "environment_id": "546fd711-cf80-4402-89b0-cb3ae5671fa9",
+      "staged": true,
+      "repo": "ArowuTest/openwa-campaign-platform",
+      "branch": "work/backend-production-engineering",
+      "commit_sha": "daa9f3ddede0ecc5b7d6a52e579fba140a0c5e8d"
+    }
+  ],
+  "commit_operation": {
+    "action": "accept_deploy",
+    "environment_id": "546fd711-cf80-4402-89b0-cb3ae5671fa9",
+    "requires_explicit_user_authorization": true,
+    "allowed_only_after": [
+      "remote_source_ready",
+      "read_only_railway_reconciliation_clean",
+      "all_staged_changes_match_packet",
+      "trusted_proxy_current_reconfirmed"
+    ]
+  },
+  "post_deploy_operations": [
+    {
+      "action": "generate_domain",
+      "target": "admin-web",
+      "target_port": 3000,
+      "requires_explicit_user_authorization": true,
+      "requires_successful_admin_web_deployment": true
+    },
+    {
+      "action": "browser_smoke_accessibility",
+      "requires_admin_web_domain": true,
+      "required_routes": [
+        "/",
+        "/campaigns",
+        "/senders",
+        "/operations",
+        "/reports",
+        "/healthz"
+      ]
+    }
+  ],
+  "rollback": {
+    "trigger_conditions": [
+      "admin-web health fails",
+      "authenticated /api proxy fails",
+      "network admission fails",
+      "backend service regression"
+    ],
+    "action": "roll back to previously accepted source/deployment; preserve UNKNOWN and durable evidence; never blind resend",
+    "admin_web_can_be_removed_without_changing_control_authority": true
+  },
+  "explicit_non_claims": [
+    "No accepted commit has been pushed by this packet.",
+    "No Railway change has been staged or applied by this packet.",
+    "No admin-web service exists yet.",
+    "No deployment has been accepted.",
+    "No live-provider UAT has been performed."
+  ],
+  "reviewed_application_commit": "f264237829e1caf4b0bac06c3aacd961885fc7c8",
+  "evidence_followup_commit": "daa9f3ddede0ecc5b7d6a52e579fba140a0c5e8d",
+  "application_to_source_delta_files": [
+    "evidence/release-gates/champion-hosting-accepted-source-commit-2026-10-06.json"
+  ],
+  "production_backend_requires_update": true,
+  "expected_post_deploy_source_commit": "daa9f3ddede0ecc5b7d6a52e579fba140a0c5e8d"
+}

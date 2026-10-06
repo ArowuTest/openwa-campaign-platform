@@ -1884,6 +1884,56 @@ paths:
         '409': { description: Optimistic version conflict }
         '422': { description: Session cannot be aborted from its current state }
   /audience-imports:
+    get:
+      operationId: listAudienceImports
+      summary: List recent audience imports for one organisation without recipient-level data
+      parameters:
+        - { name: organisationId, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
+      responses:
+        '200':
+          description: Audience import summaries returned
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [id, organisationId, consentReviewId, purposeId, sourceName, originalFilename, byteSize, status, malwareStatus, uploadedRows, validRows, invalidRows, duplicateRows, suppressedRows, insertedContacts, updatedContacts, createdAt, updatedAt]
+                      properties:
+                        id: { type: string, format: uuid }
+                        organisationId: { type: string, format: uuid }
+                        consentReviewId: { type: string, format: uuid }
+                        purposeId: { type: string, format: uuid }
+                        sourceName: { type: string }
+                        sourceSystem: { type: string }
+                        originalFilename: { type: string }
+                        byteSize: { type: integer, format: int64, minimum: 1 }
+                        status: { type: string }
+                        malwareStatus: { type: string }
+                        uploadedRows: { type: integer, format: int64, minimum: 0 }
+                        validRows: { type: integer, format: int64, minimum: 0 }
+                        invalidRows: { type: integer, format: int64, minimum: 0 }
+                        duplicateRows: { type: integer, format: int64, minimum: 0 }
+                        suppressedRows: { type: integer, format: int64, minimum: 0 }
+                        insertedContacts: { type: integer, format: int64, minimum: 0 }
+                        updatedContacts: { type: integer, format: int64, minimum: 0 }
+                        failureReason: { type: string }
+                        createdAt: { type: string, format: date-time }
+                        updatedAt: { type: string, format: date-time }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
+        '400': { description: Missing organisation or invalid pagination request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+        '503': { description: Audience import inventory unavailable }
     post:
       operationId: intakeAudienceImport
       summary: intakeAudienceImport

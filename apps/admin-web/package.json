@@ -7,7 +7,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "node --experimental-strip-types --test tests/audience-builder.test.ts tests/hosting.test.ts tests/navigation.test.ts tests/safety.test.ts",
+    "test": "node --experimental-strip-types --test tests/audience-builder.test.ts tests/audience-import-upload.test.ts tests/hosting.test.ts tests/navigation.test.ts tests/safety.test.ts",
     "lint": "eslint . --max-warnings=0",
     "typecheck": "tsc --noEmit"
   },

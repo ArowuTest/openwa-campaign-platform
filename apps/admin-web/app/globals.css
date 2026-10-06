@@ -380,6 +380,129 @@ tbody tr[onClick]:hover { background: var(--surface-subtle); }
 .compact-button { padding: 6px 9px; font-size: .78rem; }
 .mini-metric-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .mini-metric-grid .metric-tile strong { overflow-wrap: anywhere; }
+
+/* Governed audience-import journey — aligned to the Deliveram designer reference */
+.import-journey {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  padding: 0;
+  overflow: hidden;
+}
+.journey-step {
+  min-height: 72px;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 14px 13px;
+  color: var(--text-muted);
+  background: white;
+  border-right: 1px solid var(--border);
+  font-size: .8rem;
+}
+.journey-step:last-child { border-right: 0; }
+.journey-step > span {
+  width: 25px;
+  height: 25px;
+  flex: 0 0 25px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--surface-subtle);
+  font-weight: 800;
+  font-size: .72rem;
+}
+.journey-step strong { line-height: 1.25; }
+.journey-step-active {
+  background: var(--information-surface);
+  color: var(--accent);
+  box-shadow: inset 0 -3px 0 var(--accent);
+}
+.journey-step-active > span {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: white;
+}
+.journey-step-complete {
+  color: var(--success);
+  background: var(--success-surface);
+}
+.journey-step-complete > span {
+  border-color: #75e0a7;
+  background: #d1fadf;
+  color: var(--success);
+}
+.upload-file-summary {
+  display: grid;
+  gap: 4px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-subtle);
+}
+.upload-file-summary strong { overflow-wrap: anywhere; }
+.upload-file-summary span { color: var(--text-muted); font-size: .82rem; }
+.upload-progress { margin-top: 18px; display: grid; gap: 9px; }
+.progress-track {
+  height: 9px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-subtle);
+  border: 1px solid var(--border);
+}
+.progress-track > span {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: inherit;
+  transition: width .2s ease-out;
+}
+.progress-meta {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 12px;
+  align-items: baseline;
+  font-size: .78rem;
+  color: var(--text-muted);
+}
+.progress-meta strong { color: var(--text); font-size: .86rem; }
+.progress-meta span:last-child { grid-column: 1 / -1; }
+.mono-small {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: .75rem;
+  overflow-wrap: anywhere;
+}
+.reconciliation-close {
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: end;
+}
+.reconciliation-close label {
+  display: grid;
+  gap: 6px;
+  font-weight: 600;
+  font-size: .9rem;
+}
+.reconciliation-close input {
+  width: 100%;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  padding: 9px 10px;
+  background: white;
+  color: var(--text);
+}
+@media (prefers-reduced-motion: reduce) {
+  .progress-track > span { transition: none; }
+}
+@media (max-width: 1100px) {
+  .import-journey { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .journey-step:nth-child(3) { border-right: 0; }
+  .journey-step:nth-child(-n+3) { border-bottom: 1px solid var(--border); }
+}
 @media (max-width: 860px) {
   .workspace-hero { flex-direction: column; }
   .evidence-strip { justify-content: flex-start; }

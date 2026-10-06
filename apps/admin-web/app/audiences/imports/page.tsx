@@ -1,14 +1,14 @@
 import { PageHeader } from '../../../components/page-header';
-import { ImportPreview } from './import-preview';
+import { AudienceImportWorkspace } from './import-workspace';
 
 export default function AudienceImportsPage() {
   return (
     <>
       <PageHeader
         title="Audience imports"
-        description="Preview and validate an approved consented-audience file before any permanent contact or consent records are written."
+        description="Upload, map, validate, approve and reconcile governed audience sources with durable progress and recoverable long-running processing."
       />
-      <ImportPreview />
+      <AudienceImportWorkspace />
     </>
   );
 }

@@ -254,6 +254,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/audience-import-upload-sessions/{id}/complete", s.require("audience.write", s.completeAudienceUploadSession))
 	mux.Handle("POST /api/v1/audience-import-upload-sessions/{id}/abort", s.require("audience.write", s.abortAudienceUploadSession))
 	mux.Handle("POST /api/v1/audience-imports/preview", s.require("audience.write", s.previewAudienceImport))
+	mux.Handle("GET /api/v1/audience-imports", s.require("audience.read", s.listAudienceImports))
 	mux.Handle("POST /api/v1/audience-imports", s.require("audience.write", s.intakeAudienceImport))
 	mux.Handle("GET /api/v1/audience-imports/{id}", s.require("audience.read", s.getAudienceImport))
 	mux.Handle("POST /api/v1/audience-imports/{id}/approve", s.require("audience.approve", s.approveAudienceImport))

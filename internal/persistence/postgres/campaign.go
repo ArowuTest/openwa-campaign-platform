@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -129,6 +130,14 @@ WHERE id=$1::uuid AND version=$32`
 }
 
 func (r *CampaignRepository) ListPage(ctx context.Context, limit int, before *time.Time, beforeID string) ([]campaign.Campaign, error) {
+	return r.listFilteredPage(ctx, campaign.ListFilter{}, limit, before, beforeID)
+}
+
+func (r *CampaignRepository) ListFilteredPage(ctx context.Context, filter campaign.ListFilter, limit int, before *time.Time, beforeID string) ([]campaign.Campaign, error) {
+	return r.listFilteredPage(ctx, filter, limit, before, beforeID)
+}
+
+func (r *CampaignRepository) listFilteredPage(ctx context.Context, filter campaign.ListFilter, limit int, before *time.Time, beforeID string) ([]campaign.Campaign, error) {
 	if r.DB == nil {
 		return nil, errors.New("database is required")
 	}
@@ -136,13 +145,28 @@ func (r *CampaignRepository) ListPage(ctx context.Context, limit int, before *ti
 		limit = 101
 	}
 	query := campaignSelect
+	clauses := []string{}
 	args := []any{}
-	if before != nil {
-		query += ` WHERE (campaigns.created_at,campaigns.id)<($1,$2::uuid)`
-		args = append(args, before.UTC(), beforeID)
+	add := func(value any) string {
+		args = append(args, value)
+		return fmt.Sprintf("$%d", len(args))
 	}
-	args = append(args, limit)
-	query += fmt.Sprintf(` ORDER BY campaigns.created_at DESC,campaigns.id DESC LIMIT $%d`, len(args))
+	if filter.OrganisationID != "" {
+		clauses = append(clauses, "campaigns.organisation_id="+add(filter.OrganisationID)+"::uuid")
+	}
+	if filter.Status != "" {
+		clauses = append(clauses, "campaigns.status="+add(string(filter.Status)))
+	}
+	if before != nil {
+		timePlaceholder := add(before.UTC())
+		idPlaceholder := add(beforeID)
+		clauses = append(clauses, "(campaigns.created_at,campaigns.id)<("+timePlaceholder+","+idPlaceholder+"::uuid)")
+	}
+	if len(clauses) > 0 {
+		query += " WHERE " + strings.Join(clauses, " AND ")
+	}
+	limitPlaceholder := add(limit)
+	query += " ORDER BY campaigns.created_at DESC,campaigns.id DESC LIMIT " + limitPlaceholder
 	rows, err := r.DB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err

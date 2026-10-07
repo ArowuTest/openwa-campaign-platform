@@ -47,7 +47,7 @@ func TestWorkerMaterialisesInRestartSafePages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	worker := &MaterialisationWorker{Repository: jobs, Cohorts: executions, Snapshots: snapshots, WorkerID: "worker-a", BatchSize: 2, ClaimBatch: 1, LeaseDuration: time.Minute}
+	worker := &MaterialisationWorker{Repository: jobs, Cohorts: executions, Snapshots: snapshots, Evidence: staticMaterialisationEvidence{"v1", "v1"}, WorkerID: "worker-a", BatchSize: 2, ClaimBatch: 1, LeaseDuration: time.Minute}
 	if err := worker.runOnce(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestWorkerFailsWhenEligibleCountChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	worker := &MaterialisationWorker{Repository: jobs, Cohorts: executions, Snapshots: snapshots, WorkerID: "w", BatchSize: 10, ClaimBatch: 1, LeaseDuration: time.Minute}
+	worker := &MaterialisationWorker{Repository: jobs, Cohorts: executions, Snapshots: snapshots, Evidence: staticMaterialisationEvidence{"v1", "v1"}, WorkerID: "w", BatchSize: 10, ClaimBatch: 1, LeaseDuration: time.Minute}
 	_ = worker.runOnce(ctx)
 	_ = worker.runOnce(ctx)
 	got, _ := jobs.Get(ctx, job.ID)

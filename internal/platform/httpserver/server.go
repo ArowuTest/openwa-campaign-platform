@@ -60,6 +60,7 @@ type Dependencies struct {
 	FilterDefinitions              *audiencefilter.AdministrationService
 	Compiler                       *cohort.Compiler
 	Cohorts                        *cohort.ExecutionService
+	CohortEstimates                *cohort.EstimateService
 	Organisations                  *organisation.Service
 	OrganisationPolicies           *organisation.PolicyAdministration
 	ConsentReviews                 *consent.Service
@@ -201,6 +202,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/cohorts/validate", s.require("audience.read", s.validateCohort))
 	mux.Handle("POST /api/v1/cohorts/compile", s.require("audience.read", s.compileCohort))
 	mux.Handle("POST /api/v1/cohorts/estimate", s.require("audience.read", s.estimateCohort))
+	mux.Handle("POST /api/v1/cohort-estimates", s.require("audience.read", s.scheduleCohortEstimate))
+	mux.Handle("GET /api/v1/cohort-estimates", s.require("audience.read", s.listCohortEstimates))
+	mux.Handle("GET /api/v1/cohort-estimates/{id}", s.require("audience.read", s.getCohortEstimate))
 	mux.Handle("GET /api/v1/segments", s.require("audience.read", s.listSegments))
 	mux.Handle("POST /api/v1/segments", s.require("audience.write", s.createSegment))
 	mux.Handle("GET /api/v1/segments/{id}", s.require("audience.read", s.getSegment))
@@ -1464,13 +1468,27 @@ func (s *Server) listCampaigns(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_REQUEST", "The campaign page request is invalid.", map[string]any{"detail": err.Error()})
 		return
 	}
-	page, err := s.deps.Campaigns.List(r.Context(), pageRequest.Limit, pageRequest.Cursor)
+	organisationID := strings.TrimSpace(r.URL.Query().Get("organisationId"))
+	if organisationID != "" && !audienceImportOrganisationIDPattern.MatchString(organisationID) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_ORGANISATION_ID", "organisationId must be a canonical UUID.", nil)
+		return
+	}
+	status := campaign.Status(strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("status"))))
+	var page campaign.Page
+	if organisationID != "" || status != "" {
+		page, err = s.deps.Campaigns.ListFiltered(r.Context(), campaign.ListFilter{OrganisationID: organisationID, Status: status}, pageRequest.Limit, pageRequest.Cursor)
+	} else {
+		page, err = s.deps.Campaigns.List(r.Context(), pageRequest.Limit, pageRequest.Cursor)
+	}
 	if err != nil {
-		if strings.Contains(err.Error(), "page cursor") {
+		switch {
+		case strings.Contains(err.Error(), "page cursor"):
 			httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The campaign page cursor is invalid.", nil)
-			return
+		case strings.Contains(err.Error(), "status filter"):
+			httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_CAMPAIGN_STATUS", "The campaign status filter is invalid.", nil)
+		default:
+			s.internalError(w, r, err)
 		}
-		s.internalError(w, r, err)
 		return
 	}
 	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
@@ -2675,6 +2693,14 @@ func (s *Server) createAudienceSnapshot(w http.ResponseWriter, r *http.Request) 
 	principal, _ := identity.PrincipalFromContext(r.Context())
 	input.CampaignID = campaignEntity.ID
 	input.CreatedBy = principal.User.ID
+	asOf := time.Now().UTC()
+	consentPolicyVersion, configurationVersion, evidenceErr := s.resolveAudienceSnapshotEvidence(r.Context(), campaignEntity, asOf)
+	if evidenceErr != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "SNAPSHOT_GOVERNANCE_EVIDENCE_UNAVAILABLE", "Authoritative consent and configuration evidence could not be frozen.", map[string]any{"detail": evidenceErr.Error()})
+		return
+	}
+	input.ConsentPolicyVersion = consentPolicyVersion
+	input.ConfigurationVersion = configurationVersion
 	if err := input.Definition.ValidateForPermissions(s.deps.Registry, principal.User.HasPermission); err != nil {
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "SEGMENT_INVALID", "The snapshot definition is invalid.", map[string]any{"detail": err.Error()})
 		return
@@ -2684,7 +2710,7 @@ func (s *Server) createAudienceSnapshot(w http.ResponseWriter, r *http.Request) 
 		limit = 100_000
 	}
 	members, err := s.deps.Cohorts.Materialise(r.Context(), input.Definition, cohort.EligibilityContext{
-		OrganisationID: campaignEntity.OrganisationID, PurposeID: campaignEntity.PurposeID, Channel: "WHATSAPP", AsOf: time.Now().UTC(),
+		OrganisationID: campaignEntity.OrganisationID, PurposeID: campaignEntity.PurposeID, Channel: "WHATSAPP", AsOf: asOf,
 	}, principal.User.HasPermission, limit)
 	if errors.Is(err, cohort.ErrCohortTooLarge) {
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "COHORT_TOO_LARGE", "The eligible cohort exceeds the synchronous snapshot limit.", nil)
@@ -2698,6 +2724,10 @@ func (s *Server) createAudienceSnapshot(w http.ResponseWriter, r *http.Request) 
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "COHORT_EMPTY", "The governed cohort contains no eligible contacts.", nil)
 		return
 	}
+	if evidenceErr := s.revalidateAudienceSnapshotEvidence(r.Context(), campaignEntity, asOf, consentPolicyVersion, configurationVersion); evidenceErr != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "SNAPSHOT_GOVERNANCE_EVIDENCE_CHANGED", "Consent or configuration evidence changed or is unavailable. Re-estimate the audience before creating a snapshot.", map[string]any{"detail": evidenceErr.Error()})
+		return
+	}
 	input.Members = members
 	created, err := s.deps.Snapshots.Create(r.Context(), input)
 	if err != nil {
@@ -2708,13 +2738,11 @@ func (s *Server) createAudienceSnapshot(w http.ResponseWriter, r *http.Request) 
 }
 
 type materialiseAudienceSnapshotRequest struct {
-	Definition           audiencefilter.Group `json:"definition"`
-	SegmentID            string               `json:"segmentId,omitempty"`
-	DefinitionVersion    int64                `json:"definitionVersion"`
-	ConsentPolicyVersion string               `json:"consentPolicyVersion"`
-	ConfigurationVersion string               `json:"configurationVersion"`
-	AsOf                 *time.Time           `json:"asOf,omitempty"`
-	Limit                int                  `json:"limit,omitempty"`
+	Definition        audiencefilter.Group `json:"definition"`
+	SegmentID         string               `json:"segmentId,omitempty"`
+	DefinitionVersion int64                `json:"definitionVersion"`
+	AsOf              *time.Time           `json:"asOf,omitempty"`
+	Limit             int                  `json:"limit,omitempty"`
 }
 
 func (s *Server) materialiseAudienceSnapshot(w http.ResponseWriter, r *http.Request) {
@@ -2744,6 +2772,11 @@ func (s *Server) materialiseAudienceSnapshot(w http.ResponseWriter, r *http.Requ
 	if input.AsOf != nil {
 		asOf = input.AsOf.UTC()
 	}
+	consentPolicyVersion, configurationVersion, evidenceErr := s.resolveAudienceSnapshotEvidence(r.Context(), campaignEntity, asOf)
+	if evidenceErr != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "SNAPSHOT_GOVERNANCE_EVIDENCE_UNAVAILABLE", "Authoritative consent and configuration evidence could not be frozen.", map[string]any{"detail": evidenceErr.Error()})
+		return
+	}
 	principal, _ := identity.PrincipalFromContext(r.Context())
 	members, err := s.deps.Cohorts.Materialise(r.Context(), input.Definition, cohort.EligibilityContext{OrganisationID: campaignEntity.OrganisationID, PurposeID: campaignEntity.PurposeID, Channel: "WHATSAPP", AsOf: asOf}, principal.User.HasPermission, input.Limit)
 	if errors.Is(err, cohort.ErrCohortTooLarge) {
@@ -2758,7 +2791,16 @@ func (s *Server) materialiseAudienceSnapshot(w http.ResponseWriter, r *http.Requ
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "COHORT_EXCEEDS_ENTITLEMENT", "The eligible cohort exceeds the campaign recipient entitlement.", map[string]any{"eligibleCount": len(members), "maximumUniqueRecipients": campaignEntity.MaximumUniqueRecipients})
 		return
 	}
-	created, err := s.deps.Snapshots.Create(r.Context(), segment.CreateInput{CampaignID: campaignEntity.ID, SegmentID: strings.TrimSpace(input.SegmentID), Definition: input.Definition, DefinitionVersion: input.DefinitionVersion, ConsentPolicyVersion: input.ConsentPolicyVersion, ConfigurationVersion: input.ConfigurationVersion, CreatedBy: principal.User.ID, Members: members})
+	if evidenceErr := s.revalidateAudienceSnapshotEvidence(r.Context(), campaignEntity, asOf, consentPolicyVersion, configurationVersion); evidenceErr != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "SNAPSHOT_GOVERNANCE_EVIDENCE_CHANGED", "Consent or configuration evidence changed or is unavailable. Re-estimate the audience before creating a snapshot.", map[string]any{"detail": evidenceErr.Error()})
+		return
+	}
+	created, err := s.deps.Snapshots.Create(r.Context(), segment.CreateInput{
+		CampaignID: campaignEntity.ID, SegmentID: strings.TrimSpace(input.SegmentID),
+		Definition: input.Definition, DefinitionVersion: input.DefinitionVersion,
+		ConsentPolicyVersion: consentPolicyVersion, ConfigurationVersion: configurationVersion,
+		CreatedBy: principal.User.ID, Members: members,
+	})
 	if err != nil {
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "SNAPSHOT_FAILED", "The audience snapshot could not be materialised.", map[string]any{"detail": err.Error()})
 		return
@@ -2767,16 +2809,14 @@ func (s *Server) materialiseAudienceSnapshot(w http.ResponseWriter, r *http.Requ
 }
 
 type scheduleAudienceMaterialisationRequest struct {
-	Definition           audiencefilter.Group `json:"definition"`
-	SegmentID            string               `json:"segmentId,omitempty"`
-	DefinitionVersion    int64                `json:"definitionVersion"`
-	ConsentPolicyVersion string               `json:"consentPolicyVersion"`
-	ConfigurationVersion string               `json:"configurationVersion"`
-	AsOf                 *time.Time           `json:"asOf,omitempty"`
+	Definition        audiencefilter.Group `json:"definition"`
+	SegmentID         string               `json:"segmentId,omitempty"`
+	DefinitionVersion int64                `json:"definitionVersion"`
+	EstimateID        string               `json:"estimateId"`
 }
 
 func (s *Server) scheduleAudienceMaterialisation(w http.ResponseWriter, r *http.Request) {
-	if s.deps.AudienceMaterialisations == nil || s.deps.Cohorts == nil {
+	if s.deps.AudienceMaterialisations == nil || s.deps.CohortEstimates == nil {
 		httpx.WriteError(w, r, http.StatusServiceUnavailable, "AUDIENCE_MATERIALISATION_UNAVAILABLE", "Asynchronous audience materialisation is unavailable.", nil)
 		return
 	}
@@ -2798,7 +2838,11 @@ func (s *Server) scheduleAudienceMaterialisation(w http.ResponseWriter, r *http.
 		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The materialisation request is invalid.", map[string]any{"detail": err.Error()})
 		return
 	}
-	principal, _ := identity.PrincipalFromContext(r.Context())
+	principal, ok := identity.PrincipalFromContext(r.Context())
+	if !ok || strings.TrimSpace(principal.User.ID) == "" {
+		httpx.WriteError(w, r, http.StatusUnauthorized, "AUTH_REQUIRED", "Authentication is required.", nil)
+		return
+	}
 	segmentID := strings.TrimSpace(input.SegmentID)
 	definition := input.Definition
 	definitionVersion := input.DefinitionVersion
@@ -2826,25 +2870,40 @@ func (s *Server) scheduleAudienceMaterialisation(w http.ResponseWriter, r *http.
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "DEFINITION_VERSION_REQUIRED", "An inline definition version is required.", nil)
 		return
 	}
-	asOf := time.Now().UTC()
-	if input.AsOf != nil {
-		asOf = input.AsOf.UTC()
+	if s.deps.FilterDefinitions != nil {
+		if err := s.deps.FilterDefinitions.Refresh(r.Context()); err != nil {
+			s.internalError(w, r, err)
+			return
+		}
 	}
-	eligibility := cohort.EligibilityContext{OrganisationID: entity.OrganisationID, PurposeID: entity.PurposeID, Channel: "WHATSAPP", AsOf: asOf}
-	estimate, err := s.deps.Cohorts.Estimate(r.Context(), definition, eligibility, principal.User.HasPermission)
-	if err != nil {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "COHORT_ESTIMATE_FAILED", "The eligible audience could not be estimated.", map[string]any{"detail": err.Error()})
+	if err := definition.ValidateForPermissions(s.deps.Registry, principal.User.HasPermission); err != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "COHORT_VALIDATION_FAILED", "The cohort definition failed validation.", map[string]any{"detail": err.Error()})
 		return
 	}
-	if estimate.EligibleCount <= 0 {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "EMPTY_COHORT", "The cohort contains no eligible recipients.", nil)
+	estimateID := strings.TrimSpace(input.EstimateID)
+	if estimateID == "" {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "COHORT_ESTIMATE_REQUIRED", "A completed durable cohort estimate is required before audience materialisation can be scheduled.", nil)
 		return
 	}
-	if estimate.EligibleCount > entity.MaximumUniqueRecipients {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "COHORT_EXCEEDS_ENTITLEMENT", "The eligible cohort exceeds the campaign recipient entitlement.", map[string]any{"eligibleCount": estimate.EligibleCount, "maximumUniqueRecipients": entity.MaximumUniqueRecipients})
+	estimateRecord, estimateErr := s.deps.CohortEstimates.Get(r.Context(), estimateID)
+	if errors.Is(estimateErr, cohort.ErrEstimateNotFound) {
+		httpx.WriteError(w, r, http.StatusNotFound, "COHORT_ESTIMATE_NOT_FOUND", "The durable cohort estimate was not found.", nil)
 		return
 	}
-	job, err := s.deps.AudienceMaterialisations.Schedule(r.Context(), materialisation.ScheduleMaterialisation{CampaignID: entity.ID, SegmentID: segmentID, Definition: definition, DefinitionVersion: definitionVersion, Eligibility: eligibility, ConsentPolicyVersion: input.ConsentPolicyVersion, ConfigurationVersion: input.ConfigurationVersion, RequestedBy: principal.User.ID, ExpectedCount: estimate.EligibleCount})
+	if estimateErr != nil {
+		s.internalError(w, r, estimateErr)
+		return
+	}
+	eligibility, consentPolicyVersion, configurationVersion, expectedCount, evidenceErr := resolveMaterialisationEstimateEvidence(estimateRecord, entity, definition)
+	if evidenceErr != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "COHORT_ESTIMATE_NOT_ELIGIBLE_FOR_MATERIALISATION", "The durable cohort estimate cannot authorise this audience materialisation.", map[string]any{"detail": evidenceErr.Error()})
+		return
+	}
+	job, err := s.deps.AudienceMaterialisations.Schedule(r.Context(), materialisation.ScheduleMaterialisation{
+		CampaignID: entity.ID, SegmentID: segmentID, Definition: definition, DefinitionVersion: definitionVersion,
+		Eligibility: eligibility, ConsentPolicyVersion: consentPolicyVersion, ConfigurationVersion: configurationVersion,
+		RequestedBy: principal.User.ID, ExpectedCount: expectedCount,
+	})
 	if err != nil {
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "MATERIALISATION_SCHEDULE_FAILED", "The audience materialisation could not be scheduled.", map[string]any{"detail": err.Error()})
 		return

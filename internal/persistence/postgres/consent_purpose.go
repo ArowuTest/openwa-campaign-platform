@@ -12,6 +12,46 @@ import (
 
 type ConsentPurposeRepository struct{ DB *sql.DB }
 
+func (r *ConsentPurposeRepository) GetPurpose(ctx context.Context, identifier string) (consent.Purpose, error) {
+	if r == nil || r.DB == nil {
+		return consent.Purpose{}, errors.New("database is required")
+	}
+	var value consent.Purpose
+	var expires sql.NullInt64
+	err := r.DB.QueryRowContext(ctx, `
+SELECT
+  cp.id::text,
+  coalesce(cp.organisation_id::text,''),
+  coalesce(cp.consent_review_id::text,''),
+  cp.code,
+  cp.name,
+  coalesce(cp.description,''),
+  upper(cp.channel),
+  cp.wording_version,
+  coalesce(cp.permitted_message_category,''),
+  cp.expires_after_days,
+  cp.active,
+  cp.created_at,
+  cp.updated_at
+FROM consent_purposes cp
+WHERE cp.id=$1::uuid`, strings.TrimSpace(identifier)).Scan(
+		&value.ID, &value.OrganisationID, &value.ConsentReviewID, &value.Code, &value.Name,
+		&value.Description, &value.Channel, &value.WordingVersion, &value.PermittedMessageCategory,
+		&expires, &value.Active, &value.CreatedAt, &value.UpdatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return consent.Purpose{}, consent.ErrPurposeNotFound
+	}
+	if err != nil {
+		return consent.Purpose{}, err
+	}
+	if expires.Valid {
+		days := int(expires.Int64)
+		value.ExpiresAfterDays = &days
+	}
+	return value, nil
+}
+
 func (r *ConsentPurposeRepository) ListPurposePage(ctx context.Context, organisationID, reviewID string, activeOnly bool, limit int, before *time.Time, beforeID string) ([]consent.Purpose, error) {
 	if r == nil || r.DB == nil {
 		return nil, errors.New("database is required")

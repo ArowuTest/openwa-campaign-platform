@@ -13,7 +13,9 @@ import (
 	audiencefilter "campaign-platform/internal/audience/filter"
 	"campaign-platform/internal/audience/importer"
 	"campaign-platform/internal/audience/materialisation"
+	"campaign-platform/internal/consent"
 	"campaign-platform/internal/geography"
+	"campaign-platform/internal/jobs"
 	"campaign-platform/internal/observability"
 	"campaign-platform/internal/organisation"
 	"campaign-platform/internal/persistence/database"
@@ -125,7 +127,29 @@ func main() {
 		logger.Error("audience worker filter registry is invalid", "error", err)
 		os.Exit(1)
 	}
-	cohortExecution := cohort.NewExecutionService(cohort.NewCompiler(registry), &cohort.PostgreSQLQueryRepository{DB: db})
+	cohortCompiler := cohort.NewCompiler(registry)
+	cohortExecution := cohort.NewExecutionService(cohortCompiler, &cohort.PostgreSQLQueryRepository{DB: db})
+	durableJobs := &jobs.PostgreSQLRepository{DB: db}
+	estimateRepository := &cohort.PostgreSQLEstimateRepository{DB: db, Queue: durableJobs}
+	governanceEvidence := &cohort.GovernanceEvidenceResolver{
+		Purposes: &consent.PurposeService{Repository: &postgresrepo.ConsentPurposeRepository{DB: db}},
+		Reviews:  consent.NewService(&postgresrepo.ConsentRepository{DB: db}).WithOrganisationReader(organisations),
+		Policies: &organisation.PolicyAdministration{Store: &postgresrepo.OrganisationPolicyRepository{DB: db}, Organisations: organisations},
+	}
+	estimateWorker := &cohort.EstimateWorker{
+		Queue:         durableJobs,
+		Estimates:     estimateRepository,
+		Cohorts:       cohortExecution,
+		Evidence:      governanceEvidence,
+		WorkerID:      cfg.WorkerID + "-estimate",
+		ClaimBatch:    cfg.EstimateClaimBatch,
+		LeaseDuration: cfg.EstimateLeaseDuration,
+		PollInterval:  cfg.EstimatePollInterval,
+		RetryBackoff:  cfg.EstimateRetryBackoff,
+		OnError: func(job jobs.Job, err error) {
+			logger.Error("cohort estimate work failed", "jobId", job.ID, "error", err)
+		},
+	}
 
 	mergeRepository := &importer.PostgreSQLMergeRepository{DB: db}
 	mergeWorker := &importer.MergeWorker{
@@ -154,6 +178,7 @@ func main() {
 		Repository:    &materialisation.PostgreSQLRepository{DB: db},
 		Cohorts:       cohortExecution,
 		Snapshots:     &segment.PostgreSQLStore{DB: db},
+		Evidence:      &materialisation.GovernanceEvidenceResolver{Evidence: governanceEvidence},
 		WorkerID:      cfg.WorkerID + "-materialisation",
 		BatchSize:     cfg.MaterialisationBatchSize,
 		ClaimBatch:    cfg.MaterialisationClaimBatch,
@@ -164,8 +189,13 @@ func main() {
 		},
 	}
 
+	if err := materialisationWorker.Validate(); err != nil {
+		logger.Error("audience materialisation worker startup failed", "error", err)
+		os.Exit(1)
+	}
+
 	health := workerruntime.NewHealth("audience-worker", db, func() int64 {
-		return uploadFinaliser.Active() + worker.Active() + materialisationWorker.Active() + mergeWorker.Active() + sourceRetentionWorker.Active()
+		return uploadFinaliser.Active() + worker.Active() + materialisationWorker.Active() + estimateWorker.Active() + mergeWorker.Active() + sourceRetentionWorker.Active()
 	})
 	healthServer := &http.Server{
 		Addr: cfg.HealthAddr, Handler: health.Handler(),
@@ -186,10 +216,11 @@ func main() {
 		name string
 		err  error
 	}
-	workerErrors := make(chan workerResult, 5)
+	workerErrors := make(chan workerResult, 6)
 	go func() { workerErrors <- workerResult{name: "upload-finalisation", err: uploadFinaliser.Run(rootCtx)} }()
 	go func() { workerErrors <- workerResult{name: "validation", err: worker.Run(rootCtx)} }()
 	go func() { workerErrors <- workerResult{name: "materialisation", err: materialisationWorker.Run(rootCtx)} }()
+	go func() { workerErrors <- workerResult{name: "estimate", err: estimateWorker.Run(rootCtx)} }()
 	go func() { workerErrors <- workerResult{name: "merge", err: mergeWorker.Run(rootCtx)} }()
 	go func() {
 		workerErrors <- workerResult{name: "source-retention", err: sourceRetentionWorker.Run(rootCtx)}
@@ -200,6 +231,7 @@ func main() {
 		"validationConcurrency", cfg.Concurrency,
 		"validationClaimBatch", cfg.ClaimBatch, "validationLeaseDuration", cfg.ValidationLeaseDuration.String(),
 		"materialisationBatchSize", cfg.MaterialisationBatchSize, "materialisationClaimBatch", cfg.MaterialisationClaimBatch,
+		"estimateClaimBatch", cfg.EstimateClaimBatch, "estimateLeaseDuration", cfg.EstimateLeaseDuration.String(),
 		"mergeConcurrency", cfg.MergeConcurrency, "mergeClaimBatch", cfg.MergeClaimBatch,
 		"sourceRetentionBatchSize", cfg.SourceRetentionBatchSize, "sourceRetentionPollInterval", cfg.SourceRetentionPollInterval.String())
 
@@ -224,7 +256,7 @@ func main() {
 	if err := healthServer.Shutdown(shutdownCtx); err != nil {
 		logger.Error("audience worker health shutdown failed", "error", err)
 	}
-	for stoppedWorkers < 5 {
+	for stoppedWorkers < 6 {
 		select {
 		case result := <-workerErrors:
 			stoppedWorkers++
@@ -232,7 +264,7 @@ func main() {
 				runErr = result.err
 			}
 		case <-shutdownCtx.Done():
-			logger.Error("audience worker shutdown timed out", "uploadFinalisationActive", uploadFinaliser.Active(), "validationActive", worker.Active(), "materialisationActive", materialisationWorker.Active(), "mergeActive", mergeWorker.Active(), "sourceRetentionActive", sourceRetentionWorker.Active())
+			logger.Error("audience worker shutdown timed out", "uploadFinalisationActive", uploadFinaliser.Active(), "validationActive", worker.Active(), "materialisationActive", materialisationWorker.Active(), "estimateActive", estimateWorker.Active(), "mergeActive", mergeWorker.Active(), "sourceRetentionActive", sourceRetentionWorker.Active())
 			os.Exit(1)
 		}
 	}
@@ -240,5 +272,5 @@ func main() {
 		logger.Error("audience worker stopped with error", "error", runErr)
 		os.Exit(1)
 	}
-	logger.Info("audience workers stopped", "uploadFinalisationActive", uploadFinaliser.Active(), "validationActive", worker.Active(), "materialisationActive", materialisationWorker.Active(), "mergeActive", mergeWorker.Active(), "sourceRetentionActive", sourceRetentionWorker.Active())
+	logger.Info("audience workers stopped", "uploadFinalisationActive", uploadFinaliser.Active(), "validationActive", worker.Active(), "materialisationActive", materialisationWorker.Active(), "estimateActive", estimateWorker.Active(), "mergeActive", mergeWorker.Active(), "sourceRetentionActive", sourceRetentionWorker.Active())
 }

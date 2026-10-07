@@ -116,6 +116,33 @@ SELECT pg_temp.grant_existing_tables('campaign_audience_worker', 'SELECT, INSERT
   'segment_definition_versions','segments'
 ]);
 
+-- Resumable uploads: the control API owns request metadata and part intake.
+-- The finaliser reads frozen source evidence and changes only its lease/result
+-- fields. It cannot insert/delete sessions or rewrite upload governance/manifest.
+SELECT pg_temp.grant_existing_tables('campaign_audience_worker', 'SELECT', ARRAY[
+  'audience_import_upload_sessions','audience_import_upload_parts'
+]);
+SELECT pg_temp.grant_existing_tables('campaign_audience_worker',
+  'UPDATE (state,finaliser_lease_owner,finaliser_lease_version,finaliser_lease_expires_at,version,updated_at,final_sha256,detected_media_type,linked_import_id,failure_reason)',
+  ARRAY['audience_import_upload_sessions']);
+-- Existing finalisation reads lock parts with FOR UPDATE. PostgreSQL requires
+-- UPDATE on at least one column for that lock; state is bounded by the part
+-- consistency constraint and the immutable-uploaded-part trigger from 0095.
+SELECT pg_temp.grant_existing_tables('campaign_audience_worker',
+  'UPDATE (state)', ARRAY['audience_import_upload_parts']);
+
+-- Async estimates: scheduling and immutable request metadata belong to the
+-- control API. The worker reads evidence and changes only results/queue lifecycle.
+SELECT pg_temp.grant_existing_tables('campaign_audience_worker', 'SELECT', ARRAY[
+  'audience_cohort_estimates','durable_jobs'
+]);
+SELECT pg_temp.grant_existing_tables('campaign_audience_worker',
+  'UPDATE (eligible_count,breakdown,calculated_at,consent_review_id,consent_review_version,consent_wording_version,organisation_policy_id,organisation_policy_version,updated_at)',
+  ARRAY['audience_cohort_estimates']);
+SELECT pg_temp.grant_existing_tables('campaign_audience_worker',
+  'UPDATE (status,lease_owner,lease_expires_at,attempt_count,lease_version,updated_at,completed_at,available_at,last_error_code,last_error_detail)',
+  ARRAY['durable_jobs']);
+
 -- Campaign worker: outbox, jobs, execution/sharding, controlled test sends,
 -- dispatch, final eligibility, pacing and sender allocation.
 SELECT pg_temp.grant_existing_tables('campaign_campaign_worker', 'SELECT', ARRAY[

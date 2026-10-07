@@ -564,11 +564,93 @@ paths:
                 required: [eligibleCount, calculatedAt]
                 properties:
                   eligibleCount: { type: integer, format: int64, minimum: 0 }
+                  breakdown:
+                    type: object
+                    additionalProperties: false
+                    required: [matchedProfiles, consentEligible, consentExcluded, unsuppressed, suppressionExcluded, eligible, frequencyCapExcluded]
+                    properties:
+                      matchedProfiles: { type: integer, format: int64, minimum: 0 }
+                      consentEligible: { type: integer, format: int64, minimum: 0 }
+                      consentExcluded: { type: integer, format: int64, minimum: 0 }
+                      unsuppressed: { type: integer, format: int64, minimum: 0 }
+                      suppressionExcluded: { type: integer, format: int64, minimum: 0 }
+                      eligible: { type: integer, format: int64, minimum: 0 }
+                      frequencyCapExcluded: { type: integer, format: int64, minimum: 0 }
                   calculatedAt: { type: string, format: date-time }
         '400': { description: Invalid request }
         '401': { description: Authentication required }
         '403': { description: Permission denied }
         '422': { description: Cohort could not be estimated }
+  /cohort-estimates:
+    post:
+      operationId: scheduleCohortEstimate
+      summary: Schedule a restart-safe governed cohort estimate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ScheduleCohortEstimateRequest' }
+      responses:
+        '202':
+          description: New durable estimate scheduled
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CohortEstimateJob' }
+        '200':
+          description: Exact idempotent replay converged on the existing estimate
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CohortEstimateJob' }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+        '409': { description: Client request ID reused with different content }
+        '422': { description: Cohort definition or estimate request rejected }
+        '503': { description: Durable cohort estimation unavailable }
+    get:
+      operationId: listCohortEstimates
+      summary: List recoverable cohort estimates for one organisation
+      parameters:
+        - { name: organisationId, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
+      responses:
+        '200':
+          description: Cohort estimates returned
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/CohortEstimateJob' }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
+        '400': { description: Missing organisation or invalid pagination request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+        '503': { description: Durable cohort estimation unavailable }
+  /cohort-estimates/{id}:
+    get:
+      operationId: getCohortEstimate
+      summary: Get one durable cohort estimate without exposing worker lease internals
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: organisationId, in: query, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Cohort estimate returned
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CohortEstimateJob' }
+        '400': { description: organisationId is required }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+        '404': { description: Cohort estimate not found for the organisation }
+        '503': { description: Durable cohort estimation unavailable }
   /segments:
     get:
       operationId: listSegments
@@ -1050,6 +1132,8 @@ paths:
       operationId: listCampaigns
       summary: List internal campaigns using bounded keyset pagination
       parameters:
+        - { name: organisationId, in: query, required: false, schema: { type: string, format: uuid }, description: Optional organisation scope applied server-side. }
+        - { name: status, in: query, required: false, schema: { type: string }, description: Optional exact campaign status filter applied server-side. }
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
         - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque cursor returned by the previous page. }
       responses:
@@ -2117,19 +2201,20 @@ paths:
             schema:
               type: object
               additionalProperties: false
-              required: [definition, definitionVersion, consentPolicyVersion, configurationVersion]
+              required: [definitionVersion, estimateId]
+              oneOf:
+                - required: [segmentId]
+                - required: [definition]
               properties:
-                definition: { type: object }
-                segmentId: { type: string }
+                definition: { $ref: '#/components/schemas/FilterGroup' }
+                segmentId: { type: string, format: uuid }
                 definitionVersion: { type: integer, minimum: 1 }
-                consentPolicyVersion: { type: string, minLength: 1 }
-                configurationVersion: { type: string, minLength: 1 }
-                asOf: { type: string, format: date-time }
+                estimateId: { type: string, format: uuid }
       responses:
-        '202': { description: Audience materialisation scheduled }
-        '404': { description: Campaign not found }
+        '202': { description: Audience materialisation scheduled from completed durable estimate evidence }
+        '404': { description: Campaign or durable cohort estimate not found }
         '409': { description: Campaign is not building an audience }
-        '422': { description: Cohort invalid, empty or exceeds campaign entitlement }
+        '422': { description: Durable estimate missing, incomplete, mismatched, empty or exceeds campaign entitlement }
     get:
       operationId: listAudienceMaterialisations
       summary: List durable audience materialisation jobs for a campaign
@@ -4661,6 +4746,66 @@ components:
         purposeId: { type: string, format: uuid }
         channel: { type: string, default: WHATSAPP }
         asOf: { type: string, format: date-time }
+    ScheduleCohortEstimateRequest:
+      type: object
+      additionalProperties: false
+      required: [definition, organisationId, purposeId, clientRequestId]
+      properties:
+        definition: { $ref: '#/components/schemas/FilterGroup' }
+        organisationId: { type: string, format: uuid }
+        purposeId: { type: string, format: uuid }
+        channel: { type: string, enum: [WHATSAPP], default: WHATSAPP }
+        clientRequestId: { type: string, minLength: 8, maxLength: 200 }
+    CohortEligibilityBreakdown:
+      type: object
+      additionalProperties: false
+      required: [matchedProfiles, consentEligible, consentExcluded, unsuppressed, suppressionExcluded, eligible, frequencyCapExcluded]
+      properties:
+        matchedProfiles: { type: integer, format: int64, minimum: 0 }
+        consentEligible: { type: integer, format: int64, minimum: 0 }
+        consentExcluded: { type: integer, format: int64, minimum: 0 }
+        unsuppressed: { type: integer, format: int64, minimum: 0 }
+        suppressionExcluded: { type: integer, format: int64, minimum: 0 }
+        eligible: { type: integer, format: int64, minimum: 0 }
+        frequencyCapExcluded: { type: integer, format: int64, minimum: 0 }
+    CohortEstimateResult:
+      type: object
+      additionalProperties: false
+      required: [eligibleCount, breakdown, calculatedAt]
+      properties:
+        eligibleCount: { type: integer, format: int64, minimum: 0 }
+        breakdown: { $ref: '#/components/schemas/CohortEligibilityBreakdown' }
+        calculatedAt: { type: string, format: date-time }
+    CohortEstimateEvidence:
+      type: object
+      additionalProperties: false
+      properties:
+        consentReviewId: { type: string, format: uuid }
+        consentReviewVersion: { type: integer, format: int64, minimum: 1 }
+        consentWordingVersion: { type: string }
+        organisationPolicyId: { type: string, format: uuid }
+        organisationPolicyVersion: { type: integer, format: int64, minimum: 1 }
+    CohortEstimateJob:
+      type: object
+      additionalProperties: false
+      required: [id, organisationId, purposeId, channel, asOf, requestedBy, clientRequestId, status, attemptCount, maxAttempts, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        organisationId: { type: string, format: uuid }
+        purposeId: { type: string, format: uuid }
+        channel: { type: string, enum: [WHATSAPP] }
+        asOf: { type: string, format: date-time }
+        requestedBy: { type: string, format: uuid }
+        clientRequestId: { type: string }
+        status: { type: string, enum: [PENDING, PROCESSING, COMPLETED, DEAD_LETTER, CANCELLED] }
+        attemptCount: { type: integer, minimum: 0 }
+        maxAttempts: { type: integer, minimum: 1 }
+        lastErrorCode: { type: string }
+        result: { $ref: '#/components/schemas/CohortEstimateResult' }
+        evidence: { $ref: '#/components/schemas/CohortEstimateEvidence' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time }
     CreateSegmentRequest:
       type: object
       additionalProperties: false

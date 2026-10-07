@@ -360,35 +360,45 @@ func (s *Service) List(ctx context.Context, limit int, cursor string) (Page, err
 	if limit > 500 {
 		limit = 500
 	}
-	var before *time.Time
-	var beforeID string
-	if strings.TrimSpace(cursor) != "" {
-		raw, err := base64.RawURLEncoding.DecodeString(cursor)
-		if err != nil {
-			return Page{}, errors.New("invalid campaign page cursor")
-		}
-		var decoded pageCursor
-		if err := json.Unmarshal(raw, &decoded); err != nil || decoded.CreatedAt.IsZero() || strings.TrimSpace(decoded.ID) == "" {
-			return Page{}, errors.New("invalid campaign page cursor")
-		}
-		value := decoded.CreatedAt.UTC()
-		before = &value
-		beforeID = strings.TrimSpace(decoded.ID)
+	before, beforeID, err := decodeCampaignPageCursor(cursor)
+	if err != nil {
+		return Page{}, err
 	}
 	items, err := s.repository.ListPage(ctx, limit+1, before, beforeID)
 	if err != nil {
 		return Page{}, err
 	}
-	page := Page{Items: items}
-	if len(items) > limit {
-		page.Items = items[:limit]
-		last := page.Items[len(page.Items)-1]
-		raw, marshalErr := json.Marshal(pageCursor{CreatedAt: last.CreatedAt.UTC(), ID: last.ID})
-		if marshalErr != nil {
-			return Page{}, marshalErr
-		}
-		page.NextCursor = base64.RawURLEncoding.EncodeToString(raw)
+	return campaignPageFromItems(items, limit)
+}
+
+func decodeCampaignPageCursor(cursor string) (*time.Time, string, error) {
+	if strings.TrimSpace(cursor) == "" {
+		return nil, "", nil
 	}
+	raw, err := base64.RawURLEncoding.DecodeString(cursor)
+	if err != nil {
+		return nil, "", errors.New("invalid campaign page cursor")
+	}
+	var decoded pageCursor
+	if err := json.Unmarshal(raw, &decoded); err != nil || decoded.CreatedAt.IsZero() || strings.TrimSpace(decoded.ID) == "" {
+		return nil, "", errors.New("invalid campaign page cursor")
+	}
+	value := decoded.CreatedAt.UTC()
+	return &value, strings.TrimSpace(decoded.ID), nil
+}
+
+func campaignPageFromItems(items []Campaign, limit int) (Page, error) {
+	page := Page{Items: items}
+	if len(items) <= limit {
+		return page, nil
+	}
+	page.Items = items[:limit]
+	last := page.Items[len(page.Items)-1]
+	raw, err := json.Marshal(pageCursor{CreatedAt: last.CreatedAt.UTC(), ID: last.ID})
+	if err != nil {
+		return Page{}, err
+	}
+	page.NextCursor = base64.RawURLEncoding.EncodeToString(raw)
 	return page, nil
 }
 
@@ -437,6 +447,14 @@ func (r *MemoryRepository) Get(_ context.Context, identifier string) (Campaign, 
 }
 
 func (r *MemoryRepository) ListPage(_ context.Context, limit int, before *time.Time, beforeID string) ([]Campaign, error) {
+	return r.listFilteredPage(ListFilter{}, limit, before, beforeID), nil
+}
+
+func (r *MemoryRepository) ListFilteredPage(_ context.Context, filter ListFilter, limit int, before *time.Time, beforeID string) ([]Campaign, error) {
+	return r.listFilteredPage(filter, limit, before, beforeID), nil
+}
+
+func (r *MemoryRepository) listFilteredPage(filter ListFilter, limit int, before *time.Time, beforeID string) []Campaign {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if limit <= 0 || limit > 501 {
@@ -444,6 +462,12 @@ func (r *MemoryRepository) ListPage(_ context.Context, limit int, before *time.T
 	}
 	items := make([]Campaign, 0, len(r.items))
 	for _, item := range r.items {
+		if filter.OrganisationID != "" && item.OrganisationID != filter.OrganisationID {
+			continue
+		}
+		if filter.Status != "" && item.Status != filter.Status {
+			continue
+		}
 		if before != nil && (item.CreatedAt.After(*before) || (item.CreatedAt.Equal(*before) && item.ID >= beforeID)) {
 			continue
 		}
@@ -458,7 +482,7 @@ func (r *MemoryRepository) ListPage(_ context.Context, limit int, before *time.T
 	if len(items) > limit {
 		items = items[:limit]
 	}
-	return items, nil
+	return items
 }
 
 func (r *MemoryRepository) AmendMaterial(_ context.Context, entity Campaign, event MaterialChangeEvent, expectedVersion int64) error {

@@ -51,15 +51,15 @@ func TestUploadFinalisationWorkerCreatesScannedImportFromCompositeSource(t *test
 	imports := NewMemoryImportRepository()
 	scanner := &fakeMalwareScanner{result: malware.Result{Clean: true}}
 	worker := &UploadFinalisationWorker{
-		Repository: uploads,
-		Source: &UploadCompositeSource{Store: store},
-		Scanner: scanner,
-		Imports: &ImportService{Repository: imports},
-		WorkerID: "upload-finaliser-test",
-		LeaseDuration: 5 * time.Minute,
-		ClaimBatch: 1,
+		Repository:      uploads,
+		Source:          &UploadCompositeSource{Store: store},
+		Scanner:         scanner,
+		Imports:         &ImportService{Repository: imports},
+		WorkerID:        "upload-finaliser-test",
+		LeaseDuration:   5 * time.Minute,
+		ClaimBatch:      1,
 		SourceRetention: 30 * 24 * time.Hour,
-		Clock: func() time.Time { return now.Add(3 * time.Minute) },
+		Clock:           func() time.Time { return now.Add(3 * time.Minute) },
 	}
 	processed, err := worker.Process(context.Background())
 	if err != nil {
@@ -105,14 +105,14 @@ func TestUploadFinalisationWorkerInfectedSourceFailsWithoutImport(t *testing.T) 
 	session := buildUploadedSessionForFinaliser(t, store, uploads, now, []byte("msisdn\n08012345678\n"), "finaliser-worker-request-0002")
 	imports := NewMemoryImportRepository()
 	worker := &UploadFinalisationWorker{
-		Repository: uploads,
-		Source: &UploadCompositeSource{Store: store},
-		Scanner: &fakeMalwareScanner{result: malware.Result{Infected: true, Signature: "EICAR-Test-Signature"}},
-		Imports: &ImportService{Repository: imports},
-		WorkerID: "upload-finaliser-test",
+		Repository:    uploads,
+		Source:        &UploadCompositeSource{Store: store},
+		Scanner:       &fakeMalwareScanner{result: malware.Result{Infected: true, Signature: "EICAR-Test-Signature"}},
+		Imports:       &ImportService{Repository: imports},
+		WorkerID:      "upload-finaliser-test",
 		LeaseDuration: 5 * time.Minute,
-		ClaimBatch: 1,
-		Clock: func() time.Time { return now.Add(3 * time.Minute) },
+		ClaimBatch:    1,
+		Clock:         func() time.Time { return now.Add(3 * time.Minute) },
 	}
 	processed, err := worker.Process(context.Background())
 	if err == nil {

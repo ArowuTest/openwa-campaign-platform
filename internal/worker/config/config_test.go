@@ -30,6 +30,9 @@ func TestLoadAudienceAcceptsStrictConfiguration(t *testing.T) {
 	if cfg.UploadFinalisationClaimBatch != 2 || cfg.UploadFinalisationLeaseDuration != 5*time.Minute || cfg.AudienceImportSourceRetentionDays != 30 {
 		t.Fatalf("unexpected upload-finalisation defaults: %+v", cfg)
 	}
+	if cfg.EstimateClaimBatch != 1 || cfg.EstimateLeaseDuration != 5*time.Minute || cfg.EstimatePollInterval != time.Second || cfg.EstimateRetryBackoff != 30*time.Second {
+		t.Fatalf("unexpected cohort-estimate defaults: %+v", cfg)
+	}
 	if cfg.ClamAVAddress != "127.0.0.1:3310" {
 		t.Fatalf("unexpected ClamAV address: %q", cfg.ClamAVAddress)
 	}

@@ -12,7 +12,10 @@ import (
 	"time"
 )
 
-var ErrInvalidPurposeListCursor = errors.New("invalid consent-purpose pagination cursor")
+var (
+	ErrInvalidPurposeListCursor = errors.New("invalid consent-purpose pagination cursor")
+	ErrPurposeNotFound          = errors.New("consent purpose not found")
+)
 
 type Purpose struct {
 	ID                       string    `json:"id"`
@@ -36,11 +39,19 @@ type PurposePage struct {
 }
 
 type PurposeRepository interface {
+	GetPurpose(context.Context, string) (Purpose, error)
 	ListPurposePage(context.Context, string, string, bool, int, *time.Time, string) ([]Purpose, error)
 }
 
 type PurposeService struct {
 	Repository PurposeRepository
+}
+
+func (s *PurposeService) Get(ctx context.Context, identifier string) (Purpose, error) {
+	if s == nil || s.Repository == nil {
+		return Purpose{}, errors.New("consent purpose repository is required")
+	}
+	return s.Repository.GetPurpose(ctx, strings.TrimSpace(identifier))
 }
 
 type purposeCursor struct {
@@ -127,6 +138,19 @@ func (r *MemoryPurposeRepository) Put(value Purpose) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.items[value.ID] = value
+}
+
+func (r *MemoryPurposeRepository) GetPurpose(_ context.Context, identifier string) (Purpose, error) {
+	if r == nil {
+		return Purpose{}, errors.New("consent purpose repository is required")
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	value, ok := r.items[strings.TrimSpace(identifier)]
+	if !ok {
+		return Purpose{}, ErrPurposeNotFound
+	}
+	return value, nil
 }
 
 func (r *MemoryPurposeRepository) ListPurposePage(_ context.Context, organisationID, reviewID string, activeOnly bool, limit int, before *time.Time, beforeID string) ([]Purpose, error) {

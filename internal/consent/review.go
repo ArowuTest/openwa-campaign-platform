@@ -3,6 +3,7 @@ package consent
 import (
 	"context"
 	"errors"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -403,6 +404,24 @@ type Service struct {
 }
 
 func NewService(r Repository) *Service { return &Service{repository: r, clock: time.Now} }
+
+// Validate checks the repository configuration required to read consent reviews.
+func (s *Service) Validate() error {
+	if s == nil || s.repository == nil {
+		return errors.New("consent review repository is required")
+	}
+	value := reflect.ValueOf(s.repository)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		if value.IsNil() {
+			return errors.New("consent review repository is required")
+		}
+	}
+	if validator, ok := s.repository.(interface{ Validate() error }); ok {
+		return validator.Validate()
+	}
+	return nil
+}
 func (s *Service) WithOrganisationReader(reader interface {
 	Get(context.Context, string) (organisation.Organisation, error)
 }) *Service {

@@ -49,6 +49,10 @@ type AudienceConfig struct {
 	MaterialisationClaimBatch         int
 	MaterialisationLeaseDuration      time.Duration
 	MaterialisationPollInterval       time.Duration
+	EstimateClaimBatch                int
+	EstimateLeaseDuration             time.Duration
+	EstimatePollInterval              time.Duration
+	EstimateRetryBackoff              time.Duration
 	MergeConcurrency                  int
 	MergeClaimBatch                   int
 	MergeLeaseDuration                time.Duration
@@ -112,6 +116,9 @@ func LoadAudience() (AudienceConfig, error) {
 	if cfg.MaterialisationClaimBatch, err = integer("AUDIENCE_MATERIALISATION_CLAIM_BATCH", 1); err != nil {
 		return AudienceConfig{}, err
 	}
+	if cfg.EstimateClaimBatch, err = integer("AUDIENCE_ESTIMATE_CLAIM_BATCH", 1); err != nil {
+		return AudienceConfig{}, err
+	}
 	if cfg.StageBatchSize, err = integer("AUDIENCE_STAGE_BATCH_SIZE", 5000); err != nil {
 		return AudienceConfig{}, err
 	}
@@ -164,6 +171,15 @@ func LoadAudience() (AudienceConfig, error) {
 		return AudienceConfig{}, err
 	}
 	if cfg.MaterialisationPollInterval, err = duration("AUDIENCE_MATERIALISATION_POLL_INTERVAL", time.Second); err != nil {
+		return AudienceConfig{}, err
+	}
+	if cfg.EstimateLeaseDuration, err = duration("AUDIENCE_ESTIMATE_LEASE_DURATION", 5*time.Minute); err != nil {
+		return AudienceConfig{}, err
+	}
+	if cfg.EstimatePollInterval, err = duration("AUDIENCE_ESTIMATE_POLL_INTERVAL", time.Second); err != nil {
+		return AudienceConfig{}, err
+	}
+	if cfg.EstimateRetryBackoff, err = duration("AUDIENCE_ESTIMATE_RETRY_BACKOFF", 30*time.Second); err != nil {
 		return AudienceConfig{}, err
 	}
 	if cfg.SourceRetentionLeaseDuration, err = duration("AUDIENCE_SOURCE_RETENTION_LEASE_DURATION", 2*time.Minute); err != nil {
@@ -267,6 +283,18 @@ func (c AudienceConfig) Validate() error {
 	}
 	if c.MaterialisationPollInterval <= 0 || c.MaterialisationPollInterval > time.Minute {
 		return errors.New("AUDIENCE_MATERIALISATION_POLL_INTERVAL must be positive and no more than one minute")
+	}
+	if c.EstimateClaimBatch < 1 || c.EstimateClaimBatch > 16 {
+		return errors.New("AUDIENCE_ESTIMATE_CLAIM_BATCH must be between 1 and 16")
+	}
+	if c.EstimateLeaseDuration < 15*time.Second || c.EstimateLeaseDuration > 30*time.Minute {
+		return errors.New("AUDIENCE_ESTIMATE_LEASE_DURATION must be between 15 seconds and 30 minutes")
+	}
+	if c.EstimatePollInterval <= 0 || c.EstimatePollInterval > time.Minute {
+		return errors.New("AUDIENCE_ESTIMATE_POLL_INTERVAL must be positive and no more than one minute")
+	}
+	if c.EstimateRetryBackoff <= 0 || c.EstimateRetryBackoff > time.Hour {
+		return errors.New("AUDIENCE_ESTIMATE_RETRY_BACKOFF must be positive and no more than one hour")
 	}
 	if c.MergeConcurrency < 1 || c.MergeConcurrency > 64 {
 		return errors.New("AUDIENCE_MERGE_CONCURRENCY must be between 1 and 64")

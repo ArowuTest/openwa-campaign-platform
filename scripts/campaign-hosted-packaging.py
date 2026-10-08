@@ -130,6 +130,14 @@ def scan_context(context):
 
 def metadata_identity(metadata, iid, image):
     manifest = metadata.get("containerimage.digest")
+    if "containerimage.descriptor" not in metadata:
+        config = metadata.get("containerimage.config.digest")
+        require(isinstance(manifest, str) and DIGEST.fullmatch(manifest)
+                and isinstance(config, str) and DIGEST.fullmatch(config)
+                and config == manifest and iid == manifest and image.get("id") == manifest,
+                "METADATA_CONFIG_EXPORT_BINDING")
+        return {"manifestDigest": manifest, "descriptorDigest": None, "configDigest": config,
+                "iid": iid, "identityScope": "ENGINE_ID_MATCHES_METADATA_CONFIG_DIGEST_NO_DESCRIPTOR"}
     descriptor = metadata.get("containerimage.descriptor", {})
     require(isinstance(manifest, str) and DIGEST.fullmatch(manifest)
             and isinstance(descriptor, dict) and descriptor.get("digest") == manifest,
@@ -686,6 +694,18 @@ def self_test():
     reject(lambda: metadata_identity(meta, manifest, {"id": "sha256:" + "d" * 64}))
     reject(lambda: metadata_identity({"containerimage.digest": manifest, "containerimage.descriptor": {"digest": config}},
                                      manifest, {"id": manifest}))
+    exported = {"containerimage.digest": manifest, "containerimage.config.digest": manifest}
+    assert metadata_identity(exported, manifest, {"id": manifest}) == {
+        "manifestDigest": manifest, "descriptorDigest": None, "configDigest": manifest,
+        "iid": manifest, "identityScope": "ENGINE_ID_MATCHES_METADATA_CONFIG_DIGEST_NO_DESCRIPTOR"}
+    checks += 1
+    for metadata, exported_iid, exported_id in (
+            ({"containerimage.digest": manifest}, manifest, manifest),
+            ({**exported, "containerimage.config.digest": config}, manifest, manifest),
+            (exported, config, manifest), (exported, manifest, config),
+            ({**exported, "containerimage.descriptor": None}, manifest, manifest),
+            ({**exported, "containerimage.descriptor": {"digest": config}}, manifest, manifest)):
+        reject(lambda m=metadata, i=exported_iid, d=exported_id: metadata_identity(m, i, {"id": d}))
     safe = '{"ok":true,"code":"HEALTH_RESPONSE","statusCode":200,"status":"ok","service":"admin-web","rawSafeBody":"{\\"status\\":\\"ok\\",\\"service\\":\\"admin-web\\"}"}'
     assert safe_probe(safe)["ok"]
     checks += 1

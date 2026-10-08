@@ -1,42 +1,16 @@
 'use client';
 
 import Link from 'next/link';
-import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 
 import { StatusBadge } from '../../../components/status-badge';
 import { useAuth } from '../../../components/auth-provider';
-import { APIError, apiRequest, collectBoundedPages, type ListEnvelope } from '../../../lib/api';
+import { APIError, apiRequest, type ListEnvelope } from '../../../lib/api';
+import { getCampaignDetail, type CampaignDetail } from '../../../lib/campaign-preparation-model';
 import { hasPermission } from '../../../lib/session';
 
-type Campaign = {
-  id: string;
-  name: string;
-  organisationId: string;
-  status: string;
-  version: number;
-  maximumUniqueRecipients: number;
-  eligibleAudienceCount: number;
-  audienceSnapshotId?: string;
-  messageVersionId?: string;
-  messageContentHash?: string;
-  requestedStartAt?: string;
-  completionDeadlineAt?: string;
-  transport: {
-    provider: string;
-    engine: string;
-    routingMode: string;
-    gatewayPoolId?: string;
-    gatewayPoolVersion?: number;
-    senderPoolId?: string;
-    adapterVersion: string;
-    providerDefinitionId?: string;
-    providerDefinitionVersion?: number;
-    fallbackMode: string;
-    routingPolicyVersion: string;
-    capacityEvidenceVersion: string;
-  };
-};
+type Campaign = CampaignDetail;
 
 type Workspace = {
   campaignId: string;
@@ -105,69 +79,121 @@ function numberValue(data: FormData, name: string) {
 }
 
 export function CampaignWorkspace({ campaignId }: { campaignId: string }) {
+  const { session } = useAuth();
+  // Campaign and authorisation changes start a fresh state/request generation.
+  // Old mutation promises may still settle, but their unmounted owner cannot
+  // reload, navigate, or update the new generation's status and busy state.
+  const generation = JSON.stringify([campaignId, session?.id, session?.sessionId, [...(session?.permissions ?? [])].sort()]);
+  return <CampaignWorkspaceGeneration key={generation} campaignId={campaignId} />;
+}
+
+function CampaignWorkspaceGeneration({ campaignId }: { campaignId: string }) {
   const router = useRouter();
   const { session } = useAuth();
   const [campaign, setCampaign] = useState<Campaign>();
   const [workspace, setWorkspace] = useState<Workspace>();
-  const [metrics, setMetrics] = useState<Metrics>({});
+  const [metrics, setMetrics] = useState<Metrics>();
   const [tests, setTests] = useState<TestSend[]>([]);
   const [plan, setPlan] = useState<RoutingPlan>();
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
 
+  const [coreError, setCoreError] = useState<{ campaignId: string; message: string }>();
+  const [supplementalState, setSupplementalState] = useState('Loading supplemental evidence…');
+  const activeRequest = useRef<AbortController | undefined>(undefined);
+  const mounted = useRef(false);
+  const activeMutation = useRef<symbol | undefined>(undefined);
+  const canRead = hasPermission(session?.permissions, 'campaign.read');
+
   const canApprove = hasPermission(session?.permissions, 'campaign.approve');
   const canOperate = hasPermission(session?.permissions, 'campaign.operate');
   const canWrite = hasPermission(session?.permissions, 'campaign.write');
 
-  const fetchSnapshot = useCallback(async () => {
-    const campaigns = await collectBoundedPages<Campaign>(
-      (cursor) => apiRequest<ListEnvelope<Campaign>>('/v1/campaigns?limit=100' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '')),
-      20
-    );
-    const current = campaigns.find((item) => item.id === campaignId);
-    if (!current) throw new Error('Campaign was not found in the authorised campaign inventory.');
-
+  const fetchSnapshot = useCallback(async (controller: AbortController) => {
+    const signal = controller.signal;
+    const isCurrent = () => mounted.current && activeRequest.current === controller && !signal.aborted;
+    const current = await getCampaignDetail(campaignId, signal);
+    if (!isCurrent()) return;
+    // Core detail is independently authoritative; optional evidence cannot block it.
+    setCampaign(current);
+    setCoreError(undefined);
+    const base = '/v1/campaigns/' + encodeURIComponent(campaignId);
     const settled = await Promise.allSettled([
-      apiRequest<Workspace>('/v1/campaigns/' + campaignId + '/workspace'),
-      apiRequest<Metrics>('/v1/campaigns/' + campaignId + '/metrics'),
-      apiRequest<ListEnvelope<TestSend>>('/v1/campaigns/' + campaignId + '/test-messages?limit=100'),
-      apiRequest<ListEnvelope<RoutingPlan>>('/v1/campaigns/' + campaignId + '/routing-plans?limit=20')
+      apiRequest<Workspace>(base + '/workspace', { signal }),
+      apiRequest<Metrics>(base + '/metrics', { signal }),
+      apiRequest<ListEnvelope<TestSend>>(base + '/test-messages?limit=100', { signal }),
+      apiRequest<ListEnvelope<RoutingPlan>>(base + '/routing-plans?limit=20', { signal })
     ]);
+    if (!isCurrent()) return;
+    const unavailable = ['workspace', 'metrics', 'controlled tests', 'routing plans'].filter((_, index) => settled[index].status === 'rejected');
     const workspaceValue = settled[0].status === 'fulfilled' ? settled[0].value : undefined;
-    const metricValue = settled[1].status === 'fulfilled' ? settled[1].value : {};
+    const metricValue = settled[1].status === 'fulfilled' ? settled[1].value : undefined;
     const testValues = settled[2].status === 'fulfilled' ? settled[2].value.items ?? [] : [];
     const latestPlan = settled[3].status === 'fulfilled' ? settled[3].value.items?.[0] : undefined;
-    const reservationValues = latestPlan
-      ? (await apiRequest<ListEnvelope<Reservation>>('/v1/routing-plans/' + latestPlan.id + '/reservations')).items ?? []
-      : [];
-    return { current, workspaceValue, metricValue, testValues, latestPlan, reservationValues };
+    let reservationValues: Reservation[] = [];
+    if (latestPlan) {
+      try {
+        reservationValues = (await apiRequest<ListEnvelope<Reservation>>('/v1/routing-plans/' + encodeURIComponent(latestPlan.id) + '/reservations', { signal })).items ?? [];
+      } catch {
+        unavailable.push('reservations');
+      }
+    }
+    if (!isCurrent()) return;
+    setWorkspace(workspaceValue);
+    setMetrics(metricValue);
+    setTests(testValues);
+    setPlan(latestPlan);
+    setReservations(reservationValues);
+    setSupplementalState(unavailable.length ? 'Supplemental evidence unavailable: ' + unavailable.join(', ') + '.' : '');
   }, [campaignId]);
 
-  const applySnapshot = useCallback((snapshot: Awaited<ReturnType<typeof fetchSnapshot>>) => {
-    setCampaign(snapshot.current);
-    setWorkspace(snapshot.workspaceValue);
-    setMetrics(snapshot.metricValue);
-    setTests(snapshot.testValues);
-    setPlan(snapshot.latestPlan);
-    setReservations(snapshot.reservationValues);
-  }, []);
-
   const load = useCallback(async () => {
-    applySnapshot(await fetchSnapshot());
-  }, [applySnapshot, fetchSnapshot]);
+    // Validate ownership before aborting a controller or changing any state.
+    if (!mounted.current) return;
+    activeRequest.current?.abort();
+    const controller = new AbortController();
+    activeRequest.current = controller;
+    setCampaign(undefined);
+    setWorkspace(undefined);
+    setMetrics(undefined);
+    setTests([]);
+    setPlan(undefined);
+    setReservations([]);
+    setCoreError(undefined);
+    setMessage('');
+    setSupplementalState('Loading supplemental evidence…');
+    if (!canRead) {
+      setCoreError({ campaignId, message: 'Campaign detail is unavailable because campaign.read permission is required.' });
+      return;
+    }
+    try {
+      await fetchSnapshot(controller);
+    } catch (cause) {
+      if (!mounted.current || activeRequest.current !== controller || controller.signal.aborted) return;
+      setCampaign(undefined);
+      const failure = cause instanceof APIError && cause.status === 404
+        ? 'Campaign was not found.'
+        : cause instanceof APIError && (cause.status === 401 || cause.status === 403)
+          ? 'Campaign detail is unavailable because access was denied.'
+          : 'Campaign detail could not be loaded.';
+      setCoreError({ campaignId, message: failure });
+    }
+  }, [campaignId, canRead, fetchSnapshot]);
 
   useEffect(() => {
+    mounted.current = true;
     let cancelled = false;
-    void fetchSnapshot()
-      .then((snapshot) => {
-        if (!cancelled) applySnapshot(snapshot);
-      })
-      .catch((cause) => {
-        if (!cancelled) setMessage(cause instanceof Error ? cause.message : 'Campaign evidence could not be loaded.');
-      });
-    return () => { cancelled = true; };
-  }, [applySnapshot, fetchSnapshot]);
+    // Start the external read in an async callback; rendering already masks the
+    // previous campaign context before state is cleared by the new request.
+    void Promise.resolve().then(() => { if (!cancelled) return load(); });
+    return () => {
+      cancelled = true;
+      mounted.current = false;
+      activeMutation.current = undefined;
+      activeRequest.current?.abort();
+    };
+  }, [load]);
 
   const acceptedExactTest = useMemo(() => {
     if (!campaign) return undefined;
@@ -193,17 +219,26 @@ export function CampaignWorkspace({ campaignId }: { campaignId: string }) {
   }
 
   async function mutate(label: string, work: () => Promise<unknown>) {
-    if (busy) return;
+    if (!mounted.current || activeMutation.current) return;
+    const mutation = Symbol(label);
+    activeMutation.current = mutation;
+    const isCurrent = () => mounted.current && activeMutation.current === mutation;
     setBusy(label);
     setMessage('');
     try {
       await work();
-      setMessage(label + ' completed. Server evidence has been refreshed.');
+      if (!isCurrent()) return;
       await load();
+      if (!isCurrent()) return;
+      setMessage(label + ' completed. Server evidence has been refreshed.');
     } catch (cause) {
+      if (!isCurrent()) return;
       if (!requireStepUp(cause)) setMessage(cause instanceof Error ? cause.message : label + ' failed.');
     } finally {
-      setBusy('');
+      if (isCurrent()) {
+        activeMutation.current = undefined;
+        setBusy('');
+      }
     }
   }
 
@@ -283,8 +318,11 @@ export function CampaignWorkspace({ campaignId }: { campaignId: string }) {
     }));
   }
 
-  if (!campaign) {
-    return <div className="card"><p className="muted">Loading authoritative campaign evidence…</p>{message ? <div className="alert alert-danger">{message}</div> : null}</div>;
+  if (!canRead || !campaign || campaign.id !== campaignId) {
+    const failure = !canRead
+      ? 'Campaign detail is unavailable because campaign.read permission is required.'
+      : coreError?.campaignId === campaignId ? coreError.message : undefined;
+    return <div className="card">{failure ? <div className="alert alert-danger" role="alert">{failure}</div> : <p className="muted" role="status">Loading authoritative campaign evidence…</p>}</div>;
   }
 
   const routeSummary = campaign.transport.provider + ' / ' + campaign.transport.engine;
@@ -307,12 +345,14 @@ export function CampaignWorkspace({ campaignId }: { campaignId: string }) {
         </div>
       </section>
 
+      {supplementalState ? <div className="alert alert-information" role="status">{supplementalState}</div> : null}
+
       {message ? <div className={message.includes('failed') || message.includes('required') ? 'alert alert-danger' : 'alert alert-information'} role="status">{message}</div> : null}
 
       <section className="grid grid-4" aria-label="Campaign metrics">
         <article className="card metric"><span className="muted">Campaign version</span><strong>{campaign.version}</strong></article>
         <article className="card metric"><span className="muted">Eligible audience</span><strong>{campaign.eligibleAudienceCount.toLocaleString()}</strong></article>
-        <article className="card metric"><span className="muted">Unknown outcomes</span><strong>{Number(metrics.unknownTotal ?? metrics.unknown ?? 0).toLocaleString()}</strong></article>
+        <article className="card metric"><span className="muted">Unknown outcomes</span><strong>{metrics ? Number(metrics.unknownTotal ?? metrics.unknown ?? 0).toLocaleString() : 'Unavailable'}</strong></article>
         <article className="card metric"><span className="muted">Workspace notes</span><strong>{workspace?.notes?.length ?? 0}</strong></article>
       </section>
 

@@ -1127,6 +1127,54 @@ paths:
         '200':
           description: Aggregate preview and row-level issues; no raw MSISDNs
         '422': { $ref: '#/components/responses/ValidationError' }
+  /campaigns/{id}:
+    get:
+      operationId: getCampaign
+      summary: Read the saved campaign aggregate for an internal platform operator
+      description: Requires campaign.read. Historical suspended organisations and retired transport sources remain readable. Does not rebind sources or authorise release. No contacts, credentials, private object keys, workspace notes or financial data are included.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid }, description: Canonical UUID of the campaign. }
+      responses:
+        '200':
+          description: Saved campaign aggregate with UTC ISO 8601 timestamps
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+              description: Sensitive operator evidence is never cached.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CampaignDetail' }
+        '400':
+          description: INVALID_CAMPAIGN_ID
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401':
+          description: AUTHENTICATION_REQUIRED or SESSION_INVALID
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '403':
+          description: PERMISSION_DENIED
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: CAMPAIGN_NOT_FOUND
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '500':
+          description: Canonical INTERNAL_ERROR without repository details
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: CAMPAIGNS_UNAVAILABLE
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
   /campaigns:
     get:
       operationId: listCampaigns
@@ -5169,6 +5217,60 @@ components:
         maximumMessagesPerRecipient: { type: integer, enum: [1], default: 1 }
         senderPool: { type: string, description: Legacy display label; governed routing uses transport.senderPoolId. }
         transport: { $ref: '#/components/schemas/TransportSelectionRequest' }
+    CampaignDetail:
+      type: object
+      additionalProperties: false
+      required: [id, organisationId, name, purposeId, consentReviewId, status, timezone, maximumUniqueRecipients, maximumMessagesPerRecipient, eligibleAudienceCount, transport, createdBy, createdAt, updatedAt, version]
+      properties:
+        id: { type: string, format: uuid, readOnly: true }
+        organisationId: { type: string, format: uuid, readOnly: true }
+        name: { type: string }
+        purposeId: { type: string, readOnly: true }
+        consentReviewId: { type: string, format: uuid, readOnly: true }
+        status: { type: string, readOnly: true }
+        requestedStartAt: { type: string, format: date-time }
+        completionDeadlineAt: { type: string, format: date-time }
+        timezone: { type: string }
+        quietHoursStart: { type: string }
+        quietHoursEnd: { type: string }
+        maximumUniqueRecipients: { type: integer, format: int64 }
+        maximumMessagesPerRecipient: { type: integer }
+        audienceSnapshotId: { type: string, format: uuid, readOnly: true }
+        audienceSnapshotHash: { type: string, readOnly: true }
+        eligibleAudienceCount: { type: integer, format: int64, readOnly: true }
+        messageVersionId: { type: string, format: uuid, readOnly: true }
+        messageContentHash: { type: string, readOnly: true }
+        senderPool: { type: string }
+        transport: { $ref: '#/components/schemas/CampaignTransport' }
+        createdBy: { type: string, readOnly: true }
+        finalApprovedBy: { type: string, readOnly: true }
+        commercialApprovalId: { type: string, format: uuid, readOnly: true }
+        pauseReason: { type: string, readOnly: true }
+        createdAt: { type: string, format: date-time, readOnly: true }
+        updatedAt: { type: string, format: date-time, readOnly: true }
+        version: { type: integer, format: int64, readOnly: true }
+    CampaignTransport:
+      type: object
+      additionalProperties: false
+      required: [channel, provider, engine, routingMode, adapterVersion, fallbackMode, routingPolicyVersion, capacityEvidenceVersion]
+      properties:
+        channel: { type: string }
+        provider: { type: string, enum: [OPENWA, META] }
+        engine: { type: string, enum: [WHATSAPP_WEB_JS, BAILEYS, CLOUD_API] }
+        routingMode: { type: string, enum: [SPECIFIC_SESSION, SENDER_POOL] }
+        gatewayPoolId: { type: string, format: uuid, readOnly: true }
+        gatewayPoolVersion: { type: integer, format: int64, readOnly: true }
+        metaSenderId: { type: string, format: uuid, readOnly: true }
+        sessionId: { type: string, format: uuid, readOnly: true }
+        senderPoolId: { type: string, format: uuid, readOnly: true }
+        adapterVersion: { type: string, readOnly: true }
+        providerDefinitionId: { type: string, format: uuid, readOnly: true }
+        providerDefinitionVersion: { type: integer, format: int64, readOnly: true }
+        requiredCapabilities: { type: array, items: { type: string } }
+        fallbackMode: { type: string, enum: [NONE] }
+        routingPolicyVersion: { type: string, readOnly: true }
+        capacityEvidenceVersion: { type: string, readOnly: true }
+
     CampaignMaterialAmendment:
       type: object
       required: [expectedVersion, reason]

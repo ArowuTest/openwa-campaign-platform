@@ -1,10 +1,12 @@
 'use client';
 
 import Link from 'next/link';
-import { FormEvent, useEffect, useState } from 'react';
+import { FormEvent, useEffect, useRef, useState } from 'react';
 
 import { StatusBadge } from '../../components/status-badge';
 import { apiRequest } from '../../lib/api';
+import { useAuth } from '../../components/auth-provider';
+import { hasPermission } from '../../lib/session';
 
 type Campaign = {
   id: string;
@@ -30,16 +32,28 @@ const capabilities = [
 ] as const;
 
 export function CampaignManager() {
+  const { session } = useAuth();
+  const generation = JSON.stringify([session?.id, session?.sessionId, [...(session?.permissions ?? [])].sort()]);
+  return <CampaignManagerGeneration key={generation} />;
+}
+
+function CampaignManagerGeneration() {
+  const { session } = useAuth();
+  const canWrite = hasPermission(session?.permissions, 'campaign.write');
+  const mounted = useRef(false);
+  const creating = useRef(false);
+  const [createdId, setCreatedId] = useState('');
   const [items, setItems] = useState<Campaign[]>([]);
   const [message, setMessage] = useState('');
   const [busy, setBusy] = useState(false);
 
   async function load() {
     const payload = await apiRequest<{ items: Campaign[] }>('/v1/campaigns');
-    setItems(payload.items ?? []);
+    if (mounted.current) setItems(payload.items ?? []);
   }
 
   useEffect(() => {
+    mounted.current = true;
     let cancelled = false;
     void apiRequest<{ items: Campaign[] }>('/v1/campaigns')
       .then((payload) => {
@@ -48,12 +62,15 @@ export function CampaignManager() {
       .catch(() => {
         if (!cancelled) setItems([]);
       });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; mounted.current = false; };
   }, []);
 
   async function create(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!canWrite || creating.current) return;
+    creating.current = true;
     setBusy(true);
+    setCreatedId('');
     setMessage('');
     const form = event.currentTarget;
     const data = new FormData(form);
@@ -66,8 +83,8 @@ export function CampaignManager() {
       name: String(data.get('name') ?? '').trim(),
       purposeId: String(data.get('purposeId') ?? '').trim(),
       consentReviewId: String(data.get('consentReviewId') ?? '').trim(),
-      requestedStartAt: start ? new Date(start).toISOString() : undefined,
-      completionDeadlineAt: deadline ? new Date(deadline).toISOString() : undefined,
+      requestedStartAt: start ? new Date(start + 'Z').toISOString() : undefined,
+      completionDeadlineAt: deadline ? new Date(deadline + 'Z').toISOString() : undefined,
       timezone: String(data.get('timezone') ?? 'UTC').trim() || 'UTC',
       quietHoursStart: String(data.get('quietHoursStart') ?? '').trim() || undefined,
       quietHoursEnd: String(data.get('quietHoursEnd') ?? '').trim() || undefined,
@@ -89,17 +106,21 @@ export function CampaignManager() {
     };
 
     try {
-      await apiRequest<Campaign>('/v1/campaigns', {
+      const created = await apiRequest<Campaign>('/v1/campaigns', {
         method: 'POST',
         body: JSON.stringify(payload)
       });
+      if (!mounted.current) return;
+      setCreatedId(created.id);
       setMessage('Campaign created in DRAFT with one governed OpenWA sender pool. It cannot dispatch until every server-side approval and pilot gate is complete.');
       form.reset();
-      await load();
+      await load().catch(() => { if (mounted.current) setMessage('Campaign created in DRAFT. The campaign register could not be refreshed; open the created draft directly.'); });
     } catch (cause) {
+      if (!mounted.current) return;
       setMessage(cause instanceof Error ? cause.message : 'Campaign could not be created');
     } finally {
-      setBusy(false);
+      creating.current = false;
+      if (mounted.current) setBusy(false);
     }
   }
 
@@ -175,8 +196,8 @@ export function CampaignManager() {
         </fieldset>
 
         <div className="grid grid-2">
-          <label>Requested start<input name="requestedStartAt" type="datetime-local" required /></label>
-          <label>Completion deadline<input name="completionDeadlineAt" type="datetime-local" required /></label>
+          <label>Requested start (UTC)<input name="requestedStartAt" type="datetime-local" /></label>
+          <label>Completion deadline (UTC)<input name="completionDeadlineAt" type="datetime-local" /></label>
         </div>
         <label>Campaign timezone<input name="timezone" defaultValue="UTC" required /></label>
         <div className="grid grid-2">
@@ -184,8 +205,9 @@ export function CampaignManager() {
           <label>Quiet hours end<input name="quietHoursEnd" type="time" /></label>
         </div>
 
-        <button className="primary" disabled={busy}>{busy ? 'Creating…' : 'Create governed draft'}</button>
+        <button className="primary" disabled={busy || !canWrite}>{busy ? 'Creating…' : 'Create governed draft'}</button>
         {message ? <div className="alert" role="status">{message}</div> : null}
+        {createdId && <Link className="text-link" href={'/campaigns/' + encodeURIComponent(createdId)}>Open created draft</Link>}
       </form>
     </div>
   );

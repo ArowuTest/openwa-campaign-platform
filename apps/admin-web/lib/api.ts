@@ -1,6 +1,7 @@
 export const browserAPIBase = '/api';
 
 export type APIErrorEnvelope = {
+  error?: string;
   code?: string;
   message?: string;
   details?: Record<string, unknown>;
@@ -17,7 +18,7 @@ export class APIError extends Error {
     super(envelope.message || `Request failed with status ${status}`);
     this.name = 'APIError';
     this.status = status;
-    this.code = envelope.code || 'REQUEST_FAILED';
+    this.code = envelope.error || envelope.code || 'REQUEST_FAILED';
     this.details = envelope.details;
     this.requestId = envelope.requestId;
   }

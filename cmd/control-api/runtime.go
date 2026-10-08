@@ -147,7 +147,7 @@ func buildMemoryRuntime(cfg config.Config, protector *sharedcrypto.MSISDNProtect
 	platformPolicyStore := platformpolicy.NewMemoryStore()
 	configurations := &platformpolicy.ConfigurationAdministration{Store: platformPolicyStore}
 	maintenance := &platformpolicy.MaintenanceAdministration{Store: platformPolicyStore}
-	campaigns := campaign.NewService(campaign.NewMemoryRepository()).WithOrganisationReader(orgs).WithOrganisationPolicies(organisationPolicies).WithCommercialApprovals(commercialService).WithConsentReviews(reviews).WithProviderCapabilities(providerCapabilities).WithGatewayPools(gatewayPools)
+	campaigns := campaign.NewService(campaign.NewMemoryRepository()).WithOrganisationReader(orgs).WithOrganisationPolicies(organisationPolicies).WithCommercialApprovals(commercialService).WithConsentReviews(reviews).WithConsentPurposeReader(consentPurposes).WithConsentReviewReader(reviews).WithSenderPoolReader(senderStore).WithProviderCapabilities(providerCapabilities).WithGatewayPools(gatewayPools)
 	messages := message.NewService(message.NewMemoryRepository())
 	metaRuntime, err := buildMemoryMetaControlRuntime(cfg, messages)
 	if err != nil {
@@ -310,7 +310,7 @@ func buildPostgreSQLRuntime(ctx context.Context, cfg config.Config, protector *s
 	platformPolicyStore := &platformpolicy.PostgreSQLStore{DB: db}
 	configurations := &platformpolicy.ConfigurationAdministration{Store: platformPolicyStore}
 	maintenance := &platformpolicy.MaintenanceAdministration{Store: platformPolicyStore}
-	campaigns := campaign.NewService(&postgresrepo.CampaignRepository{DB: db}).WithOrganisationReader(orgs).WithOrganisationPolicies(organisationPolicies).WithCommercialApprovals(commercialService).WithConsentReviews(reviews).WithProviderCapabilities(providerCapabilities).WithGatewayPools(gatewayPools)
+	campaigns := campaign.NewService(&postgresrepo.CampaignRepository{DB: db}).WithOrganisationReader(orgs).WithOrganisationPolicies(organisationPolicies).WithCommercialApprovals(commercialService).WithConsentReviews(reviews).WithConsentPurposeReader(consentPurposes).WithConsentReviewReader(reviews).WithSenderPoolReader(senderStore).WithProviderCapabilities(providerCapabilities).WithGatewayPools(gatewayPools)
 	messages := message.NewService(&message.PostgreSQLRepository{DB: db})
 	metaRuntime, err := buildPostgreSQLMetaControlRuntime(cfg, db, messages, deliveryEvents, protector)
 	if err != nil {

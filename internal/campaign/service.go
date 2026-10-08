@@ -22,6 +22,7 @@ var (
 )
 
 type Repository interface {
+	SaveDraft(context.Context, Campaign, MaterialChangeEvent, int64) (Campaign, error)
 	Create(context.Context, Campaign) error
 	CompareAndSwap(context.Context, Campaign, int64) error
 	Get(context.Context, string) (Campaign, error)
@@ -41,6 +42,9 @@ type pageCursor struct {
 }
 
 type Service struct {
+	draftPurposes draftPurposeGetter
+	draftReviews  draftReviewGetter
+	draftPools    draftPoolGetter
 	repository    Repository
 	organisations interface {
 		Get(context.Context, string) (organisation.Organisation, error)

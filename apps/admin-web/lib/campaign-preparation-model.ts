@@ -52,3 +52,36 @@ export type CampaignDetail = {
 export function getCampaignDetail(campaignId: string, signal?: AbortSignal): Promise<CampaignDetail> {
   return apiRequest<CampaignDetail>('/v1/campaigns/' + encodeURIComponent(campaignId), { signal });
 }
+
+export type DraftTransportRequest = {
+  channel: 'WHATSAPP';
+  provider: 'OPENWA';
+  engine: 'WHATSAPP_WEB_JS' | 'BAILEYS';
+  routingMode: 'SENDER_POOL';
+  gatewayPoolId: string;
+  senderPoolId: string;
+  adapterVersion: string;
+  routingPolicyVersion: string;
+  capacityEvidenceVersion: string;
+  fallbackMode: 'NONE';
+  requiredCapabilities: string[];
+};
+export type DraftSaveRequest = {
+  expectedVersion: number;
+  reason: string;
+  name: string;
+  organisationId: string;
+  purposeId: string;
+  consentReviewId: string;
+  maximumUniqueRecipients: number;
+  maximumMessagesPerRecipient: 1;
+  requestedStartAt: string | null;
+  completionDeadlineAt: string | null;
+  timezone: string;
+  quietHoursStart: string;
+  quietHoursEnd: string;
+  transport: DraftTransportRequest;
+};
+export function saveCampaignDraft(campaignId: string, input: DraftSaveRequest): Promise<CampaignDetail> {
+  return apiRequest<CampaignDetail>('/v1/campaigns/' + encodeURIComponent(campaignId) + '/draft', { method: 'PUT', body: JSON.stringify(input) });
+}

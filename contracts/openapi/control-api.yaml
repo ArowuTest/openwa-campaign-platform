@@ -1207,6 +1207,35 @@ paths:
       responses:
         '201': { description: Draft campaign created }
         '422': { $ref: '#/components/responses/ValidationError' }
+  /campaigns/{id}/draft:
+    put:
+      operationId: saveCampaignDraft
+      summary: Save governed editable DRAFT preparation fields
+      description: Requires campaign.write and authenticated actor; cookie authentication requires CSRF. Accepts a strict full replacement JSON object at most 256 KiB. Organisation, purpose and consent-review IDs must equal the saved tuple. Current governance and exact frozen provider/gateway authority are checked. Incomplete schedules are allowed; omission or null clears dates. No-op still guards current version/state under the row lock and creates no event. Does not approve, release, create routing or dispatch.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CampaignDraftSaveRequest' }
+      responses:
+        '200':
+          description: Saved CampaignDetail; version advances once only when editable fields changed
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CampaignDetail' }
+        '400': { description: INVALID_JSON or INVALID_CAMPAIGN_ID }
+        '401': { description: Authentication required or invalid session }
+        '403': { description: Permission denied or CSRF validation failed }
+        '404': { description: CAMPAIGN_NOT_FOUND }
+        '409': { description: CAMPAIGN_VERSION_CONFLICT, CAMPAIGN_DRAFT_NOT_EDITABLE or CAMPAIGN_DRAFT_REFERENCES_LOCKED. Preserve unsaved values and explicitly reconcile current server state. }
+        '422': { description: CAMPAIGN_DRAFT_INVALID with safe field codes }
+        '500': { description: INTERNAL_ERROR with no persistence details }
+        '503': { description: CAMPAIGN_DRAFT_GOVERNANCE_UNAVAILABLE or campaign services unavailable }
   /campaigns/{id}/clone:
     post:
       operationId: cloneCampaign
@@ -5217,6 +5246,44 @@ components:
         maximumMessagesPerRecipient: { type: integer, enum: [1], default: 1 }
         senderPool: { type: string, description: Legacy display label; governed routing uses transport.senderPoolId. }
         transport: { $ref: '#/components/schemas/TransportSelectionRequest' }
+    CampaignDraftSaveRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, reason, name, organisationId, purposeId, consentReviewId, maximumUniqueRecipients, maximumMessagesPerRecipient, timezone, transport]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 1 }
+        reason: { type: string, minLength: 8, maxLength: 1000, description: Trimmed operator reason. }
+        name: { type: string, minLength: 1, maxLength: 250, pattern: '\S' }
+        organisationId: { type: string, format: uuid, description: Locked saved organisation ID. }
+        purposeId: { type: string, format: uuid, description: Locked saved purpose ID. }
+        consentReviewId: { type: string, format: uuid, description: Locked saved review ID. }
+        maximumUniqueRecipients: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991 }
+        maximumMessagesPerRecipient: { type: integer, const: 1 }
+        requestedStartAt: { type: [string, "null"], format: date-time, description: UTC instant; omission or null clears. }
+        completionDeadlineAt: { type: [string, "null"], format: date-time, description: UTC instant; if both dates supplied must be later than start. Omission or null clears. }
+        timezone: { type: string, minLength: 1, description: Valid IANA timezone; does not reinterpret stored UTC instants. }
+        quietHoursStart: { type: string, pattern: '^$|^([01][0-9]|2[0-3]):[0-5][0-9]$', description: Paired with quietHoursEnd; omission or empty clears both. }
+        quietHoursEnd: { type: string, pattern: '^$|^([01][0-9]|2[0-3]):[0-5][0-9]$', description: Paired with quietHoursStart and must be unequal. }
+        transport: { $ref: '#/components/schemas/DraftTransportRequest' }
+    DraftTransportRequest:
+      type: object
+      additionalProperties: false
+      required: [channel, provider, engine, routingMode, gatewayPoolId, senderPoolId, adapterVersion, routingPolicyVersion, capacityEvidenceVersion, fallbackMode, requiredCapabilities]
+      properties:
+        channel: { type: string, const: WHATSAPP }
+        provider: { type: string, const: OPENWA }
+        engine: { type: string, enum: [WHATSAPP_WEB_JS, BAILEYS] }
+        routingMode: { type: string, const: SENDER_POOL }
+        gatewayPoolId: { type: string, format: uuid }
+        senderPoolId: { type: string, format: uuid }
+        adapterVersion: { type: string, minLength: 1, maxLength: 100, pattern: '\S' }
+        routingPolicyVersion: { type: string, minLength: 1, maxLength: 100, pattern: '\S' }
+        capacityEvidenceVersion: { type: string, minLength: 1, maxLength: 100, pattern: '\S' }
+        fallbackMode: { type: string, const: NONE }
+        requiredCapabilities:
+          type: array
+          uniqueItems: true
+          items: { type: string, enum: [SEND_TEXT, SEND_TEMPLATE, SEND_IMAGE, SEND_VIDEO, SEND_DOCUMENT, DELIVERY_EVENTS, READ_EVENTS, INBOUND_MESSAGES, PAIRING_QR, PAIRING_CODE] }
     CampaignDetail:
       type: object
       additionalProperties: false

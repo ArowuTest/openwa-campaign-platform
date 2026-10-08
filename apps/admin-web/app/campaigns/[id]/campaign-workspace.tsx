@@ -5,6 +5,7 @@ import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 're
 import { useRouter } from 'next/navigation';
 
 import { StatusBadge } from '../../../components/status-badge';
+import { CampaignDraftEditor } from './campaign-draft-editor';
 import { useAuth } from '../../../components/auth-provider';
 import { APIError, apiRequest, type ListEnvelope } from '../../../lib/api';
 import { getCampaignDetail, type CampaignDetail } from '../../../lib/campaign-preparation-model';
@@ -348,6 +349,8 @@ function CampaignWorkspaceGeneration({ campaignId }: { campaignId: string }) {
       {supplementalState ? <div className="alert alert-information" role="status">{supplementalState}</div> : null}
 
       {message ? <div className={message.includes('failed') || message.includes('required') ? 'alert alert-danger' : 'alert alert-information'} role="status">{message}</div> : null}
+
+      <CampaignDraftEditor campaign={campaign} onSaved={saved => { if (mounted.current) setCampaign(saved); }} />
 
       <section className="grid grid-4" aria-label="Campaign metrics">
         <article className="card metric"><span className="muted">Campaign version</span><strong>{campaign.version}</strong></article>

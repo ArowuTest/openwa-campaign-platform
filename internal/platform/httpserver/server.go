@@ -291,6 +291,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/commercial-records/{id}/revoke", s.require("finance.approve", s.revokeCommercialRecord))
 	mux.Handle("GET /api/v1/campaigns", s.require("campaign.read", s.listCampaigns))
 	mux.Handle("GET /api/v1/campaigns/{id}", s.require("campaign.read", s.getCampaign))
+	mux.Handle("PUT /api/v1/campaigns/{id}/draft", s.require("campaign.write", s.saveCampaignDraft))
 	mux.Handle("POST /api/v1/campaigns", s.require("campaign.write", s.createCampaign))
 	mux.Handle("POST /api/v1/campaigns/{id}/transition", s.require("campaign.write", s.transitionCampaign))
 	mux.Handle("POST /api/v1/campaigns/{id}/clone", s.require("campaign.write", s.cloneCampaign))

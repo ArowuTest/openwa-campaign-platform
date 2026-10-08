@@ -1,4 +1,5 @@
 import { apiRequest } from './api';
+import { canonicalUUID } from './campaign-preparation-model';
 
 export const readinessKeys = ['organisation', 'purpose', 'consent', 'audience', 'message', 'transport', 'schedule', 'capacity', 'pilot', 'commercial', 'maintenance', 'finalReview'] as const;
 export type ReadinessCheck = { key: string; status: 'PASS' | 'BLOCKED' | 'PENDING_REVIEW' | 'UNAVAILABLE' | 'NOT_APPLICABLE'; code: string; message: string; remediation: string; evidence: EvidenceReference[] };
@@ -52,8 +53,8 @@ export function validateCampaignReadiness(value: unknown): CampaignReadiness {
   requireValue(!('projectedCompletionAt' in p) || date(p.projectedCompletionAt) && date(r.effectiveStartAt) && Date.parse(p.projectedCompletionAt) >= Date.parse(r.effectiveStartAt));
   requireValue((p.reasons as string[]).includes('RESERVATION_WINDOW_FEASIBILITY_NOT_ASSESSED') && (r.limitations as string[]).includes('These live capacity figures do not assess competing campaign reservations over the saved window. They do not establish reserved-window or deadline feasibility.'));
  }
- return value as CampaignReadiness;
+ return { ...(value as CampaignReadiness), campaignId: canonicalUUID(r.campaignId as string) };
 }
 export async function getCampaignReadiness(campaignId: string, signal?: AbortSignal): Promise<CampaignReadiness> {
- return validateCampaignReadiness(await apiRequest<unknown>('/v1/campaigns/' + encodeURIComponent(campaignId) + '/readiness', { signal }));
+ return validateCampaignReadiness(await apiRequest<unknown>('/v1/campaigns/' + encodeURIComponent(canonicalUUID(campaignId)) + '/readiness', { signal }));
 }

@@ -51,3 +51,20 @@ test('saved version change immediately clears previous assessment',async()=>{
  http(()=>readiness());const view=render(<CampaignReadinessPanel campaign={campaign()}/>);fireEvent.click(screen.getByRole('button',{name:'Refresh readiness'}));await screen.findByText('Commercial approval is pending.');
  view.rerender(<CampaignReadinessPanel campaign={{...campaign(),version:10}}/>);expect(screen.queryByText('Commercial approval is pending.')).toBeNull();
 });
+
+test.each([
+ ['ABCDEF01-2345-4678-9ABC-DEF012345678','abcdef01-2345-4678-9abc-def012345678'],
+ ['AbCdEf01-2345-4678-9aBc-DeF012345678','ABCDEF01-2345-4678-9ABC-DEF012345678']
+])('UUID readiness context accepts only case-equivalent evidence: %s',async(savedId,responseId)=>{
+ const calls=http(()=>readiness(responseId));render(<CampaignReadinessPanel campaign={campaign(savedId)}/>);
+ fireEvent.click(screen.getByRole('button',{name:'Refresh readiness'}));
+ expect(await screen.findByText('Commercial approval is pending.')).toBeTruthy();
+ expect(screen.queryByRole('alert')).toBeNull();
+ expect(calls).toEqual([{path:'/api/v1/campaigns/abcdef01-2345-4678-9abc-def012345678/readiness',method:'GET'}]);
+});
+test('UUID readiness rejects genuinely different evidence and masks its content',async()=>{
+ http(()=>readiness('abcdef01-2345-4678-9abc-def012345679'));
+ render(<CampaignReadinessPanel campaign={campaign('ABCDEF01-2345-4678-9ABC-DEF012345678')}/>);
+ fireEvent.click(screen.getByRole('button',{name:'Refresh readiness'}));
+ await screen.findByRole('alert');expect(screen.queryByText('Commercial approval is pending.')).toBeNull();
+});

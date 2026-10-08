@@ -49,8 +49,26 @@ export type CampaignDetail = {
   version: number;
 };
 
-export function getCampaignDetail(campaignId: string, signal?: AbortSignal): Promise<CampaignDetail> {
-  return apiRequest<CampaignDetail>('/v1/campaigns/' + encodeURIComponent(campaignId), { signal });
+// Preserve opaque fixture/domain IDs; only UUID spellings share a canonical case.
+export function canonicalUUID(value: string): string {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value) ? value.toLowerCase() : value;
+}
+function campaignForRequest(campaign: CampaignDetail, campaignId: string): CampaignDetail {
+  const value = { ...campaign, transport: { ...campaign.transport } };
+  for (const key of ['id', 'organisationId', 'purposeId', 'consentReviewId', 'audienceSnapshotId', 'messageVersionId', 'senderPool', 'createdBy', 'finalApprovedBy', 'commercialApprovalId'] as const) {
+    const field = value[key];
+    if (typeof field === 'string') value[key] = canonicalUUID(field);
+  }
+  for (const key of ['gatewayPoolId', 'senderPoolId', 'providerDefinitionId', 'sessionId', 'metaSenderId'] as const) {
+    const field = value.transport[key];
+    if (typeof field === 'string') value.transport[key] = canonicalUUID(field);
+  }
+  if (value.id !== canonicalUUID(campaignId)) throw new Error('Campaign response identity does not match the request.');
+  return value;
+}
+export async function getCampaignDetail(campaignId: string, signal?: AbortSignal): Promise<CampaignDetail> {
+  const value = await apiRequest<CampaignDetail>('/v1/campaigns/' + encodeURIComponent(canonicalUUID(campaignId)), { signal });
+  return campaignForRequest(value, campaignId);
 }
 
 export type DraftTransportRequest = {
@@ -82,6 +100,11 @@ export type DraftSaveRequest = {
   quietHoursEnd: string;
   transport: DraftTransportRequest;
 };
-export function saveCampaignDraft(campaignId: string, input: DraftSaveRequest): Promise<CampaignDetail> {
-  return apiRequest<CampaignDetail>('/v1/campaigns/' + encodeURIComponent(campaignId) + '/draft', { method: 'PUT', body: JSON.stringify(input) });
+export function canonicalDraftSaveRequest(input: DraftSaveRequest): DraftSaveRequest {
+  return { ...input, organisationId: canonicalUUID(input.organisationId), purposeId: canonicalUUID(input.purposeId), consentReviewId: canonicalUUID(input.consentReviewId),
+    transport: { ...input.transport, gatewayPoolId: canonicalUUID(input.transport.gatewayPoolId), senderPoolId: canonicalUUID(input.transport.senderPoolId) } };
+}
+export async function saveCampaignDraft(campaignId: string, input: DraftSaveRequest): Promise<CampaignDetail> {
+  const value = await apiRequest<CampaignDetail>('/v1/campaigns/' + encodeURIComponent(canonicalUUID(campaignId)) + '/draft', { method: 'PUT', body: JSON.stringify(canonicalDraftSaveRequest(input)) });
+  return campaignForRequest(value, campaignId);
 }

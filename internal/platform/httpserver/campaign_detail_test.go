@@ -207,3 +207,27 @@ func TestCampaignDetailContract(t *testing.T) {
 		})
 	}
 }
+
+func TestCampaignDetailUUIDCase(t *testing.T) {
+	repo := campaign.NewMemoryRepository()
+	entity := detailFixture()
+	entity.ID = "abcdef01-2345-4678-9abc-def012345678"
+	if err := repo.Create(context.Background(), entity); err != nil {
+		t.Fatal(err)
+	}
+	h, token := campaignDetailHandler(t, campaign.NewService(repo), "campaign.read")
+	for _, key := range []string{"ABCDEF01-2345-4678-9ABC-DEF012345678", "AbCdEf01-2345-4678-9aBc-DeF012345678"} {
+		w := campaignDetailRequest(h, key, token)
+		var got campaign.Campaign
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if w.Code != 200 || !reflect.DeepEqual(got, entity) {
+			t.Errorf("UUID spelling status=%d body=%s", w.Code, w.Body)
+		}
+	}
+	w := campaignDetailRequest(h, "ABCDEF01-2345-4678-9ABC-DEF012345679", token)
+	if w.Code != 404 || !strings.Contains(w.Body.String(), "CAMPAIGN_NOT_FOUND") {
+		t.Fatalf("different ID status=%d body=%s", w.Code, w.Body)
+	}
+}

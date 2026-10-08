@@ -460,3 +460,34 @@ func TestPreparationReadinessProjectionPublicDateBoundary(t *testing.T) {
 		t.Fatal("public DTO must remain serializable", err)
 	}
 }
+
+func TestPreparationReadinessUUIDCase(t *testing.T) {
+	f := newFixture(t)
+	f.campaign.ID = "abcdef01-2345-4678-9abc-def012345678"
+	f.review.CampaignID = f.campaign.ID
+	f.snapshot.CampaignID = f.campaign.ID
+	f.message.CampaignID = f.campaign.ID
+	f.commercial.CampaignID = f.campaign.ID
+	f.plan.CampaignID = f.campaign.ID
+	f.reservations[0].CampaignID = f.campaign.ID
+	f.sends[0].CampaignID = f.campaign.ID
+	f.service.Campaigns = readFunc[campaign.Campaign](func(_ context.Context, key string) (campaign.Campaign, error) {
+		if key != f.campaign.ID {
+			return campaign.Campaign{}, campaign.ErrNotFound
+		}
+		return f.campaign, nil
+	})
+	want := assess(t, f)
+	for _, key := range []string{"ABCDEF01-2345-4678-9ABC-DEF012345678", "AbCdEf01-2345-4678-9aBc-DeF012345678"} {
+		got, err := f.service.Get(context.Background(), key)
+		if err != nil || !reflect.DeepEqual(got, want) {
+			t.Errorf("UUID spelling %s changed assessment: %v", key, err)
+		}
+	}
+	different := f.campaign
+	different.ID = "abcdef01-2345-4678-9abc-def012345679"
+	f.service.Campaigns = fixedRead(&different)
+	if _, err := f.service.Get(context.Background(), strings.ToUpper(f.campaign.ID)); !errors.Is(err, ErrInvalidEvidence) {
+		t.Fatalf("different campaign accepted: %v", err)
+	}
+}

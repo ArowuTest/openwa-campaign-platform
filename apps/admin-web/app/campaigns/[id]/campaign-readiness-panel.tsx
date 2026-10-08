@@ -3,13 +3,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../../../components/auth-provider';
 import { APIError } from '../../../lib/api';
-import type { CampaignDetail } from '../../../lib/campaign-preparation-model';
+import { canonicalUUID, type CampaignDetail } from '../../../lib/campaign-preparation-model';
 import { getCampaignReadiness, type CampaignReadiness } from '../../../lib/campaign-readiness-model';
 import { hasPermission } from '../../../lib/session';
 
 export function CampaignReadinessPanel({ campaign }: { campaign: CampaignDetail }) {
  const { session } = useAuth();
- const generation = JSON.stringify([campaign.id, campaign.version, campaign.status, session?.id, session?.sessionId, [...(session?.permissions ?? [])].sort()]);
+ const generation = JSON.stringify([canonicalUUID(campaign.id), campaign.version, campaign.status, session?.id, session?.sessionId, [...(session?.permissions ?? [])].sort()]);
  if (!hasPermission(session?.permissions, 'campaign.read')) return <p>Campaign readiness requires campaign.read permission.</p>;
  return <ReadinessGeneration key={generation} campaign={campaign} />;
 }
@@ -29,7 +29,7 @@ function ReadinessGeneration({ campaign }: { campaign: CampaignDetail }) {
   try {
    const response = await getCampaignReadiness(campaign.id, controller.signal);
    if (!current()) return;
-   if (response.campaignId !== campaign.id || response.campaignVersion !== campaign.version || response.campaignStatus !== campaign.status) {
+   if (response.campaignId !== canonicalUUID(campaign.id) || response.campaignVersion !== campaign.version || response.campaignStatus !== campaign.status) {
     setError('The saved campaign changed. Reload its detail before refreshing readiness.'); return;
    }
    setValue(response);

@@ -9,7 +9,7 @@ import { CampaignDraftEditor } from './campaign-draft-editor';
 import { CampaignReadinessPanel } from './campaign-readiness-panel';
 import { useAuth } from '../../../components/auth-provider';
 import { APIError, apiRequest, type ListEnvelope } from '../../../lib/api';
-import { getCampaignDetail, type CampaignDetail } from '../../../lib/campaign-preparation-model';
+import { canonicalUUID, getCampaignDetail, type CampaignDetail } from '../../../lib/campaign-preparation-model';
 import { hasPermission } from '../../../lib/session';
 
 type Campaign = CampaignDetail;
@@ -81,6 +81,7 @@ function numberValue(data: FormData, name: string) {
 }
 
 export function CampaignWorkspace({ campaignId }: { campaignId: string }) {
+  campaignId = canonicalUUID(campaignId);
   const { session } = useAuth();
   // Campaign and authorisation changes start a fresh state/request generation.
   // Old mutation promises may still settle, but their unmounted owner cannot

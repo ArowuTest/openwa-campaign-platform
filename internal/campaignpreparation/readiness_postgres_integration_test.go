@@ -260,19 +260,23 @@ func readinessFootprint(t *testing.T, db *sql.DB) map[string]string {
 	}
 	return out
 }
-func sqlReadinessHandler(t *testing.T, svc *prep.Service) (http.Handler, string) {
+func sqlReadinessHandler(t *testing.T, svc *prep.Service, draftActor ...string) (http.Handler, string) {
 	t.Helper()
 	hash, e := identity.HashPassword("u3-disposable-session-password")
 	if e != nil {
 		t.Fatal(e)
 	}
 	user := identity.User{ID: "u3-readonly-operator", Email: "u3@internal.invalid", Status: identity.StatusActive, PasswordHash: hash, Permissions: map[string]struct{}{"campaign.read": {}}}
+	if len(draftActor) > 0 {
+		user.ID = draftActor[0]
+		user.Permissions["campaign.write"] = struct{}{}
+	}
 	auth := identity.NewService(identity.NewMemoryRepository(user), 30*time.Minute, time.Hour)
 	login, e := auth.Login(context.Background(), user.Email, "u3-disposable-session-password")
 	if e != nil {
 		t.Fatal(e)
 	}
-	return httpserver.New(slog.New(slog.NewTextHandler(io.Discard, nil)), httpserver.Dependencies{CampaignPreparation: svc, Identity: auth}).Handler(), login.SessionToken
+	return httpserver.New(slog.New(slog.NewTextHandler(io.Discard, nil)), httpserver.Dependencies{Campaigns: svc.Campaigns.(*campaign.Service), CampaignPreparation: svc, Identity: auth}).Handler(), login.SessionToken
 }
 func sqlReadinessGET(t *testing.T, h http.Handler, token, id string, want int) prep.Readiness {
 	t.Helper()
@@ -407,5 +411,108 @@ func TestPostgreSQLCampaignReadinessMediaReadOnly(t *testing.T) {
 		if f.objects.writes != 0 {
 			t.Fatal("object mutation during readiness")
 		}
+	})
+}
+
+func TestPostgreSQLCampaignPreparationUUIDCase(t *testing.T) {
+	readinessSQLRoles(t, func(t *testing.T, owner, db *sql.DB) {
+		f := newSQLPreparationFixture(t, owner, db, false)
+		// Historical gateway_pool_id is text: preserve its stored case on no-op saves.
+		sqlMust(t, owner, `UPDATE campaigns SET gateway_pool_id=upper(gateway_pool_id) WHERE id IN ($1::uuid,$2::uuid)`, f.campaign.ID, f.draft.ID)
+		campaigns := f.svc.Campaigns.(*campaign.Service)
+		campaigns.WithOrganisationReader(f.svc.Organisations).WithOrganisationPolicies(f.svc.OrganisationPolicies).
+			WithConsentPurposeReader(f.svc.Purposes).WithConsentReviewReader(f.svc.Reviews).
+			WithSenderPoolReader(f.svc.SenderPools).WithProviderCapabilities(f.svc.Providers).WithGatewayPools(f.svc.GatewayPools.(*sender.GatewayPoolService))
+		c, err := campaigns.Get(context.Background(), f.draft.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		h, token := sqlReadinessHandler(t, f.svc, c.CreatedBy)
+		before := readinessFootprint(t, db)
+		for _, tc := range []struct {
+			name  string
+			spell func(string) string
+		}{
+			{"uppercase", strings.ToUpper},
+			{"mixed", func(v string) string { return strings.ToUpper(v[:8]) + v[8:] }},
+		} {
+			t.Run(tc.name+" detail", func(t *testing.T) {
+				req := httptest.NewRequest("GET", "/api/v1/campaigns/"+tc.spell(c.ID), nil)
+				req.Header.Set("Authorization", "Bearer "+token)
+				w := httptest.NewRecorder()
+				h.ServeHTTP(w, req)
+				var got campaign.Campaign
+				if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+					t.Fatal(err)
+				}
+				if w.Code != 200 || !reflect.DeepEqual(got, c) || w.Header().Get("Cache-Control") != "no-store" {
+					t.Fatalf("case-equivalent direct detail status=%d differs", w.Code)
+				}
+			})
+			t.Run(tc.name+" readiness", func(t *testing.T) {
+				want := sqlReadinessGET(t, h, token, f.campaign.ID, 200)
+				if !want.ReadyForFinalReview {
+					t.Errorf("case-equivalent saved gateway blocked readiness: %+v", want.Checks)
+				}
+				got, err := f.svc.Get(context.Background(), tc.spell(f.campaign.ID))
+				if err != nil || !reflect.DeepEqual(got, want) {
+					t.Errorf("case-equivalent readiness service: %v", err)
+				}
+				got = sqlReadinessGET(t, h, token, tc.spell(f.campaign.ID), 200)
+				if !reflect.DeepEqual(got, want) {
+					t.Error("readiness response binding differs by UUID case")
+				}
+			})
+			t.Run(tc.name+" draft no-op", func(t *testing.T) {
+				wire := httpserver.CampaignDraftSaveRequest{
+					ExpectedVersion: &c.Version, Reason: "Case-equivalent UUID no-op", Name: c.Name,
+					OrganisationID: tc.spell(c.OrganisationID), PurposeID: tc.spell(c.PurposeID), ConsentReviewID: tc.spell(c.ConsentReviewID),
+					MaximumUniqueRecipients: &c.MaximumUniqueRecipients, MaximumMessagesPerRecipient: &c.MaximumMessagesPerRecipient,
+					RequestedStartAt: c.RequestedStartAt, CompletionDeadlineAt: c.CompletionDeadlineAt, Timezone: c.Timezone,
+					Transport: &httpserver.DraftTransportRequest{Channel: c.Transport.Channel, Provider: c.Transport.Provider, Engine: c.Transport.Engine,
+						RoutingMode: c.Transport.RoutingMode, GatewayPoolID: tc.spell(c.Transport.GatewayPoolID), SenderPoolID: tc.spell(c.Transport.SenderPoolID),
+						AdapterVersion: c.Transport.AdapterVersion, RoutingPolicyVersion: c.Transport.RoutingPolicyVersion, CapacityEvidenceVersion: c.Transport.CapacityEvidenceVersion,
+						FallbackMode: c.Transport.FallbackMode, RequiredCapabilities: &c.Transport.RequiredCapabilities},
+				}
+				body, err := json.Marshal(wire)
+				if err != nil {
+					t.Fatal(err)
+				}
+				req := httptest.NewRequest("PUT", "/api/v1/campaigns/"+tc.spell(c.ID)+"/draft", strings.NewReader(string(body)))
+				req.Header.Set("Authorization", "Bearer "+token)
+				w := httptest.NewRecorder()
+				h.ServeHTTP(w, req)
+				var got campaign.Campaign
+				if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+					t.Fatal(err)
+				}
+				if w.Code != 200 || !reflect.DeepEqual(got, c) {
+					t.Fatalf("case-equivalent draft no-op status=%d body=%s", w.Code, w.Body)
+				}
+				if got.Transport.ProviderDefinitionID != c.Transport.ProviderDefinitionID || got.Transport.GatewayPoolVersion != c.Transport.GatewayPoolVersion {
+					t.Fatal("UUID case rebound frozen authority")
+				}
+				wire.OrganisationID = sqlID(t)
+				body, err = json.Marshal(wire)
+				if err != nil {
+					t.Fatal(err)
+				}
+				req = httptest.NewRequest("PUT", "/api/v1/campaigns/"+tc.spell(c.ID)+"/draft", strings.NewReader(string(body)))
+				req.Header.Set("Authorization", "Bearer "+token)
+				w = httptest.NewRecorder()
+				h.ServeHTTP(w, req)
+				if w.Code != 409 || !strings.Contains(w.Body.String(), "CAMPAIGN_DRAFT_REFERENCES_LOCKED") {
+					t.Fatalf("different UUID references accepted: %d %s", w.Code, w.Body)
+				}
+			})
+		}
+		sqlReadinessGET(t, h, token, strings.ToUpper(sqlID(t)), 404)
+		if !reflect.DeepEqual(before, readinessFootprint(t, db)) {
+			t.Fatal("UUID-case GET/no-op/rejection changed database footprint")
+		}
+		if f.objects.writes != 0 {
+			t.Fatal("UUID-case boundary mutated objects")
+		}
+		t.Logf("UUID case boundary: %d public table counts/row hashes unchanged across direct detail, readiness, no-op save and genuine-other-ID rejection; zero object writes", len(before))
 	})
 }

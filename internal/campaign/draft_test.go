@@ -543,3 +543,39 @@ func TestDraftSaveReturnsAtomicPersistedTimestampWithoutLaterRead(t *testing.T) 
 		t.Fatal("service performed a later post-commit read instead of returning the atomic saved snapshot")
 	}
 }
+
+func TestDraftSaveUUIDCase(t *testing.T) {
+	c := draftEntity(t)
+	c.OrganisationID = "abcdef02-2345-4678-9abc-def012345678"
+	c.PurposeID = "abcdef03-2345-4678-9abc-def012345678"
+	c.ConsentReviewID = "abcdef04-2345-4678-9abc-def012345678"
+	c.Transport.GatewayPoolID = "abcdef05-2345-4678-9abc-def012345678"
+	c.Transport.SenderPoolID = "abcdef06-2345-4678-9abc-def012345678"
+	c.Transport.ProviderDefinitionID = "abcdef07-2345-4678-9abc-def012345678"
+	c.SenderPool = c.Transport.SenderPoolID
+	for _, spell := range []func(string) string{strings.ToUpper, func(v string) string { return strings.ToUpper(v[:8]) + v[8:] }} {
+		input := draftInput(c)
+		input.OrganisationID, input.PurposeID, input.ConsentReviewID = spell(input.OrganisationID), spell(input.PurposeID), spell(input.ConsentReviewID)
+		input.Transport.GatewayPoolID, input.Transport.SenderPoolID = spell(input.Transport.GatewayPoolID), spell(input.Transport.SenderPoolID)
+		saved, event, err := c.SaveDraft(input, time.Now())
+		if err != nil || !reflect.DeepEqual(saved, c) || event.ID != "" {
+			t.Errorf("UUID-only draft change was not a no-op: %v event=%+v", err, event)
+		}
+		input.Name = "Case-equivalent rename"
+		saved, event, err = c.SaveDraft(input, time.Now())
+		if err != nil || saved.Transport.ProviderDefinitionID != c.Transport.ProviderDefinitionID || saved.Transport.GatewayPoolVersion != c.Transport.GatewayPoolVersion || !reflect.DeepEqual(event.ChangedFields, []string{"NAME"}) {
+			t.Errorf("case-equivalent rename rebound transport: %v event=%+v", err, event)
+		}
+		input.OrganisationID = "abcdef02-2345-4678-9abc-def012345679"
+		if _, _, err := c.SaveDraft(input, time.Now()); !errors.Is(err, ErrDraftReferencesLocked) {
+			t.Errorf("different organisation accepted: %v", err)
+		}
+	}
+	svc, _, _, _, _, _, current := draftService(t)
+	for _, key := range []string{strings.ToUpper(current.ID), strings.ToUpper(current.ID[:8]) + current.ID[8:]} {
+		saved, err := svc.SaveDraft(context.Background(), key, draftInput(current))
+		if err != nil || !reflect.DeepEqual(saved, current) {
+			t.Errorf("service UUID lookup/save failed: %v", err)
+		}
+	}
+}

@@ -174,3 +174,33 @@ test('successful no-op draft save clears readiness even when version is unchange
  expect(calls.filter(c=>c.path.endsWith('/readiness'))).toHaveLength(1);
  expect(calls.filter(c=>c.init.method==='PUT')).toHaveLength(1);
 });
+
+test('UUID draft selection case survives an uncertain no-op response and canonical reconciliation',async()=>{
+ const saved=detail('abcdef01-2345-4678-9abc-def012345678');
+ saved.organisationId='abcdef02-2345-4678-9abc-def012345678';
+ saved.purposeId='abcdef03-2345-4678-9abc-def012345678';
+ saved.consentReviewId='abcdef04-2345-4678-9abc-def012345678';
+ saved.transport.gatewayPoolId='abcdef05-2345-4678-9abc-def012345678';
+ saved.transport.senderPoolId='abcdef06-2345-4678-9abc-def012345678';
+ saved.transport.providerDefinitionId='abcdef07-2345-4678-9abc-def012345678';
+ const calls=http((_path,init)=>init.method==='PUT'?response(503,'INTERNAL_ERROR'):saved);
+ render(<CampaignWorkspace campaignId={saved.id}/>);
+ fireEvent.change(await screen.findByLabelText('Gateway pool ID'),{target:{value:saved.transport.gatewayPoolId.toUpperCase()}});
+ fireEvent.change(screen.getByLabelText('Sender pool ID'),{target:{value:'AbCdEf06-2345-4678-9aBc-DeF012345678'}});
+ fireEvent.change(screen.getByLabelText('Save reason'),{target:{value:'Case-equivalent draft selection'}});
+ fireEvent.click(screen.getByRole('button',{name:'Save draft'}));
+ await screen.findByText('Save response was uncertain. Submitted fields are saved on the server.');
+ const puts=calls.filter(call=>call.init.method==='PUT');expect(puts).toHaveLength(1);
+ const input=JSON.parse(String(puts[0].init.body));
+ expect(input.transport.gatewayPoolId).toBe(saved.transport.gatewayPoolId);expect(input.transport.senderPoolId).toBe(saved.transport.senderPoolId);
+ expect(input.transport).not.toHaveProperty('providerDefinitionId');
+ expect(screen.getByRole('button',{name:'Save draft'})).toHaveProperty('disabled',true);
+});
+test('UUID draft save does not adopt a genuinely different returned campaign',async()=>{
+ const saved=detail('abcdef01-2345-4678-9abc-def012345678');
+ http((_path,init)=>init.method==='PUT'?{...saved,id:'abcdef01-2345-4678-9abc-def012345679',name:'Different private draft'}:saved);
+ render(<CampaignWorkspace campaignId={saved.id}/>);await edit();
+ fireEvent.click(screen.getByRole('button',{name:'Save draft'}));
+ await screen.findByText(/Save response was uncertain/);
+ expect(screen.queryByText('Draft saved.')).toBeNull();expect(screen.queryByRole('heading',{name:'Different private draft'})).toBeNull();
+});

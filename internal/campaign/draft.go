@@ -47,7 +47,6 @@ func (e *DraftFieldError) Error() string { return "campaign draft field is inval
 func (e *DraftFieldError) Unwrap() error { return ErrDraftInvalid }
 func draftInvalid(field string) error    { return &DraftFieldError{Field: field} }
 
-var draftUUID = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 var draftTime = regexp.MustCompile(`^([01][0-9]|2[0-3]):[0-5][0-9]$`)
 
 type draftPurposeGetter interface {
@@ -82,6 +81,8 @@ func sameDraftTime(a, b *time.Time) bool {
 	return a == nil && b == nil || a != nil && b != nil && a.Equal(*b)
 }
 func draftEditableTransport(t TransportSelection) TransportSelection {
+	t.GatewayPoolID = id.CanonicalUUID(t.GatewayPoolID)
+	t.SenderPoolID = id.CanonicalUUID(t.SenderPoolID)
 	t.ProviderDefinitionID = ""
 	t.ProviderDefinitionVersion = 0
 	t.GatewayPoolVersion = 0
@@ -124,7 +125,7 @@ func validateDraftInput(input DraftSaveInput) error {
 		return draftInvalid("NAME")
 	}
 	for _, value := range []string{input.OrganisationID, input.PurposeID, input.ConsentReviewID} {
-		if !draftUUID.MatchString(value) {
+		if !id.IsUUID(value) {
 			return draftInvalid("REFERENCES")
 		}
 	}
@@ -152,7 +153,7 @@ func validateDraftInput(input DraftSaveInput) error {
 	if t.Channel != "WHATSAPP" || t.Provider != ProviderOpenWA || t.RoutingMode != RoutingSenderPool || t.FallbackMode != FallbackNone || t.SessionID != "" || t.MetaSenderID != "" {
 		return draftInvalid("TRANSPORT")
 	}
-	if !draftUUID.MatchString(t.GatewayPoolID) || !draftUUID.MatchString(t.SenderPoolID) {
+	if !id.IsUUID(t.GatewayPoolID) || !id.IsUUID(t.SenderPoolID) {
 		return draftInvalid("TRANSPORT_IDS")
 	}
 	for _, v := range []string{t.AdapterVersion, t.RoutingPolicyVersion, t.CapacityEvidenceVersion} {
@@ -174,6 +175,7 @@ func validateDraftInput(input DraftSaveInput) error {
 	return nil
 }
 func (c Campaign) SaveDraft(input DraftSaveInput, now time.Time) (Campaign, MaterialChangeEvent, error) {
+	input = canonicalDraftInput(input)
 	if input.ExpectedVersion != c.Version {
 		return Campaign{}, MaterialChangeEvent{}, ErrConflict
 	}
@@ -255,6 +257,8 @@ func GuardDraftSave(current, next Campaign, event MaterialChangeEvent, expected 
 	return nil
 }
 func (s *Service) SaveDraft(ctx context.Context, identifier string, input DraftSaveInput) (Campaign, error) {
+	identifier = id.CanonicalUUID(identifier)
+	input = canonicalDraftInput(input)
 	current, err := s.repository.Get(ctx, identifier)
 	if err != nil {
 		return Campaign{}, err
@@ -298,14 +302,19 @@ func (s *Service) SaveDraft(ctx context.Context, identifier string, input DraftS
 		return Campaign{}, draftInvalid("CONSENT_REVIEW")
 	}
 	for _, poolID := range []string{current.Transport.SenderPoolID, input.Transport.SenderPoolID} {
+		poolID = id.CanonicalUUID(poolID)
 		pool, err := s.draftPools.GetPool(ctx, poolID)
 		if err != nil || pool.ID != poolID || pool.Status != "ACTIVE" {
 			return Campaign{}, draftInvalid("SENDER_POOL")
 		}
 	}
 	transport := input.Transport
-	if sameDraftTransport(current.Transport, transport) {
+	sameTransport := sameDraftTransport(current.Transport, transport)
+	if sameTransport {
 		transport = current.Transport
+		transport.GatewayPoolID = id.CanonicalUUID(transport.GatewayPoolID)
+		transport.SenderPoolID = id.CanonicalUUID(transport.SenderPoolID)
+		transport.ProviderDefinitionID = id.CanonicalUUID(transport.ProviderDefinitionID)
 	} else {
 		transport.ProviderDefinitionID = ""
 		transport.ProviderDefinitionVersion = 0
@@ -317,10 +326,15 @@ func (s *Service) SaveDraft(ctx context.Context, identifier string, input DraftS
 	}
 	// Every successful save validates the exact saved authority. No hidden rebinding
 	// of a name/schedule-only save is permitted.
-	if sameDraftTransport(current.Transport, input.Transport) && (transport.ProviderDefinitionID != current.Transport.ProviderDefinitionID || transport.ProviderDefinitionVersion != current.Transport.ProviderDefinitionVersion || transport.GatewayPoolVersion != current.Transport.GatewayPoolVersion) {
+	if sameTransport && (transport.ProviderDefinitionID != id.CanonicalUUID(current.Transport.ProviderDefinitionID) || transport.ProviderDefinitionVersion != current.Transport.ProviderDefinitionVersion || transport.GatewayPoolVersion != current.Transport.GatewayPoolVersion) {
 		return Campaign{}, draftInvalid("TRANSPORT_BINDING")
 	}
 	input.Transport = transport
+	if sameTransport {
+		// Validate canonically, but preserve the exact saved authority on a no-op
+		// or unrelated edit, including historical UUID spelling in text columns.
+		input.Transport = current.Transport
+	}
 	next, event, err := current.SaveDraft(input, now)
 	if err != nil {
 		return Campaign{}, err
@@ -360,4 +374,13 @@ func (r *MemoryRepository) SaveDraft(_ context.Context, next Campaign, event Mat
 	r.items[next.ID] = next
 	r.events[next.ID] = append(r.events[next.ID], event)
 	return cloneDraftCampaign(next), nil
+}
+
+func canonicalDraftInput(input DraftSaveInput) DraftSaveInput {
+	input.OrganisationID = id.CanonicalUUID(input.OrganisationID)
+	input.PurposeID = id.CanonicalUUID(input.PurposeID)
+	input.ConsentReviewID = id.CanonicalUUID(input.ConsentReviewID)
+	input.Transport.GatewayPoolID = id.CanonicalUUID(input.Transport.GatewayPoolID)
+	input.Transport.SenderPoolID = id.CanonicalUUID(input.Transport.SenderPoolID)
+	return input
 }

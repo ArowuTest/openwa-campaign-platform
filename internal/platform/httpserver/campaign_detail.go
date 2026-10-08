@@ -3,19 +3,17 @@ package httpserver
 import (
 	"errors"
 	"net/http"
-	"regexp"
 
 	"campaign-platform/internal/campaign"
 	"campaign-platform/internal/shared/httpx"
+	"campaign-platform/internal/shared/id"
 )
-
-var campaignDetailIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 // getCampaign reads saved campaign evidence without rebinding sources or authorising release.
 func (s *Server) getCampaign(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	identifier := r.PathValue("id")
-	if !campaignDetailIDPattern.MatchString(identifier) {
+	identifier := id.CanonicalUUID(r.PathValue("id"))
+	if !id.IsUUID(identifier) {
 		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_CAMPAIGN_ID", "The campaign ID must be a canonical UUID.", nil)
 		return
 	}

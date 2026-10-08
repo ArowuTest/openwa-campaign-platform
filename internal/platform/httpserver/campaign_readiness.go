@@ -4,14 +4,15 @@ import (
 	"campaign-platform/internal/campaign"
 	"campaign-platform/internal/campaignpreparation"
 	"campaign-platform/internal/shared/httpx"
+	"campaign-platform/internal/shared/id"
 	"errors"
 	"net/http"
 )
 
 func (s *Server) getCampaignReadiness(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	identifier := r.PathValue("id")
-	if !campaignDetailIDPattern.MatchString(identifier) {
+	identifier := id.CanonicalUUID(r.PathValue("id"))
+	if !id.IsUUID(identifier) {
 		httpx.WriteError(w, r, 400, "INVALID_CAMPAIGN_ID", "The campaign ID must be a canonical UUID.", nil)
 		return
 	}

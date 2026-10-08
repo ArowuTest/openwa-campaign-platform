@@ -235,3 +235,21 @@ test.each(['success', 'error'])('unmount rejects late mutation %s before reload 
   expect(calls.filter(call => call.path === '/v1/campaigns/campaign-a')).toHaveLength(1);
   expect(navigation.push).not.toHaveBeenCalled();
 });
+
+test.each([
+ ['ABCDEF01-2345-4678-9ABC-DEF012345678', 'abcdef01-2345-4678-9abc-def012345678'],
+ ['AbCdEf01-2345-4678-9aBc-DeF012345678', 'ABCDEF01-2345-4678-9ABC-DEF012345678']
+])('UUID spelling direct link %s renders the same saved campaign', async (routeId, responseId) => {
+ const canonical = 'abcdef01-2345-4678-9abc-def012345678';
+ const calls = http(path => /^\/v1\/campaigns\/[^/]+$/.test(path) ? {...detail(responseId), name:'UUID campaign'} : supplemental(path));
+ render(<CampaignWorkspace campaignId={routeId}/>);
+ expect(await screen.findByRole('heading',{name:'UUID campaign'})).toBeTruthy();
+ expect(screen.queryByText(/Loading authoritative campaign/)).toBeNull();
+ expect(calls[0].path).toBe('/v1/campaigns/'+canonical);
+});
+test('UUID direct link rejects a genuinely different response identity', async () => {
+ http(path => /^\/v1\/campaigns\/[^/]+$/.test(path) ? {...detail('abcdef01-2345-4678-9abc-def012345679'),name:'Different private campaign'} : supplemental(path));
+ render(<CampaignWorkspace campaignId="ABCDEF01-2345-4678-9ABC-DEF012345678"/>);
+ await screen.findByRole('alert');
+ expect(screen.queryByRole('heading',{name:'Different private campaign'})).toBeNull();
+});

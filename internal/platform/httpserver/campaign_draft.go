@@ -9,6 +9,7 @@ import (
 	"campaign-platform/internal/campaign"
 	"campaign-platform/internal/identity"
 	"campaign-platform/internal/shared/httpx"
+	"campaign-platform/internal/shared/id"
 )
 
 // The request intentionally excludes actor, state, approval and frozen provider
@@ -45,8 +46,8 @@ type DraftTransportRequest struct {
 
 func (s *Server) saveCampaignDraft(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	identifier := r.PathValue("id")
-	if !campaignDetailIDPattern.MatchString(identifier) {
+	identifier := id.CanonicalUUID(r.PathValue("id"))
+	if !id.IsUUID(identifier) {
 		httpx.WriteError(w, r, 400, "INVALID_CAMPAIGN_ID", "The campaign ID must be a canonical UUID.", nil)
 		return
 	}
@@ -56,7 +57,7 @@ func (s *Server) saveCampaignDraft(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if request.ExpectedVersion == nil || *request.ExpectedVersion < 1 || request.MaximumUniqueRecipients == nil || request.MaximumMessagesPerRecipient == nil || request.Transport == nil || request.Transport.RequiredCapabilities == nil || request.Timezone == "" ||
-		!campaignDetailIDPattern.MatchString(request.OrganisationID) || !campaignDetailIDPattern.MatchString(request.PurposeID) || !campaignDetailIDPattern.MatchString(request.ConsentReviewID) {
+		!id.IsUUID(request.OrganisationID) || !id.IsUUID(request.PurposeID) || !id.IsUUID(request.ConsentReviewID) {
 		httpx.WriteError(w, r, 422, "CAMPAIGN_DRAFT_INVALID", "Required draft fields are missing or invalid.", map[string]any{"fields": []string{"REQUIRED_FIELDS"}})
 		return
 	}

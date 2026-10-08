@@ -11,6 +11,7 @@ import (
 	"campaign-platform/internal/provider"
 	"campaign-platform/internal/segment"
 	"campaign-platform/internal/sender"
+	"campaign-platform/internal/shared/id"
 	"campaign-platform/internal/storage"
 	"campaign-platform/internal/testmessage"
 	"context"
@@ -99,6 +100,7 @@ type Service struct {
 }
 
 func (s *Service) Get(ctx context.Context, campaignID string) (Readiness, error) {
+	campaignID = id.CanonicalUUID(campaignID)
 	if s == nil {
 		return Readiness{}, ErrUnavailable
 	}
@@ -118,6 +120,11 @@ func (s *Service) Get(ctx context.Context, campaignID string) (Readiness, error)
 	if err != nil {
 		return Readiness{}, err
 	}
+	// Historical gateway IDs may be stored in text columns. Canonicalise the
+	// read-only route projection before exact governed-source comparisons.
+	c.Transport.GatewayPoolID = id.CanonicalUUID(c.Transport.GatewayPoolID)
+	c.Transport.SenderPoolID = id.CanonicalUUID(c.Transport.SenderPoolID)
+	c.Transport.ProviderDefinitionID = id.CanonicalUUID(c.Transport.ProviderDefinitionID)
 	switch c.Status {
 	case campaign.StatusDraft, campaign.StatusConsentReviewPending, campaign.StatusConsentApproved, campaign.StatusAudienceBuilding, campaign.StatusAudienceValidated, campaign.StatusMessageReviewPending, campaign.StatusMessageApproved, campaign.StatusCommercialApproved, campaign.StatusFinalApprovalPending:
 	case campaign.StatusScheduled, campaign.StatusDispatching, campaign.StatusPaused, campaign.StatusCompleted, campaign.StatusCompletedWithExceptions, campaign.StatusCancelled:

@@ -3,7 +3,7 @@
 import { FormEvent, useEffect, useRef, useState } from 'react';
 import { useAuth } from '../../../components/auth-provider';
 import { APIError } from '../../../lib/api';
-import { getCampaignDetail, saveCampaignDraft, type CampaignDetail, type DraftSaveRequest, type DraftTransportRequest } from '../../../lib/campaign-preparation-model';
+import { canonicalUUID, canonicalDraftSaveRequest, getCampaignDetail, saveCampaignDraft, type CampaignDetail, type DraftSaveRequest, type DraftTransportRequest } from '../../../lib/campaign-preparation-model';
 import { hasPermission } from '../../../lib/session';
 
 const capabilities = ['SEND_TEXT', 'SEND_TEMPLATE', 'SEND_IMAGE', 'SEND_VIDEO', 'SEND_DOCUMENT', 'DELIVERY_EVENTS', 'READ_EVENTS', 'INBOUND_MESSAGES', 'PAIRING_QR', 'PAIRING_CODE'];
@@ -18,11 +18,11 @@ function formFrom(c: CampaignDetail): DraftForm {
     routing: c.transport.routingPolicyVersion, capacity: c.transport.capacityEvidenceVersion, capabilities: [...(c.transport.requiredCapabilities ?? [])] };
 }
 function requestFrom(c: CampaignDetail, f: DraftForm): DraftSaveRequest {
-  return { expectedVersion: c.version, reason: f.reason.trim(), name: f.name.trim(), organisationId: c.organisationId, purposeId: c.purposeId, consentReviewId: c.consentReviewId,
+  return canonicalDraftSaveRequest({ expectedVersion: c.version, reason: f.reason.trim(), name: f.name.trim(), organisationId: c.organisationId, purposeId: c.purposeId, consentReviewId: c.consentReviewId,
     maximumUniqueRecipients: Number(f.maximum), maximumMessagesPerRecipient: 1, requestedStartAt: f.start.trim() || null, completionDeadlineAt: f.deadline.trim() || null,
     timezone: f.timezone.trim(), quietHoursStart: f.quietStart.trim(), quietHoursEnd: f.quietEnd.trim(),
     transport: { channel: 'WHATSAPP', provider: 'OPENWA', engine: f.engine, routingMode: 'SENDER_POOL', gatewayPoolId: f.gateway.trim(), senderPoolId: f.pool.trim(),
-      adapterVersion: f.adapter.trim(), routingPolicyVersion: f.routing.trim(), capacityEvidenceVersion: f.capacity.trim(), fallbackMode: 'NONE', requiredCapabilities: [...f.capabilities] } };
+      adapterVersion: f.adapter.trim(), routingPolicyVersion: f.routing.trim(), capacityEvidenceVersion: f.capacity.trim(), fallbackMode: 'NONE', requiredCapabilities: [...f.capabilities] } });
 }
 function submittedFieldsMatch(saved: CampaignDetail, input: DraftSaveRequest): boolean {
   const actual = requestFrom(saved, { ...formFrom(saved), reason: input.reason });
@@ -48,7 +48,7 @@ function submittedFieldsMatch(saved: CampaignDetail, input: DraftSaveRequest): b
 }
 export function CampaignDraftEditor({ campaign, onSaved }: { campaign: CampaignDetail; onSaved: (saved: CampaignDetail) => void }) {
   const { session } = useAuth();
-  const generation = JSON.stringify([campaign.id, session?.id, session?.sessionId, [...(session?.permissions ?? [])].sort()]);
+  const generation = JSON.stringify([canonicalUUID(campaign.id), session?.id, session?.sessionId, [...(session?.permissions ?? [])].sort()]);
   return <DraftEditorGeneration key={generation} campaign={campaign} onSaved={onSaved} />;
 }
 function DraftEditorGeneration({ campaign, onSaved }: { campaign: CampaignDetail; onSaved: (saved: CampaignDetail) => void }) {

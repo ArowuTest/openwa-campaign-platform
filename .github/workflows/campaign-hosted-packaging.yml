@@ -1,0 +1,60 @@
+name: Campaign hosted packaging
+
+on:
+  push:
+    branches:
+      - feat/campaign-hosted-packaging-20261008
+
+permissions:
+  contents: read
+
+concurrency:
+  group: campaign-hosted-packaging-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    if: github.repository == 'ArowuTest/openwa-campaign-platform'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout reviewed tooling
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.sha }}
+          path: tooling
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Checkout exact accepted source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: bfb4bee1d03105e14e97577d279e5bc5632266fe
+          path: accepted-source
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Build eight accepted-source images and isolated admin health
+        run: >-
+          python3 tooling/scripts/campaign-hosted-packaging.py
+          --source "$GITHUB_WORKSPACE/accepted-source"
+          --tooling "$GITHUB_WORKSPACE/tooling"
+          --output-base "$RUNNER_TEMP/campaign-hosted-packaging"
+
+      - name: Retain packaging evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: campaign-hosted-packaging-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/campaign-hosted-packaging/campaign-*/proof.json
+            ${{ runner.temp }}/campaign-hosted-packaging/campaign-*/build-*.json
+            ${{ runner.temp }}/campaign-hosted-packaging/campaign-*/admin-health-*.json
+            ${{ runner.temp }}/campaign-hosted-packaging/campaign-*/image-*.json
+            ${{ runner.temp }}/campaign-hosted-packaging/campaign-*/iid-*.txt
+            ${{ runner.temp }}/campaign-hosted-packaging/campaign-*/admin-inputs.json
+            ${{ runner.temp }}/campaign-hosted-packaging/campaign-*/backend-inputs.json
+          if-no-files-found: error
+          retention-days: 14
+          overwrite: false
+          include-hidden-files: false

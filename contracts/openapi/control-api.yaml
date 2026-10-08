@@ -1207,6 +1207,29 @@ paths:
       responses:
         '201': { description: Draft campaign created }
         '422': { $ref: '#/components/responses/ValidationError' }
+  /campaigns/{id}/readiness:
+    get:
+      operationId: getCampaignReadiness
+      summary: Read advisory preparation evidence for the saved campaign
+      description: Requires campaign.read. Read-only evidence for DRAFT through FINAL_APPROVAL_PENDING. Uses only the persisted ID and saved version; no browser forecast, approval claim or counts are accepted. Does not approve, hold capacity, schedule, send or dispatch. Final approval revalidates current evidence. READY_FOR_FINAL_REVIEW does not establish competing-reservation or deadline feasibility.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Safe ordered readiness checks. Expected missing, pending and unavailable evidence is represented in checks.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CampaignReadiness' }
+        '400': { description: INVALID_CAMPAIGN_ID }
+        '401': { description: AUTHENTICATION_REQUIRED or SESSION_INVALID }
+        '403': { description: PERMISSION_DENIED }
+        '404': { description: CAMPAIGN_NOT_FOUND }
+        '409': { description: CAMPAIGN_VERSION_CONFLICT or CAMPAIGN_READINESS_STAGE_UNSUPPORTED. Reload changed detail or use existing execution evidence for scheduled and later stages. }
+        '500': { description: INTERNAL_ERROR with no persistence or private source details }
+        '503': { description: CAMPAIGN_READINESS_UNAVAILABLE for missing required query wiring }
   /campaigns/{id}/draft:
     put:
       operationId: saveCampaignDraft
@@ -5284,6 +5307,64 @@ components:
           type: array
           uniqueItems: true
           items: { type: string, enum: [SEND_TEXT, SEND_TEMPLATE, SEND_IMAGE, SEND_VIDEO, SEND_DOCUMENT, DELIVERY_EVENTS, READ_EVENTS, INBOUND_MESSAGES, PAIRING_QR, PAIRING_CODE] }
+    CampaignReadiness:
+      type: object
+      additionalProperties: false
+      required: ["campaignId","campaignVersion","campaignStatus","assessedAt","state","readyForFinalReview","checks","limitations"]
+      properties:
+        campaignId: {"type":"string","format":"uuid"}
+        campaignVersion: {"type":"integer","format":"int64","minimum":1,"maximum":9007199254740991}
+        campaignStatus: {"type":"string","enum":["DRAFT","CONSENT_REVIEW_PENDING","CONSENT_APPROVED","AUDIENCE_BUILDING","AUDIENCE_VALIDATED","MESSAGE_REVIEW_PENDING","MESSAGE_APPROVED","COMMERCIAL_APPROVED","FINAL_APPROVAL_PENDING"]}
+        assessedAt: {"type":"string","format":"date-time","description":"UTC ISO 8601 instant."}
+        effectiveStartAt: {"type":"string","format":"date-time","description":"UTC ISO 8601 instant."}
+        state: {"type":"string","enum":["BLOCKED","REQUIRES_REVIEW","READY_FOR_FINAL_REVIEW"]}
+        readyForFinalReview: {"type":"boolean","description":"Derived only from state; grants no approval or dispatch authority."}
+        checks: {"type":"array","minItems":12,"maxItems":12,"items":{"$ref":"#/components/schemas/ReadinessCheck"}}
+        capacity: {"$ref":"#/components/schemas/CapacityPreview"}
+        limitations: {"type":"array","minItems":1,"items":{"type":"string","minLength":1}}
+    ReadinessCheck:
+      type: object
+      additionalProperties: false
+      required: ["key","status","code","message","remediation","evidence"]
+      properties:
+        key: {"type":"string","enum":["organisation","purpose","consent","audience","message","transport","schedule","capacity","pilot","commercial","maintenance","finalReview"]}
+        status: {"type":"string","enum":["PASS","BLOCKED","PENDING_REVIEW","UNAVAILABLE","NOT_APPLICABLE"]}
+        code: {"type":"string","minLength":1}
+        message: {"type":"string","minLength":1}
+        remediation: {"type":"string","minLength":1}
+        evidence: {"type":"array","items":{"$ref":"#/components/schemas/EvidenceReference"}}
+    EvidenceReference:
+      type: object
+      additionalProperties: false
+      required: ["kind","id"]
+      properties:
+        kind: {"type":"string","minLength":1}
+        id: {"type":"string","minLength":1}
+        version: {"type":"integer","format":"int64","minimum":1,"maximum":9007199254740991}
+        hash: {"type":"string","minLength":1}
+        status: {"type":"string","minLength":1}
+        observedAt: {"type":"string","format":"date-time","description":"UTC ISO 8601 instant."}
+    CapacityPreview:
+      type: object
+      additionalProperties: false
+      required: ["senderPoolId","gatewayPoolId","healthySessions","healthyNodes","minimumHealthyNodes","availableMessagesPerMinute","availableHourlyUnits","availableDailyUnits","safetyMarginPercent","basisRecipientCount","basis","measurementAsOf","classification","reasons"]
+      properties:
+        senderPoolId: {"type":"string","format":"uuid"}
+        gatewayPoolId: {"type":"string","format":"uuid"}
+        healthySessions: {"type":"integer","format":"int64","minimum":0,"maximum":9007199254740991}
+        healthyNodes: {"type":"integer","format":"int64","minimum":0,"maximum":9007199254740991}
+        minimumHealthyNodes: {"type":"integer","format":"int64","minimum":0,"maximum":9007199254740991}
+        availableMessagesPerMinute: {"type":"integer","format":"int64","minimum":0,"maximum":9007199254740991}
+        availableHourlyUnits: {"type":"integer","format":"int64","minimum":0,"maximum":9007199254740991}
+        availableDailyUnits: {"type":"integer","format":"int64","minimum":0,"maximum":9007199254740991}
+        safetyMarginPercent: {"type":"integer","format":"int64","minimum":0,"maximum":90}
+        basisRecipientCount: {"type":"integer","format":"int64","minimum":0,"maximum":9007199254740991}
+        basis: {"type":"string","enum":["SNAPSHOT","AUTHORISED_MAXIMUM"]}
+        requiredMessagesPerMinute: {"type":"number","exclusiveMinimum":0}
+        projectedCompletionAt: {"type":"string","format":"date-time","description":"UTC ISO 8601 instant."}
+        measurementAsOf: {"type":"string","format":"date-time","description":"Aggregate assessment time with fresh node/session heartbeats, not provider delivery freshness."}
+        classification: {"type":"string","enum":["ADVISORY_ONLY","BLOCKED"]}
+        reasons: {"type":"array","items":{"type":"string","minLength":1},"description":"Includes RESERVATION_WINDOW_FEASIBILITY_NOT_ASSESSED; dynamic competing campaign holds are not deducted."}
     CampaignDetail:
       type: object
       additionalProperties: false

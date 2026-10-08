@@ -161,3 +161,16 @@ test.each([
  expect(calls.filter(c=>c.init.method==='PUT')).toHaveLength(1);
  expect(reads).toBe(2);
 });
+
+test('successful no-op draft save clears readiness even when version is unchanged',async()=>{
+ const id='10000000-0000-4000-8000-000000000001';const saved=detail(id);
+ const keys=['organisation','purpose','consent','audience','message','transport','schedule','capacity','pilot','commercial','maintenance','finalReview'];
+ const calls=http((path)=>path.endsWith('/readiness')?{campaignId:id,campaignVersion:3,campaignStatus:'DRAFT',assessedAt:'2026-10-08T12:00:00Z',state:'BLOCKED',readyForFinalReview:false,checks:keys.map(key=>({key,status:'BLOCKED',code:'EVIDENCE_MISSING',message:key==='audience'?'Earlier readiness assessment.':'Evidence missing.',remediation:'Review evidence.',evidence:[]})),limitations:['Readiness is advisory; final approval revalidates current evidence.']}:saved);
+ render(<CampaignWorkspace campaignId={id}/>);await screen.findByLabelText('Draft name');
+ fireEvent.click(screen.getByRole('button',{name:'Refresh readiness'}));await screen.findByText('Earlier readiness assessment.');
+ fireEvent.change(screen.getByLabelText('Save reason'),{target:{value:'Confirm unchanged saved draft'}});
+ fireEvent.click(screen.getByRole('button',{name:'Save draft'}));await screen.findByText('Draft saved.');
+ expect(screen.queryByText('Earlier readiness assessment.')).toBeNull();
+ expect(calls.filter(c=>c.path.endsWith('/readiness'))).toHaveLength(1);
+ expect(calls.filter(c=>c.init.method==='PUT')).toHaveLength(1);
+});

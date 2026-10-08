@@ -22,6 +22,7 @@ import (
 	"campaign-platform/internal/audience/importer"
 	"campaign-platform/internal/audience/materialisation"
 	"campaign-platform/internal/campaign"
+	"campaign-platform/internal/campaignpreparation"
 	"campaign-platform/internal/campaignworkspace"
 	"campaign-platform/internal/commercial"
 	"campaign-platform/internal/consent"
@@ -72,6 +73,7 @@ type Dependencies struct {
 	InboundRetentionPolicies       *inbound.RetentionPolicyAdministration
 	InboundRotation                *inbound.RotationService
 	Campaigns                      *campaign.Service
+	CampaignPreparation            *campaignpreparation.Service
 	CampaignWorkspace              *campaignworkspace.Service
 	Commercial                     *commercial.Service
 	Geography                      *geography.Catalogue
@@ -291,6 +293,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/commercial-records/{id}/revoke", s.require("finance.approve", s.revokeCommercialRecord))
 	mux.Handle("GET /api/v1/campaigns", s.require("campaign.read", s.listCampaigns))
 	mux.Handle("GET /api/v1/campaigns/{id}", s.require("campaign.read", s.getCampaign))
+	mux.Handle("GET /api/v1/campaigns/{id}/readiness", s.require("campaign.read", s.getCampaignReadiness))
 	mux.Handle("PUT /api/v1/campaigns/{id}/draft", s.require("campaign.write", s.saveCampaignDraft))
 	mux.Handle("POST /api/v1/campaigns", s.require("campaign.write", s.createCampaign))
 	mux.Handle("POST /api/v1/campaigns/{id}/transition", s.require("campaign.write", s.transitionCampaign))

@@ -2,6 +2,8 @@
 
 ## Current decision
 
+**Runtime follow-up — 8 October 2026:** Accepted source `6d445cf0d5095b006622ef06e2ba251157bbbbd1` is pushed and live on all eight Railway application services. The atomic production upgrade and read-only postconditions passed; authenticated operator smoke passed 9/9 bounded checks. The separate Hostinger gateway release and exact evidence limits are recorded in [the production release handover](COHORT_PRODUCTION_RELEASE_HANDOVER_2026-10-08.md). The dated pre-rollout and pending statements below are historical, not instructions to repeat the upgrade or deployment.
+
 **SOURCE ACCEPTED for the bounded cohort/estimate/segment/snapshot tranche.** All applicable source execution gates and review adjudication are closed, including the upload-finaliser privilege repair. This document records pre-rollout source acceptance; the new implementation commit and later GitHub/production deployment receipts are recorded in Git and the latest FS checkpoint. The user explicitly authorized commit, push and production rollout. This acceptance does not cover the whole 67-screen platform, live provider UAT or production-scale certification.
 
 The import/recovery tranche is accepted at `9bae302d4c3c4ea4593ce294440a7cd31b68bb72`. The subsequent cohort, estimate, saved-segment and snapshot candidate has now passed bounded source acceptance. Source acceptance will cover this bounded tranche, not all 67 screens or the whole platform.

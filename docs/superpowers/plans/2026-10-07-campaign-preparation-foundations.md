@@ -12,7 +12,7 @@
 
 ## Status and source provenance
 
-Preparatory plan only, dated 2026-10-07. The cohort/estimate/segment/snapshot candidate remains **UNACCEPTED**. Do not begin these code units until root records its acceptance, freezes the exact accepted source and establishes the next isolated worktree/base. Accepted import base inspected here: `9bae302d4c3c4ea4593ce294440a7cd31b68bb72`. Current inspection worktree: `C:\Users\sanus\OpenWA\campaign-platform-active\repo\.agent\worktrees\large-audience-ingestion-20261006`. No test or runtime result is asserted by this plan.
+Preparatory plan only, dated 2026-10-07. **Prerequisite update — 8 October 2026:** the cohort/estimate/segment/snapshot source is accepted, pushed and deployed at `6d445cf0d5095b006622ef06e2ba251157bbbbd1`; nine bounded live operator smoke checks pass. See `docs/program/COHORT_PRODUCTION_RELEASE_HANDOVER_2026-10-08.md` for release evidence and limits. These three campaign units remain unimplemented. Establish the next isolated worktree/base and follow their separate acceptance gates before writing code. Accepted import base inspected here: `9bae302d4c3c4ea4593ce294440a7cd31b68bb72`. Current inspection worktree: `C:\Users\sanus\OpenWA\campaign-platform-active\repo\.agent\worktrees\large-audience-ingestion-20261006`. No implementation, test or runtime acceptance of the three planned campaign units is asserted; the cited smoke result belongs to the preceding audience/cohort release.
 
 | Authority | Exact source / relevance |
 |---|---|

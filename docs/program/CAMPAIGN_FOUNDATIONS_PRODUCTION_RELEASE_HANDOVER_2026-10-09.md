@@ -57,9 +57,11 @@ Retrieve the password and TOTP secret privately from the authorised Railway cont
 
 ## Live admin smoke
 
-At the time this handover was authored, the final authenticated smoke receipt was still being closed out. Its required evidence is a same-origin rendered login, MFA challenge, campaign route, hardened cookie attributes, direct/proxied anonymous-auth behavior, missing-campaign/readiness route behavior, logout and revoked-session verification, browser/context closure, and a clear statement that the production organisation inventory is empty. The smoke helper's origin-response guard correction is retained in the ignored operational task folder; its focused synthetic guard tests passed.
+The final production smoke is GREEN. Receipt: production-readiness-smoke-20261008-8e743db4-cdbe-425f-83e4-9fcf14e7e350.json, SHA-256 318535f4b169284932ebfb26cdb260359e26602f1afca8728aef7ac51001d91d. It recorded five checks passed and zero failed: rendered login, MFA challenge and campaign route; hardened cookie attributes and required permissions; direct/proxied anonymous-auth behavior; missing-campaign/readiness route behavior; and the first-page organisation inventory. The inventory returned zero organisations and hasMore false, so the positive campaign readiness branch was skipped.
 
-Replace this section with the final receipt path and SHA-256 after the live smoke process finishes. Until then, do not describe authenticated smoke as complete and do not manufacture a positive campaign fixture.
+Logout returned 204 and the follow-up auth/me verification returned 401 SESSION_INVALID, proving that the session was revoked rather than merely clearing the browser cookie. Browser context and page cleanup completed, with no business mutation, provider send, campaign, audience, approval or reservation performed. The smoke used the production source and final reconciled runtime; credentials, cookies, response bodies and MFA material are not stored in this handover.
+
+The response-origin helper correction is recorded at helper SHA-256 853fcdab8f586158fc07d8414282b22d5704100fc5c8f80271292bda9fd1bd02. Focused synthetic origin-guard tests passed, including empty/undefined response URL fallback, same-origin acceptance and changed-origin/redirect rejection.
 
 ## Positive campaign readiness boundary
 

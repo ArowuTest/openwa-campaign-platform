@@ -101,6 +101,18 @@ function displayDate(value?: string): string {
   return value ? new Date(value).toLocaleString() : '—';
 }
 
+function dateInputValue(value?: string): string {
+  return value ? value.slice(0, 10) : '';
+}
+
+function evidenceReferenceText(values?: ExternalEvidenceReference[]): string {
+  return (values ?? []).map((value) => value.reference + ' | ' + value.sha256Checksum).join('\n');
+}
+
+function normaliseScope(value?: string): ReviewScope {
+  return value === 'SOURCE' || value === 'CAMPAIGN' ? value : 'ORGANISATION';
+}
+
 function buildCreatePayload(data: FormData, scope: ReviewScope) {
   const evidenceAssetIds = lines(data.get('evidenceAssetIds'));
   const externalEvidence = evidenceReferences(data.get('externalEvidenceReferences'));
@@ -140,6 +152,7 @@ export function ConsentReviewManager() {
   const canReview = hasPermission(session?.permissions, 'consent.review');
   const [items, setItems] = useState<ConsentReview[]>([]);
   const [selected, setSelected] = useState<ConsentReview | null>(null);
+  const [revisionSource, setRevisionSource] = useState<ConsentReview | null>(null);
   const [scope, setScope] = useState<ReviewScope>('ORGANISATION');
   const [message, setMessage] = useState('');
   const [state, setState] = useState<'loading' | 'idle' | 'saving' | 'error'>('loading');
@@ -192,6 +205,7 @@ export function ConsentReviewManager() {
     try {
       const value = await apiRequest<ConsentReview>('/v1/consent-reviews/' + encodeURIComponent(item.id));
       setSelected(value);
+      setRevisionSource(null);
       setDecision('APPROVED');
       setApprovedWithRestrictions(false);
       setExpiresAt('');
@@ -218,20 +232,33 @@ export function ConsentReviewManager() {
       setMessage('Enter the campaign ID for a campaign-scoped review.');
       return;
     }
+    const revisionReason = String(data.get('revisionReason') ?? '').trim();
+    if (revisionSource && revisionReason.length < 8) {
+      setMessage('Enter a meaningful revision reason (at least 8 characters).');
+      return;
+    }
     setState('saving');
     setMessage('');
     try {
-      const created = await apiRequest<ConsentReview>('/v1/consent-reviews', {
-        method: 'POST',
-        body: JSON.stringify(payload)
-      });
+      const created = revisionSource
+        ? await apiRequest<ConsentReview>('/v1/consent-reviews/' + encodeURIComponent(revisionSource.id) + '/revisions', {
+            method: 'POST',
+            body: JSON.stringify({ expectedVersion: revisionSource.version, reason: revisionReason, review: payload })
+          })
+        : await apiRequest<ConsentReview>('/v1/consent-reviews', {
+            method: 'POST',
+            body: JSON.stringify(payload)
+          });
       form.reset();
       setScope('ORGANISATION');
+      setRevisionSource(null);
       setSelected(created);
-      setMessage('Draft consent review created. The maker must submit it before an independent checker can decide it.');
+      setMessage(revisionSource
+        ? 'Corrected draft created. The previous draft is preserved as superseded evidence.'
+        : 'Draft consent review created. The maker must submit it before an independent checker can decide it.');
       await load();
     } catch (error) {
-      setMessage(errorMessage(error, 'Consent review could not be created'));
+      setMessage(errorMessage(error, revisionSource ? 'Consent review revision could not be created' : 'Consent review could not be created'));
       setState('error');
     } finally {
       setState('idle');
@@ -395,44 +422,54 @@ export function ConsentReviewManager() {
       </section>
 
       <section className="grid grid-2">
-        <form className="card form-stack" onSubmit={create}>
-          <h2>Record consent assessment</h2>
-          <p className="muted">Capture the purpose, collection provenance, exact wording and evidence reviewed during client vetting.</p>
-          <label>Organisation ID<input name="organisationId" required /></label>
-          <label>Review name<input name="name" required maxLength={250} placeholder="e.g. Festival registration consent – August 2026" /></label>
+        <form
+          key={revisionSource ? 'revision:' + revisionSource.id + ':' + revisionSource.version : 'new-review'}
+          className="card form-stack"
+          onSubmit={create}
+        >
+          <h2>{revisionSource ? 'Revise consent assessment' : 'Record consent assessment'}</h2>
+          <p className="muted">{revisionSource
+            ? 'Create a corrected draft while preserving the selected draft as superseded audit evidence.'
+            : 'Capture the purpose, collection provenance, exact wording and evidence reviewed during client vetting.'}</p>
+          <label>Organisation ID<input name="organisationId" required readOnly={Boolean(revisionSource)} defaultValue={revisionSource?.organisationId ?? ''} /></label>
+          <label>Review name<input name="name" required maxLength={250} placeholder="e.g. Festival registration consent – August 2026" defaultValue={revisionSource?.name ?? ''} /></label>
           <label>Review scope<select name="scope" value={scope} onChange={(event) => setScope(event.target.value as ReviewScope)}>{scopes.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
-          {scope === 'SOURCE' ? <label>Source system<input name="sourceSystem" required placeholder="CRM export, website form, partner database" /></label> : null}
-          {scope === 'CAMPAIGN' ? <label>Campaign ID<input name="campaignId" required /></label> : null}
-          <label>Permitted purpose description<textarea name="purposeDescription" rows={3} required /></label>
-          <label>Purpose code<input name="purposeCode" required placeholder="PROMOTIONAL_MESSAGING" /></label>
-          <label>Consent collection source<input name="consentSource" required placeholder="Website registration form or source system" /></label>
-          <label>Collection method<input name="collectionMethod" required placeholder="Explicit checkbox, double opt-in, assisted capture" /></label>
+          {scope === 'SOURCE' ? <label>Source system<input name="sourceSystem" required placeholder="CRM export, website form, partner database" defaultValue={revisionSource?.sourceSystem ?? ''} /></label> : null}
+          {scope === 'CAMPAIGN' ? <label>Campaign ID<input name="campaignId" required defaultValue={revisionSource?.campaignId ?? ''} /></label> : null}
+          <label>Permitted purpose description<textarea name="purposeDescription" rows={3} required defaultValue={revisionSource?.purposeDescription ?? ''} /></label>
+          <label>Purpose code<input name="purposeCode" required placeholder="PROMOTIONAL_MESSAGING" defaultValue={revisionSource?.purposeCode ?? ''} /></label>
+          <label>Consent collection source<input name="consentSource" required placeholder="Website registration form or source system" defaultValue={revisionSource?.consentSource ?? ''} /></label>
+          <label>Collection method<input name="collectionMethod" required placeholder="Explicit checkbox, double opt-in, assisted capture" defaultValue={revisionSource?.collectionMethod ?? ''} /></label>
           <div className="grid grid-2">
-            <label>Collection period from<input name="collectionPeriodFrom" type="date" /></label>
-            <label>Collection period to<input name="collectionPeriodTo" type="date" /></label>
+            <label>Collection period from<input name="collectionPeriodFrom" type="date" defaultValue={dateInputValue(revisionSource?.collectionPeriodFrom)} /></label>
+            <label>Collection period to<input name="collectionPeriodTo" type="date" defaultValue={dateInputValue(revisionSource?.collectionPeriodTo)} /></label>
           </div>
-          <label>Controller role<input name="controllerRole" required placeholder="Data controller, joint controller or processor" /></label>
-          <label>Consent wording version<input name="wordingVersion" required /></label>
-          <label>Exact consent wording<textarea name="exactConsentWording" rows={3} required /></label>
-          <label>Privacy notice version<input name="privacyNoticeVersion" required /></label>
-          <label>Trusted evidence asset IDs<small>One clean trusted-asset ID per line.</small><textarea name="evidenceAssetIds" rows={3} placeholder="UUID per line" /></label>
-          <label>External evidence references<small>One reference and lowercase SHA-256 checksum per line, separated by a tab or |.</small><textarea name="externalEvidenceReferences" rows={3} placeholder="case-2026-08-14 | 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" /></label>
+          <label>Controller role<input name="controllerRole" required placeholder="Data controller, joint controller or processor" defaultValue={revisionSource?.controllerRole ?? ''} /></label>
+          <label>Consent wording version<input name="wordingVersion" required defaultValue={revisionSource?.wordingVersion ?? ''} /></label>
+          <label>Exact consent wording<textarea name="exactConsentWording" rows={3} required defaultValue={revisionSource?.exactConsentWording ?? ''} /></label>
+          <label>Privacy notice version<input name="privacyNoticeVersion" required defaultValue={revisionSource?.privacyNoticeVersion ?? ''} /></label>
+          <label>Trusted evidence asset IDs<small>One clean trusted-asset ID per line.</small><textarea name="evidenceAssetIds" rows={3} placeholder="UUID per line" defaultValue={(revisionSource?.evidenceAssetIds ?? []).join('\n')} /></label>
+          <label>External evidence references<small>One reference and lowercase SHA-256 checksum per line, separated by a tab or |.</small><textarea name="externalEvidenceReferences" rows={3} placeholder="case-2026-08-14 | 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" defaultValue={evidenceReferenceText(revisionSource?.externalEvidenceReferences)} /></label>
           <fieldset>
             <legend>Permitted countries</legend>
             {countries.map(([code, label]) => (
-              <label className="check" key={code}><input type="checkbox" name="permittedCountries" value={code} /> {label}</label>
+              <label className="check" key={code}><input type="checkbox" name="permittedCountries" value={code} defaultChecked={revisionSource?.permittedCountries?.includes(code) ?? false} /> {label}</label>
             ))}
           </fieldset>
-          <label>Permitted message category<input name="permittedMessageCategory" required placeholder="Event promotions" /></label>
+          <label>Permitted message category<input name="permittedMessageCategory" required placeholder="Event promotions" defaultValue={revisionSource?.permittedMessageCategory ?? ''} /></label>
           <fieldset>
             <legend>Mandatory review checks</legend>
-            <label className="check"><input type="checkbox" name="privacyNoticeReviewed" /> Privacy notice reviewed</label>
-            <label className="check"><input type="checkbox" name="optOutProcessReviewed" /> Opt-out process reviewed</label>
-            <label className="check"><input type="checkbox" name="sampleRecordsReviewed" /> Sample consent records reviewed</label>
+            <label className="check"><input type="checkbox" name="privacyNoticeReviewed" defaultChecked={revisionSource?.privacyNoticeReviewed ?? false} /> Privacy notice reviewed</label>
+            <label className="check"><input type="checkbox" name="optOutProcessReviewed" defaultChecked={revisionSource?.optOutProcessReviewed ?? false} /> Opt-out process reviewed</label>
+            <label className="check"><input type="checkbox" name="sampleRecordsReviewed" defaultChecked={revisionSource?.sampleRecordsReviewed ?? false} /> Sample consent records reviewed</label>
           </fieldset>
-          <label>Sample review notes<textarea name="sampleReviewNotes" rows={3} maxLength={2000} placeholder="Record what was checked without entering contact PII." /></label>
-          <label>Restrictions<textarea name="restrictions" rows={3} placeholder="Required for an approved-with-restrictions decision." /></label>
-          <button className="primary" disabled={state === 'saving' || !canWrite}>{state === 'saving' ? 'Saving…' : 'Create draft review'}</button>
+          <label>Sample review notes<textarea name="sampleReviewNotes" rows={3} maxLength={2000} placeholder="Record what was checked without entering contact PII." defaultValue={revisionSource?.sampleReviewNotes ?? ''} /></label>
+          <label>Restrictions<textarea name="restrictions" rows={3} placeholder="Required for an approved-with-restrictions decision." defaultValue={revisionSource?.restrictions ?? ''} /></label>
+          {revisionSource ? <label>Revision reason<textarea name="revisionReason" rows={2} minLength={8} required placeholder="Explain what evidence or wording is being corrected." /></label> : null}
+          <div className="button-row">
+            <button className="primary" disabled={state === 'saving' || !canWrite}>{state === 'saving' ? 'Saving…' : revisionSource ? 'Create corrected draft' : 'Create draft review'}</button>
+            {revisionSource ? <button type="button" className="secondary" disabled={state === 'saving'} onClick={() => { setRevisionSource(null); setScope('ORGANISATION'); setMessage('Draft revision cancelled.'); }}>Cancel revision</button> : null}
+          </div>
         </form>
 
         <article className="card form-stack">
@@ -457,7 +494,20 @@ export function ConsentReviewManager() {
 
               {selected.status === 'DRAFT' ? (
                 <fieldset>
-                  <legend>Maker submission</legend>
+                  <legend>Maker draft actions</legend>
+                  <p className="muted">Corrections create a new draft revision and preserve this draft as superseded evidence; the portal never overwrites consent evidence in place.</p>
+                  <button
+                    type="button"
+                    className="secondary"
+                    disabled={!canWrite || state === 'saving'}
+                    onClick={() => {
+                      setRevisionSource(selected);
+                      setScope(normaliseScope(selected.scope));
+                      setMessage('Draft loaded into the revision form. Saving will preserve this version as superseded evidence.');
+                    }}
+                  >
+                    Revise draft evidence
+                  </button>
                   <label>Submission reason<textarea rows={2} value={submitReason} onChange={(event) => setSubmitReason(event.target.value)} disabled={!canWrite} /></label>
                   <button type="button" className="primary" disabled={!canWrite || state === 'saving' || submitReason.trim().length < 5} onClick={() => void submitReview()}>Submit for checker review</button>
                 </fieldset>

@@ -82,7 +82,11 @@ func TestLifecycleCreateAndStartNeverMarksReady(t *testing.T) {
 	if s.Status != StatusPairing {
 		t.Fatalf("got %s", s.Status)
 	}
-	if _, err := svc.PairingCode(ctx, s.ID, "2348012345678"); err != nil {
+	if _, err := svc.PairingCode(ctx, s.ID, "2348012345678", s.Version, "actor", "request governed pairing code"); err != nil {
+		t.Fatal(err)
+	}
+	s, err = svc.Governance.Store.GetSession(ctx, s.ID)
+	if err != nil {
 		t.Fatal(err)
 	}
 	s, _, err = svc.Start(ctx, s.ID, s.Version, "actor", "start paired session")
@@ -155,5 +159,49 @@ func TestLifecycleStartResolvesGovernedTransportRuntimeAtStartBoundary(t *testin
 	}
 	if gateway.runtime == nil || gateway.runtime.ConfigurationID != "config-1" || gateway.runtime.ReconnectMaxAttempts != 5 {
 		t.Fatalf("governed runtime was not propagated: %+v", gateway.runtime)
+	}
+}
+
+func TestPairingCodeRequiresCurrentGovernanceVersionBeforeGatewaySideEffect(t *testing.T) {
+	svc, session := lifecycleFixture(t)
+	ctx := context.Background()
+	var err error
+	session, _, err = svc.Create(ctx, session.ID, session.Version, "actor", "create gateway session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	gateway := &fakeSessionGateway{}
+	svc.Gateway = gateway
+	if _, err := svc.PairingCode(ctx, session.ID, "2348012345678", session.Version-1, "operator", "request pairing code for approved setup"); !errors.Is(err, ErrSenderConflict) {
+		t.Fatalf("expected version conflict, got %v", err)
+	}
+	if len(gateway.calls) != 0 {
+		t.Fatalf("gateway called for stale pairing request: %v", gateway.calls)
+	}
+}
+
+func TestPairingCodeReservesGovernanceVersionBeforeProviderCall(t *testing.T) {
+	svc, session := lifecycleFixture(t)
+	ctx := context.Background()
+	var err error
+	session, _, err = svc.Create(ctx, session.ID, session.Version, "actor", "create gateway session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := session.Version
+	gateway := &fakeSessionGateway{fail: "pair"}
+	svc.Gateway = gateway
+	if _, err := svc.PairingCode(ctx, session.ID, "2348012345678", before, "operator", "request pairing code for approved setup"); err == nil {
+		t.Fatal("expected provider failure")
+	}
+	current, err := svc.Governance.Store.GetSession(ctx, session.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Status != session.Status || current.Version != before+1 {
+		t.Fatalf("pairing request was not serialized as governance evidence: before=%+v after=%+v", session, current)
+	}
+	if len(gateway.calls) != 1 || gateway.calls[0] != "pair" {
+		t.Fatalf("unexpected gateway calls: %v", gateway.calls)
 	}
 }

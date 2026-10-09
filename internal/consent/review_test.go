@@ -191,3 +191,44 @@ func TestExternalEvidenceRequiresChecksumAndSampleNotesRejectPII(t *testing.T) {
 		t.Fatal("expected sample email address rejection")
 	}
 }
+
+func TestServiceCreatesAuditableRevisionFromDraftWithoutMutatingInPlace(t *testing.T) {
+	now := time.Date(2026, 10, 9, 18, 0, 0, 0, time.UTC)
+	repo := NewMemoryRepository()
+	service := NewService(repo)
+	service.clock = func() time.Time { return now }
+	service.Evidence = reviewEvidenceResolver{}
+
+	draft, err := service.Create(context.Background(), completeReviewInput("maker"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	revisionInput := completeReviewInput("revision-maker")
+	revisionInput.Name = "Corrected festival consent"
+	revisionInput.WordingVersion = "wording-v4"
+	revisionInput.RevisionReason = "Correct incomplete draft evidence"
+
+	replacement, err := service.CreateRevision(context.Background(), draft.ID, draft.Version, revisionInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacement.ID == draft.ID || replacement.Status != StatusDraft || replacement.ParentReviewID != draft.ID {
+		t.Fatalf("unexpected draft revision: original=%+v replacement=%+v", draft, replacement)
+	}
+	if replacement.OrganisationID != draft.OrganisationID || replacement.WordingVersion != "wording-v4" {
+		t.Fatalf("draft revision lost governed identity/content: %+v", replacement)
+	}
+
+	previous, err := service.Get(context.Background(), draft.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if previous.Status != StatusSuperseded || previous.SupersededByID != replacement.ID || previous.Version != draft.Version+1 {
+		t.Fatalf("original draft was not superseded atomically: %+v", previous)
+	}
+	if _, err := service.Submit(context.Background(), previous.ID, SubmitInput{
+		ActorID: "maker", ExpectedVersion: previous.Version, Reason: "should not submit superseded draft",
+	}); err == nil {
+		t.Fatal("superseded draft unexpectedly remained submit-able")
+	}
+}

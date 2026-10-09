@@ -320,6 +320,21 @@ func (m *MemoryGovernanceStore) TransitionSession(_ context.Context, id string, 
 	m.sessions[id] = cur
 	return cur, nil
 }
+
+func (m *MemoryGovernanceStore) RecordSessionAction(_ context.Context, id string, expected int64, _, _, _ string) (GovernedSession, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	current, ok := m.sessions[id]
+	if !ok {
+		return GovernedSession{}, ErrSenderNotFound
+	}
+	if current.Version != expected {
+		return GovernedSession{}, ErrSenderConflict
+	}
+	current.Version++
+	m.sessions[id] = current
+	return current, nil
+}
 func (m *MemoryGovernanceStore) HeartbeatSession(_ context.Context, id string, e int64, v GovernedSession, now time.Time) (GovernedSession, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

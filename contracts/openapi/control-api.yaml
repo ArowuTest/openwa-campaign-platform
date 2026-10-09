@@ -2915,11 +2915,15 @@ paths:
             schema:
               type: object
               additionalProperties: false
-              required: [phoneNumber]
-              properties: { phoneNumber: { type: string, pattern: '^\\+?[0-9]{8,15}$' } }
+              required: [expectedVersion, reason, phoneNumber]
+              properties:
+                expectedVersion: { type: integer, format: int64, minimum: 1 }
+                reason: { type: string, minLength: 8, maxLength: 2000 }
+                phoneNumber: { type: string, pattern: '^\\+?[0-9]{8,15}$' }
       responses:
-        '200': { description: Pairing code material }
+        '200': { description: Pairing code material; governance version reserved before provider delegation }
         '403': { description: Technical-administrator permission or recent MFA step-up required }
+        '409': { description: Sender session changed concurrently; reload before retrying }
   /sender-sessions/{id}/start:
     post:
       operationId: startGatewaySenderSession

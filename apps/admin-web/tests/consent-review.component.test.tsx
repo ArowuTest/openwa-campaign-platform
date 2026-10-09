@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { ConsentReviewManager } from '../app/consent-reviews/review-manager';
 
 const auth = vi.hoisted(() => ({ session: { id: 'maker', sessionId: 'session-a', permissions: ['consent.read', 'consent.write', 'consent.review'] } }));
@@ -58,4 +58,74 @@ test('creates aligned draft and submits with current version', async () => {
   await screen.findByText('Review submitted. An independent checker must make the decision.');
   const submitBody = JSON.parse(String(calls.find((call) => call.path.endsWith('/submit'))?.init.body));
   expect(submitBody).toMatchObject({ expectedVersion: 1, reason: 'Evidence checked' });
+});
+
+
+test('revises an incomplete draft by creating a superseding governed draft', async () => {
+  let current = review();
+  const calls: Array<{ path: string; init: RequestInit }> = [];
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const path = String(input).replace('/api', '');
+    calls.push({ path, init });
+    if (path.startsWith('/v1/consent-reviews?')) {
+      return new Response(JSON.stringify({ items: [current], count: 1, hasMore: false }), {
+        status: 200, headers: { 'content-type': 'application/json' }
+      });
+    }
+    if (path === '/v1/consent-reviews/review-1' && (!init.method || init.method === 'GET')) {
+      return new Response(JSON.stringify(current), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    if (path === '/v1/consent-reviews/review-1/revisions' && init.method === 'POST') {
+      const body = JSON.parse(String(init.body));
+      current = review({
+        ...body.review,
+        id: 'review-2',
+        parentReviewId: 'review-1',
+        organisationId: 'org-1',
+        status: 'DRAFT',
+        outcome: 'PENDING',
+        version: 1,
+        createdAt: '2026-10-09T18:00:00.000Z',
+        updatedAt: '2026-10-09T18:00:00.000Z'
+      });
+      return new Response(JSON.stringify(current), { status: 201, headers: { 'content-type': 'application/json' } });
+    }
+    throw new Error('Unexpected request: ' + path + ' ' + String(init.method));
+  });
+
+  render(<ConsentReviewManager />);
+  await screen.findByRole('heading', { name: 'Record consent assessment' });
+  fireEvent.click(await screen.findByRole('button', { name: 'Festival consent' }));
+  await screen.findByRole('button', { name: 'Revise draft evidence' });
+  fireEvent.click(screen.getByRole('button', { name: 'Revise draft evidence' }));
+
+  const revisionHeading = await screen.findByRole('heading', { name: 'Revise consent assessment' });
+  const form = revisionHeading.closest('form');
+  expect(form).not.toBeNull();
+  const revisionForm = within(form as HTMLFormElement);
+  expect((revisionForm.getByLabelText('Organisation ID') as HTMLInputElement).value).toBe('org-1');
+  expect((revisionForm.getByLabelText('Consent wording version') as HTMLInputElement).value).toBe('wording-v3');
+  expect((revisionForm.getByLabelText('Privacy notice reviewed') as HTMLInputElement).checked).toBe(true);
+  expect((revisionForm.getByLabelText('Nigeria') as HTMLInputElement).checked).toBe(true);
+
+  fireEvent.change(revisionForm.getByLabelText('Review name'), { target: { value: 'Festival consent corrected' } });
+  fireEvent.change(revisionForm.getByLabelText('Consent wording version'), { target: { value: 'wording-v4' } });
+  fireEvent.change(revisionForm.getByLabelText('Revision reason'), { target: { value: 'Correct incomplete draft evidence' } });
+  fireEvent.click(revisionForm.getByRole('button', { name: 'Create corrected draft' }));
+
+  await screen.findByText('Corrected draft created. The previous draft is preserved as superseded evidence.');
+  const revisionCall = calls.find((call) => call.path === '/v1/consent-reviews/review-1/revisions');
+  expect(revisionCall).toBeTruthy();
+  expect(JSON.parse(String(revisionCall?.init.body))).toMatchObject({
+    expectedVersion: 1,
+    reason: 'Correct incomplete draft evidence',
+    review: {
+      organisationId: 'org-1',
+      scope: 'SOURCE',
+      name: 'Festival consent corrected',
+      wordingVersion: 'wording-v4',
+      evidenceAssetIds: ['asset-1'],
+      permittedCountries: ['NG']
+    }
+  });
 });

@@ -200,7 +200,7 @@ func (r *ConsentRepository) CreateRevision(ctx context.Context, previous, replac
 UPDATE consent_reviews SET
   status='SUPERSEDED',superseded_by_id=$3::uuid,version=$4,updated_at=$5,
   decision_reason=$6
-WHERE id=$1::uuid AND version=$2 AND status='APPROVED'`,
+WHERE id=$1::uuid AND version=$2 AND status IN ('APPROVED','DRAFT')`,
 		previous.ID, expected, replacement.ID, previous.Version, previous.UpdatedAt,
 		previous.LastTransitionReason,
 	)

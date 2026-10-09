@@ -538,7 +538,7 @@ func (s *Server) getGatewaySenderSessionPairingCode(w http.ResponseWriter, r *ht
 	if !ok {
 		return
 	}
-	result, err := lifecycle.PairingCode(r.Context(), r.PathValue("id"), input.PhoneNumber)
+	result, err := lifecycle.PairingCode(r.Context(), r.PathValue("id"), input.PhoneNumber, input.ExpectedVersion, senderLifecycleActor(r), input.Reason)
 	if err != nil {
 		s.writeSenderError(w, r, err)
 		return

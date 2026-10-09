@@ -122,6 +122,10 @@ type GovernanceStore interface {
 	Capacity(context.Context, string, time.Time) (CapacitySummary, error)
 }
 
+type sessionGovernanceActionRecorder interface {
+	RecordSessionAction(context.Context, string, int64, string, string, string) (GovernedSession, error)
+}
+
 func normaliseSessionOperationalMetadata(value SessionOperationalMetadata) (SessionOperationalMetadata, error) {
 	value.OwnerReference = strings.TrimSpace(value.OwnerReference)
 	value.RegistrationCountryISO2 = strings.ToUpper(strings.TrimSpace(value.RegistrationCountryISO2))
@@ -335,6 +339,26 @@ func (s *GovernanceService) TransitionSession(ctx context.Context, id string, ex
 		return GovernedSession{}, fmt.Errorf("sender transition %s -> %s is not permitted", current.Status, status)
 	}
 	return s.Store.TransitionSession(ctx, id, expected, status, actor, reason)
+}
+
+func (s *GovernanceService) RecordSessionAction(ctx context.Context, id string, expected int64, action, actor, reason string) (GovernedSession, error) {
+	id = strings.TrimSpace(id)
+	action = strings.ToUpper(strings.TrimSpace(action))
+	actor = strings.TrimSpace(actor)
+	reason = strings.TrimSpace(reason)
+	if id == "" || expected <= 0 || actor == "" || len(reason) < 8 {
+		return GovernedSession{}, errors.New("id, expected version, actor and a meaningful reason are required")
+	}
+	switch action {
+	case "PAIRING_CODE_REQUESTED":
+	default:
+		return GovernedSession{}, fmt.Errorf("unsupported sender governance action %q", action)
+	}
+	recorder, ok := s.Store.(sessionGovernanceActionRecorder)
+	if !ok {
+		return GovernedSession{}, errors.New("sender governance action recording is unavailable")
+	}
+	return recorder.RecordSessionAction(ctx, id, expected, action, actor, reason)
 }
 
 // AllowedSessionTransition is the canonical sender-session state machine. Both

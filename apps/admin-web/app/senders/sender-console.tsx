@@ -58,7 +58,34 @@ type SenderSession = {
 type SenderGatewayResult = {
   sessionId: string;
   status?: string;
+  payload?: Record<string, unknown>;
 };
+
+type TransientPairingMaterial = {
+  kind: 'qr' | 'code';
+  sessionId: string;
+  value: string;
+  expiresAt: number;
+};
+
+const pairingDisplayDurationMs = 60_000;
+const maximumPairingQrLength = 512 * 1024;
+
+function pairingMaterial(result: SenderGatewayResult, kind: 'qr' | 'code'): string | undefined {
+  const payload = result.payload;
+  if (!payload) return undefined;
+  const candidate = kind === 'qr'
+    ? payload.qr ?? payload.qrCode
+    : payload.pairingCode ?? payload.code;
+  if (typeof candidate !== 'string') return undefined;
+  const value = candidate.trim();
+  if (kind === 'qr') {
+    if (!value.startsWith('data:image/png;base64,') || value.length > maximumPairingQrLength) return undefined;
+    return value;
+  }
+  if (value.length < 4 || value.length > 64 || !/^[A-Za-z0-9-]+$/.test(value)) return undefined;
+  return value;
+}
 
 type SenderHealth = SenderGatewayResult;
 
@@ -109,7 +136,7 @@ export function SenderConsole() {
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
-  const [transientPairing, setTransientPairing] = useState('');
+  const [transientPairing, setTransientPairing] = useState<TransientPairingMaterial>();
 
   const canOperate = hasPermission(session?.permissions, 'sender.operate');
   const canAdmin = hasPermission(session?.permissions, 'sender.admin');
@@ -148,6 +175,13 @@ export function SenderConsole() {
     return () => { cancelled = true; };
   }, [applyInventory, fetchInventory]);
 
+  useEffect(() => {
+    if (!transientPairing) return;
+    const remaining = Math.max(0, transientPairing.expiresAt - Date.now());
+    const timer = window.setTimeout(() => setTransientPairing(undefined), remaining);
+    return () => window.clearTimeout(timer);
+  }, [transientPairing]);
+
   const selectedPool = useMemo(() => pools.find((item) => item.id === selectedPoolId), [pools, selectedPoolId]);
   const selected = useMemo(() => sessions.find((item) => item.id === selectedSessionId), [selectedSessionId, sessions]);
 
@@ -164,6 +198,11 @@ export function SenderConsole() {
         router.push('/step-up?returnTo=' + encodeURIComponent('/senders'));
       } else {
         setMessage(cause instanceof Error ? cause.message : label + ' failed.');
+        try {
+          await load();
+        } catch {
+          // Preserve the original mutation failure; inventory recovery is best effort.
+        }
       }
     } finally {
       setBusy('');
@@ -295,8 +334,15 @@ export function SenderConsole() {
     }
     if (kind === 'qr') {
       await mutate('Request pairing QR', async () => {
-        await apiRequest<SenderGatewayResult>('/v1/sender-sessions/' + selected.id + '/pairing/qr');
-        setTransientPairing('QR pairing response received. It is available only for this interaction and is never stored by the console.');
+        const result = await apiRequest<SenderGatewayResult>('/v1/sender-sessions/' + selected.id + '/pairing/qr');
+        const value = pairingMaterial(result, 'qr');
+        if (!value) throw new Error('The gateway did not return supported QR pairing material.');
+        setTransientPairing({
+          kind: 'qr',
+          sessionId: selected.id,
+          value,
+          expiresAt: Date.now() + pairingDisplayDurationMs
+        });
       });
       return;
     }
@@ -310,11 +356,18 @@ export function SenderConsole() {
       return;
     }
     await mutate('Request pairing code', async () => {
-      await apiRequest<SenderGatewayResult>('/v1/sender-sessions/' + selected.id + '/pairing/code', {
+      const result = await apiRequest<SenderGatewayResult>('/v1/sender-sessions/' + selected.id + '/pairing/code', {
         method: 'POST',
         body: JSON.stringify({ expectedVersion: selected.version, phoneNumber, reason: pairingReason })
       });
-      setTransientPairing('Pairing code response received. It is available only for this interaction and is never stored by the console.');
+      const value = pairingMaterial(result, 'code');
+      if (!value) throw new Error('The gateway did not return a supported pairing code.');
+      setTransientPairing({
+        kind: 'code',
+        sessionId: selected.id,
+        value,
+        expiresAt: Date.now() + pairingDisplayDurationMs
+      });
       pairingForm?.reset();
     });
   }
@@ -356,7 +409,20 @@ export function SenderConsole() {
   return (
     <div className="workspace-stack">
       {message ? <div className={isFailureMessage(message) ? 'alert alert-danger' : 'alert alert-information'} role="status">{message}</div> : null}
-      {transientPairing ? <div className="alert alert-warning" role="status">{transientPairing}<button className="text-button" type="button" onClick={() => setTransientPairing('')}>Dismiss</button></div> : null}
+      {transientPairing ? (
+        <div className="alert alert-warning form-stack" role="status">
+          <div className="section-heading">
+            <div>
+              <strong>{transientPairing.kind === 'qr' ? 'Temporary pairing QR' : 'Temporary pairing code'}</strong>
+              <small>Session {transientPairing.sessionId} · clears automatically after 60 seconds and is not persisted by this console.</small>
+            </div>
+            <button className="text-button" type="button" onClick={() => setTransientPairing(undefined)}>Dismiss now</button>
+          </div>
+          {transientPairing.kind === 'qr'
+            ? <img src={transientPairing.value} alt="Temporary WhatsApp pairing QR code" style={{ maxWidth: 280, width: '100%', height: 'auto' }} />
+            : <code className="mono-small" aria-label="Temporary pairing code">{transientPairing.value}</code>}
+        </div>
+      ) : null}
 
       <section className="grid grid-4" aria-label="Sender inventory summary">
         <article className="card metric"><span className="muted">Active pools</span><strong>{pools.filter((item) => item.status === 'ACTIVE').length}</strong></article>
@@ -372,7 +438,7 @@ export function SenderConsole() {
             <table>
               <thead><tr><th>Sender</th><th>Engine</th><th>Status</th><th>Pool / node</th><th>Capacity</th><th>Heartbeat</th></tr></thead>
               <tbody>{sessions.map((item) => (
-                <tr key={item.id} className={selectedSessionId === item.id ? 'selected-row' : undefined} onClick={() => { setSelectedSessionId(item.id); setHealth(undefined); setTransientPairing(''); }}>
+                <tr key={item.id} className={selectedSessionId === item.id ? 'selected-row' : undefined} onClick={() => { setSelectedSessionId(item.id); setHealth(undefined); setTransientPairing(undefined); }}>
                   <td><strong>{item.profileDisplayName || item.ownerReference}</strong><small>{item.maskedMsisdn}</small></td>
                   <td>{item.engineType}<small>{item.engineVersion || 'Version unavailable'}</small></td>
                   <td><StatusBadge status={item.status} />{item.quarantineReason ? <small>{item.quarantineReason}</small> : null}</td>
@@ -402,7 +468,7 @@ export function SenderConsole() {
             <button className="secondary compact-button" type="button" disabled={!canAdmin || !selected || Boolean(busy)} onClick={() => void requestPairing('qr')}>Request QR</button>
           </div>
           {health ? <div className="alert alert-information"><strong>Health: {health.status || 'reported'}</strong><small>Session {health.sessionId}</small></div> : null}
-          <small>Pairing credentials and QR payloads are never rendered, logged, or persisted by this console.</small>
+          <small>Pairing material is rendered only in the temporary operator panel, never written to inventory or browser storage, and auto-clears after 60 seconds.</small>
         </article>
 
         <article className="card">

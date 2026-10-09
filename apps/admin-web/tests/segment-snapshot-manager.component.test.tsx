@@ -130,7 +130,7 @@ test('an old polling response cannot expose its snapshot in a different campaign
   render(<SegmentSnapshotManager {...props} />);
   await screen.findByRole('button', { name: 'Cancel materialisation' });
   await act(async () => { tick(); });
-  expect(calls.some((call) => call.path === '/v1/audience-materialisations/job-a')).toBe(true);
+  await waitFor(() => expect(calls.some((call) => call.path === '/v1/audience-materialisations/job-a')).toBe(true));
   fireEvent.change(screen.getByLabelText('Audience-building campaign'), { target: { value: 'campaign-b' } });
   await screen.findByText('No materialisation jobs');
   await settle(progress, job('job-a', 'campaign-a', 'COMPLETED'));

@@ -253,3 +253,137 @@ test('UUID direct link rejects a genuinely different response identity', async (
  await screen.findByRole('alert');
  expect(screen.queryByRole('heading',{name:'Different private campaign'})).toBeNull();
 });
+
+
+test('controlled test uses only approved recipients and exact-route READY session options', async () => {
+  auth.session = {
+    id: 'operator',
+    sessionId: 'session-a',
+    permissions: ['campaign.read', 'campaign.write']
+  };
+  const campaign = {
+    ...detail('campaign-a'),
+    status: 'MESSAGE_APPROVED',
+    messageVersionId: 'message-v1',
+    messageContentHash: 'content-hash',
+    transport: {
+      channel: 'WHATSAPP',
+      provider: 'OPENWA',
+      engine: 'BAILEYS',
+      routingMode: 'SENDER_POOL',
+      gatewayPoolId: 'gateway-a',
+      senderPoolId: 'pool-a',
+      adapterVersion: '1.2.3',
+      requiredCapabilities: ['SEND_TEXT'],
+      fallbackMode: 'NONE',
+      routingPolicyVersion: 'policy-v1',
+      capacityEvidenceVersion: 'capacity-v1'
+    }
+  };
+  const calls = http((path, init) => {
+    if (path === '/v1/campaigns/campaign-a') return campaign;
+    if (path === '/v1/campaigns/campaign-a/test-message-options') {
+      return {
+        campaignId: 'campaign-a',
+        campaignVersion: 3,
+        messageVersionId: 'message-v1',
+        provider: 'OPENWA',
+        engine: 'BAILEYS',
+        senderPoolId: 'pool-a',
+        gatewayPoolId: 'gateway-a',
+        supported: true,
+        recipients: [
+          { id: 'recipient-active', label: 'Approved QA', maskedMsisdn: '+234 *** 1234', status: 'ACTIVE' }
+        ],
+        sessions: [
+          { id: 'session-ready', profileDisplayName: 'QA sender', maskedMsisdn: '+234 *** 5678', status: 'READY', version: 4 }
+        ],
+        recipientInventoryComplete: true,
+        sessionInventoryComplete: true
+      };
+    }
+    if (path === '/v1/campaigns/campaign-a/test-messages' && init.method === 'POST') {
+      return { id: 'test-send-1', status: 'PENDING' };
+    }
+    return supplemental(path);
+  });
+
+  render(<CampaignWorkspace campaignId="campaign-a" />);
+  await screen.findByRole('heading', { name: 'campaign-a campaign' });
+  const recipient = await screen.findByLabelText('Approved test recipient');
+  const session = await screen.findByLabelText('Compatible READY sender session');
+  expect(recipient.textContent).toContain('Approved QA · +234 *** 1234');
+  expect(session.textContent).toContain('QA sender · +234 *** 5678');
+  expect(screen.queryByText(/recipient-draft|Wrong pool|raw MSISDN/i)).toBeNull();
+
+  fireEvent.change(recipient, { target: { value: 'recipient-active' } });
+  fireEvent.change(session, { target: { value: 'session-ready' } });
+  fireEvent.change(screen.getByLabelText('Reason', { selector: 'textarea[name="reason"]' }), { target: { value: 'Approved exact-route controlled test' } });
+  fireEvent.submit(screen.getByRole('button', { name: 'Send controlled test' }).closest('form')!);
+
+  await waitFor(() => expect(calls.some(call => call.path === '/v1/campaigns/campaign-a/test-messages' && call.init.method === 'POST')).toBe(true));
+  const request = calls.find(call => call.path === '/v1/campaigns/campaign-a/test-messages' && call.init.method === 'POST');
+  const body = JSON.parse(String(request?.init.body));
+  expect(body).toMatchObject({
+    messageVersionId: 'message-v1',
+    testRecipientId: 'recipient-active',
+    gatewayPoolId: 'gateway-a',
+    senderPoolId: 'pool-a',
+    provider: 'OPENWA',
+    engine: 'BAILEYS',
+    senderSessionId: 'session-ready',
+    reason: 'Approved exact-route controlled test'
+  });
+});
+
+test('stale controlled-test options are rejected instead of enabling raw-id fallback', async () => {
+  auth.session = {
+    id: 'operator',
+    sessionId: 'session-a',
+    permissions: ['campaign.read', 'campaign.write']
+  };
+  const campaign = {
+    ...detail('campaign-a'),
+    messageVersionId: 'message-v2',
+    transport: {
+      channel: 'WHATSAPP',
+      provider: 'OPENWA',
+      engine: 'BAILEYS',
+      routingMode: 'SENDER_POOL',
+      gatewayPoolId: 'gateway-a',
+      senderPoolId: 'pool-a',
+      adapterVersion: '1.2.3',
+      requiredCapabilities: ['SEND_TEXT'],
+      fallbackMode: 'NONE',
+      routingPolicyVersion: 'policy-v1',
+      capacityEvidenceVersion: 'capacity-v1'
+    }
+  };
+  http(path => {
+    if (path === '/v1/campaigns/campaign-a') return campaign;
+    if (path === '/v1/campaigns/campaign-a/test-message-options') {
+      return {
+        campaignId: 'campaign-a',
+        campaignVersion: 2,
+        messageVersionId: 'message-v1',
+        provider: 'OPENWA',
+        engine: 'BAILEYS',
+        senderPoolId: 'pool-a',
+        gatewayPoolId: 'gateway-a',
+        supported: true,
+        recipients: [{ id: 'stale-recipient', label: 'Stale', maskedMsisdn: '+234 *** 0000', status: 'ACTIVE' }],
+        sessions: [{ id: 'stale-session', profileDisplayName: 'Stale', maskedMsisdn: '+234 *** 0001', status: 'READY', version: 1 }],
+        recipientInventoryComplete: true,
+        sessionInventoryComplete: true
+      };
+    }
+    return supplemental(path);
+  });
+
+  render(<CampaignWorkspace campaignId="campaign-a" />);
+  await screen.findByRole('heading', { name: 'campaign-a campaign' });
+  expect(await screen.findByText(/controlled-test options changed with the campaign/i)).toBeTruthy();
+  expect((screen.getByRole('button', { name: 'Send controlled test' }) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.queryByDisplayValue('stale-recipient')).toBeNull();
+  expect(screen.queryByDisplayValue('stale-session')).toBeNull();
+});

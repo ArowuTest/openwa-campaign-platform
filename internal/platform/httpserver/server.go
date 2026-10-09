@@ -318,6 +318,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/admin/test-recipients/{id}/decision", s.require("sender.approve", s.decideTestRecipient))
 	mux.Handle("POST /api/v1/admin/test-recipients/{id}/revoke", s.require("sender.approve", s.revokeTestRecipient))
 	mux.Handle("GET /api/v1/campaigns/{id}/test-messages", s.require("campaign.read", s.listTestMessages))
+	mux.Handle("GET /api/v1/campaigns/{id}/test-message-options", s.require("campaign.write", s.getCampaignTestMessageOptions))
 	mux.Handle("POST /api/v1/campaigns/{id}/test-messages", s.require("campaign.write", s.scheduleTestMessage))
 	mux.Handle("GET /api/v1/test-messages/{id}", s.require("campaign.read", s.getTestMessage))
 	mux.Handle("POST /api/v1/campaigns/{id}/audience-snapshots", s.require("audience.write", s.createAudienceSnapshot))

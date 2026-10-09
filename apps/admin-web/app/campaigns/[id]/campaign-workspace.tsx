@@ -70,7 +70,33 @@ type Reservation = {
   reservedDailyUnits: number;
 };
 
+type ControlledTestOptions = {
+  campaignId: string;
+  campaignVersion: number;
+  messageVersionId?: string;
+  provider: string;
+  engine: string;
+  senderPoolId?: string;
+  gatewayPoolId?: string;
+  supported: boolean;
+  reason?: string;
+  recipients: Array<{ id: string; label: string; maskedMsisdn: string; status: string }>;
+  sessions: Array<{ id: string; profileDisplayName: string; maskedMsisdn: string; status: string; version: number }>;
+  recipientInventoryComplete: boolean;
+  sessionInventoryComplete: boolean;
+};
+
 type Metrics = Record<string, number>;
+
+function optionsMatchCampaign(options: ControlledTestOptions, current: Campaign): boolean {
+  return options.campaignId === current.id &&
+    options.campaignVersion === current.version &&
+    (options.messageVersionId ?? '') === (current.messageVersionId ?? '') &&
+    options.provider === current.transport.provider &&
+    options.engine === current.transport.engine &&
+    (options.senderPoolId ?? '') === (current.transport.senderPoolId ?? '') &&
+    (options.gatewayPoolId ?? '') === (current.transport.gatewayPoolId ?? '');
+}
 
 function isStepUp(error: unknown) {
   return error instanceof APIError && error.status === 403 && error.code.includes('STEP_UP');
@@ -98,6 +124,7 @@ function CampaignWorkspaceGeneration({ campaignId }: { campaignId: string }) {
   const [workspace, setWorkspace] = useState<Workspace>();
   const [metrics, setMetrics] = useState<Metrics>();
   const [tests, setTests] = useState<TestSend[]>([]);
+  const [testOptions, setTestOptions] = useState<ControlledTestOptions>();
   const [plan, setPlan] = useState<RoutingPlan>();
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [busy, setBusy] = useState('');
@@ -135,6 +162,19 @@ function CampaignWorkspaceGeneration({ campaignId }: { campaignId: string }) {
     const metricValue = settled[1].status === 'fulfilled' ? settled[1].value : undefined;
     const testValues = settled[2].status === 'fulfilled' ? settled[2].value.items ?? [] : [];
     const latestPlan = settled[3].status === 'fulfilled' ? settled[3].value.items?.[0] : undefined;
+    let controlledTestOptions: ControlledTestOptions | undefined;
+    if (canWrite && current.messageVersionId) {
+      try {
+        const value = await apiRequest<ControlledTestOptions>(base + '/test-message-options', { signal });
+        if (optionsMatchCampaign(value, current)) {
+          controlledTestOptions = value;
+        } else {
+          unavailable.push('controlled-test options changed with the campaign');
+        }
+      } catch {
+        unavailable.push('controlled-test options');
+      }
+    }
     let reservationValues: Reservation[] = [];
     if (latestPlan) {
       try {
@@ -147,10 +187,11 @@ function CampaignWorkspaceGeneration({ campaignId }: { campaignId: string }) {
     setWorkspace(workspaceValue);
     setMetrics(metricValue);
     setTests(testValues);
+    setTestOptions(controlledTestOptions);
     setPlan(latestPlan);
     setReservations(reservationValues);
     setSupplementalState(unavailable.length ? 'Supplemental evidence unavailable: ' + unavailable.join(', ') + '.' : '');
-  }, [campaignId]);
+  }, [campaignId, canWrite]);
 
   const load = useCallback(async () => {
     // Validate ownership before aborting a controller or changing any state.
@@ -162,6 +203,7 @@ function CampaignWorkspaceGeneration({ campaignId }: { campaignId: string }) {
     setWorkspace(undefined);
     setMetrics(undefined);
     setTests([]);
+    setTestOptions(undefined);
     setPlan(undefined);
     setReservations([]);
     setCoreError(undefined);
@@ -303,18 +345,28 @@ function CampaignWorkspaceGeneration({ campaignId }: { campaignId: string }) {
 
   async function sendControlledTest(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!campaign?.messageVersionId) return;
+    if (!campaign?.messageVersionId || !testOptions?.supported || !optionsMatchCampaign(testOptions, campaign)) {
+      setMessage('Reload governed controlled-test options before scheduling a test.');
+      return;
+    }
     const data = new FormData(event.currentTarget);
+    const testRecipientId = String(data.get('testRecipientId') ?? '').trim();
+    const senderSessionId = String(data.get('senderSessionId') ?? '').trim();
+    if (!testOptions.recipients.some((item) => item.id === testRecipientId) ||
+        !testOptions.sessions.some((item) => item.id === senderSessionId)) {
+      setMessage('Select an approved recipient and a READY sender session from the current governed options.');
+      return;
+    }
     await mutate('Schedule controlled test', () => apiRequest('/v1/campaigns/' + campaign.id + '/test-messages', {
       method: 'POST',
       body: JSON.stringify({
         messageVersionId: campaign.messageVersionId,
-        testRecipientId: String(data.get('testRecipientId') ?? '').trim(),
+        testRecipientId,
         gatewayPoolId: campaign.transport.gatewayPoolId,
         senderPoolId: campaign.transport.senderPoolId,
         provider: campaign.transport.provider,
         engine: campaign.transport.engine,
-        senderSessionId: String(data.get('senderSessionId') ?? '').trim(),
+        senderSessionId,
         variableValues: {},
         reason: String(data.get('reason') ?? '').trim(),
         idempotencyKey: crypto.randomUUID()
@@ -401,12 +453,26 @@ function CampaignWorkspaceGeneration({ campaignId }: { campaignId: string }) {
 
         <form className="card form-stack" onSubmit={sendControlledTest}>
           <h2>Controlled test</h2>
-          <p className="muted">The server validates the approved test recipient and a live READY session on the exact campaign route.</p>
-          <label>Approved test-recipient ID<input name="testRecipientId" required /></label>
-          <label>READY sender-session ID<input name="senderSessionId" required /></label>
+          <p className="muted">Choose only from server-filtered approved recipients and READY sessions on this campaign’s exact sender/gateway/engine route. The server revalidates everything again when the test is scheduled and executed.</p>
+          <label>Approved test recipient
+            <select aria-label="Approved test recipient" name="testRecipientId" required disabled={!testOptions?.supported || testOptions.recipients.length === 0 || Boolean(busy)} defaultValue="">
+              <option value="" disabled>Select an approved masked recipient</option>
+              {(testOptions?.recipients ?? []).map((item) => <option key={item.id} value={item.id}>{item.label} · {item.maskedMsisdn}</option>)}
+            </select>
+          </label>
+          <label>Compatible READY sender session
+            <select aria-label="Compatible READY sender session" name="senderSessionId" required disabled={!testOptions?.supported || testOptions.sessions.length === 0 || Boolean(busy)} defaultValue="">
+              <option value="" disabled>Select a READY session on the exact route</option>
+              {(testOptions?.sessions ?? []).map((item) => <option key={item.id} value={item.id}>{item.profileDisplayName || 'Sender'} · {item.maskedMsisdn}</option>)}
+            </select>
+          </label>
           <label>Reason<textarea name="reason" minLength={8} rows={3} required /></label>
-          <button className="primary" type="submit" disabled={!canWrite || !campaign.messageVersionId || Boolean(busy)}>Send controlled test</button>
+          <button className="primary" type="submit" disabled={!canWrite || !campaign.messageVersionId || !testOptions?.supported || testOptions.recipients.length === 0 || testOptions.sessions.length === 0 || Boolean(busy)}>Send controlled test</button>
           {!campaign.messageVersionId ? <small>An approved campaign message version is required first.</small> : null}
+          {testOptions && !testOptions.supported ? <small>{testOptions.reason || 'Controlled testing is unavailable for this campaign route.'}</small> : null}
+          {testOptions?.supported && testOptions.recipients.length === 0 ? <small>No ACTIVE approved test recipient is currently available. Govern one in the sender console before testing.</small> : null}
+          {testOptions?.supported && testOptions.sessions.length === 0 ? <small>No READY sender session currently matches this campaign’s sender pool, gateway pool and engine.</small> : null}
+          {testOptions?.supported && (!testOptions.recipientInventoryComplete || !testOptions.sessionInventoryComplete) ? <small>The selector inventory reached its bounded scan limit. Only the returned governed options are selectable; ask a technical administrator if an expected option is absent.</small> : null}
         </form>
       </section>
 

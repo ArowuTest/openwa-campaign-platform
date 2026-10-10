@@ -493,9 +493,26 @@ paths:
               required: [file]
               properties:
                 file: { type: string, format: binary }
+                rightsBasis:
+                  type: string
+                  enum: [OWNED, LICENSED, CLIENT_SUPPLIED, PUBLIC_DOMAIN]
+                  description: Required only for MESSAGE_MEDIA.
+                rightsReference:
+                  type: string
+                  minLength: 3
+                  maxLength: 500
+                  description: Governed licence, ownership or client-supply evidence reference; required only for MESSAGE_MEDIA.
+                rightsExpiresAt:
+                  type: string
+                  format: date-time
+                  description: Optional rights expiry for MESSAGE_MEDIA; must be in the future when supplied.
       responses:
-        '201': { description: Trusted asset accepted and clean }
-        '422': { description: Asset rejected or malware scan failed }
+        '201':
+          description: Trusted asset accepted and clean
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TrustedAssetMetadata' }
+        '422': { description: Asset rejected, rights evidence invalid or malware scan failed }
   /assets/{id}:
     get:
       operationId: getTrustedAsset
@@ -503,7 +520,11 @@ paths:
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
-        '200': { description: Trusted asset metadata }
+        '200':
+          description: Safe trusted-asset metadata; private object-store keys are never returned
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TrustedAssetMetadata' }
         '404': { $ref: '#/components/responses/NotFound' }
   /assets/{id}/revoke:
     post:
@@ -523,7 +544,11 @@ paths:
                 expectedVersion: { type: integer, format: int64, minimum: 1 }
                 reason: { type: string, minLength: 8 }
       responses:
-        '200': { description: Asset revoked }
+        '200':
+          description: Asset revoked
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TrustedAssetMetadata' }
         '403': { description: Recent MFA step-up required }
         '409': { description: Optimistic version conflict }
   /filter-definitions:
@@ -2392,21 +2417,21 @@ paths:
   /campaigns/{id}/message-versions:
     get:
       operationId: listMessageVersions
-      summary: listMessageVersions
+      summary: List immutable campaign message versions without exposing private media object keys
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500 } }
         - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
         '200':
-          description: Request completed
+          description: Message versions returned
           content:
             application/json:
               schema:
                 type: object
                 required: [items, count, hasMore]
                 properties:
-                  items: { type: array, items: { type: object } }
+                  items: { type: array, items: { $ref: '#/components/schemas/MessageVersionMetadata' } }
                   count: { type: integer, minimum: 0 }
                   nextCursor: { type: string }
                   hasMore: { type: boolean }
@@ -2415,14 +2440,25 @@ paths:
         '403': { description: Permission denied }
     post:
       operationId: createMessageVersion
-      summary: createMessageVersion
+      summary: Create one immutable governed message version
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateMessageVersionRequest' }
       responses:
-        '200': { description: Request completed }
-        '400': { description: Invalid request }
+        '201':
+          description: Immutable message version created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MessageVersionMetadata' }
+        '400': { description: Invalid request or idempotency key }
         '401': { description: Authentication required }
         '403': { description: Permission denied }
+        '409': { description: Duplicate content or idempotency conflict }
+        '422': { description: Message content, links or media evidence invalid }
   /campaigns/{id}/metrics:
     get:
       operationId: getCampaignMetrics
@@ -2565,14 +2601,31 @@ paths:
   /message-versions/{id}/approve:
     post:
       operationId: approveMessageVersion
-      summary: approveMessageVersion
+      summary: Independently approve an immutable message version using its expected content hash
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedContentHash]
+              properties:
+                expectedContentHash: { type: string, pattern: '^[0-9a-f]{64}$' }
       responses:
-        '200': { description: Request completed }
+        '200':
+          description: Message version approved
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MessageVersionMetadata' }
         '400': { description: Invalid request }
         '401': { description: Authentication required }
         '403': { description: Permission denied }
+        '404': { description: Message version not found }
+        '409': { description: Message version content changed before approval }
+        '422': { description: Maker/checker or message status rule rejected approval }
   /admin/test-recipients:
     get:
       operationId: listTestRecipients
@@ -2737,7 +2790,11 @@ paths:
                   additionalProperties: { type: string }
                 maskSensitive: { type: boolean, default: true }
       responses:
-        '200': { description: Preview rendered }
+        '200':
+          description: Masked representative preview rendered
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MessagePreviewResult' }
         '400': { description: Invalid request }
         '401': { description: Authentication required }
         '403': { description: Permission denied }
@@ -4487,6 +4544,108 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
   schemas:
+    MessageVariable:
+      type: object
+      additionalProperties: false
+      required: [name, dataType, fallback]
+      properties:
+        name: { type: string, pattern: '^[A-Za-z][A-Za-z0-9_.-]{0,63}$' }
+        dataType: { type: string, enum: [TEXT, INTEGER, DECIMAL, BOOLEAN, DATE, MSISDN, EMAIL, PERSONAL, SENSITIVE] }
+        fallback: { type: string }
+    MessageLink:
+      type: object
+      additionalProperties: false
+      required: [url]
+      properties:
+        url: { type: string, format: uri, pattern: '^https://' }
+        label: { type: string }
+    MessageMediaMetadata:
+      type: object
+      additionalProperties: false
+      required: [assetId, sha256, mediaType, size, scanStatus]
+      properties:
+        assetId: { type: string, format: uuid }
+        sha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        mediaType: { type: string }
+        size: { type: integer, format: int64, minimum: 1 }
+        scanStatus: { type: string, enum: [CLEAN] }
+    CreateMessageVersionRequest:
+      type: object
+      additionalProperties: false
+      required: [type]
+      properties:
+        type: { type: string, enum: [TEXT, IMAGE_CAPTION, VIDEO, DOCUMENT] }
+        body: { type: string }
+        mediaAssetId: { type: string, format: uuid }
+        links:
+          type: array
+          maxItems: 20
+          items: { $ref: '#/components/schemas/MessageLink' }
+        variables:
+          type: array
+          maxItems: 50
+          items: { $ref: '#/components/schemas/MessageVariable' }
+    MessageVersionMetadata:
+      type: object
+      additionalProperties: false
+      required: [id, campaignId, version, type, links, variables, contentHash, status, createdBy, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        campaignId: { type: string, format: uuid }
+        version: { type: integer, minimum: 1 }
+        type: { type: string, enum: [TEXT, IMAGE_CAPTION, VIDEO, DOCUMENT] }
+        body: { type: string }
+        media: { $ref: '#/components/schemas/MessageMediaMetadata' }
+        links:
+          type: array
+          items: { $ref: '#/components/schemas/MessageLink' }
+        variables:
+          type: array
+          items: { $ref: '#/components/schemas/MessageVariable' }
+        contentHash: { type: string, pattern: '^[0-9a-f]{64}$' }
+        status: { type: string, enum: [DRAFT, APPROVED, SUPERSEDED] }
+        createdBy: { type: string, format: uuid }
+        approvedBy: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        approvedAt: { type: string, format: date-time }
+    MessagePreviewResult:
+      type: object
+      additionalProperties: false
+      required: [body, resolved, usedFallbacks, missing, undeclared, characterCount, byteCount]
+      properties:
+        body: { type: string }
+        resolved:
+          type: object
+          additionalProperties: { type: string }
+        usedFallbacks:
+          type: array
+          items: { type: string }
+        missing:
+          type: array
+          items: { type: string }
+        undeclared:
+          type: array
+          items: { type: string }
+        characterCount: { type: integer, minimum: 0 }
+        byteCount: { type: integer, minimum: 0 }
+    TrustedAssetMetadata:
+      type: object
+      additionalProperties: false
+      required: [id, purpose, originalFilename, mediaType, size, sha256, status, createdAt, updatedAt, version]
+      properties:
+        id: { type: string, format: uuid }
+        purpose: { type: string, enum: [MESSAGE_MEDIA, CONSENT_EVIDENCE, CAMPAIGN_EVIDENCE] }
+        originalFilename: { type: string }
+        mediaType: { type: string }
+        size: { type: integer, format: int64, minimum: 1 }
+        sha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        status: { type: string, enum: [SCANNING, CLEAN, INFECTED, SCAN_FAILED, REVOKED] }
+        rightsBasis: { type: string, enum: [OWNED, LICENSED, CLIENT_SUPPLIED, PUBLIC_DOMAIN] }
+        rightsReference: { type: string, minLength: 3, maxLength: 500 }
+        rightsExpiresAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        version: { type: integer, format: int64, minimum: 1 }
     AuthenticatedOperatorContext:
       type: object
       additionalProperties: false

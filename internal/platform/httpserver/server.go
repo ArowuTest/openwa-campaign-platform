@@ -2389,7 +2389,7 @@ func (s *Server) listMessageVersions(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
-	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
+	httpx.WriteList(w, http.StatusOK, publicMessageVersions(page.Items), len(page.Items), page.NextCursor)
 }
 
 func (s *Server) createMessageVersion(w http.ResponseWriter, r *http.Request) {
@@ -2434,7 +2434,7 @@ func (s *Server) createMessageVersion(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "MESSAGE_VERSION_INVALID", "The message version could not be created.", map[string]any{"detail": err.Error()})
 		return
 	}
-	httpx.WriteJSON(w, http.StatusCreated, created)
+	httpx.WriteJSON(w, http.StatusCreated, publicMessageVersion(created))
 }
 
 type approveMessageVersionRequest struct {
@@ -2670,7 +2670,7 @@ func (s *Server) approveMessageVersion(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "MESSAGE_APPROVAL_REJECTED", "The message version could not be approved.", map[string]any{"detail": err.Error()})
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, approved)
+	httpx.WriteJSON(w, http.StatusOK, publicMessageVersion(approved))
 }
 
 func (s *Server) createAudienceSnapshot(w http.ResponseWriter, r *http.Request) {

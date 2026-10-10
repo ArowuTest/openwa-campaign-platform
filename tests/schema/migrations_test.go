@@ -474,3 +474,27 @@ func TestMetaUpgradeMigrationsNormalizeLegacyInvalidEvidenceBeforeConstraints(t 
 		}
 	}
 }
+
+func TestMessageMediaRightsMigrationAddsDurableEvidenceWithoutFabricatedBackfill(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(migrationDirectory(t), "0097_message_media_rights_evidence.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(content)
+	for _, required := range []string{
+		"ADD COLUMN IF NOT EXISTS rights_basis text",
+		"ADD COLUMN IF NOT EXISTS rights_reference text",
+		"ADD COLUMN IF NOT EXISTS rights_expires_at timestamptz",
+		"trusted_assets_rights_shape_check",
+		"rights_basis IN ('OWNED','LICENSED','CLIENT_SUPPLIED','PUBLIC_DOMAIN')",
+		"DROP CONSTRAINT IF EXISTS trusted_assets_purpose_sha256_checksum_byte_size_key",
+		"trusted_assets_message_rights_expiry_idx",
+	} {
+		if !strings.Contains(source, required) {
+			t.Fatalf("media-rights migration missing %q", required)
+		}
+	}
+	if strings.Contains(source, "UPDATE trusted_assets SET rights_basis") {
+		t.Fatal("migration must not fabricate rights authority for legacy media")
+	}
+}

@@ -7,6 +7,7 @@ import { useRouter } from 'next/navigation';
 import { StatusBadge } from '../../../components/status-badge';
 import { CampaignDraftEditor } from './campaign-draft-editor';
 import { CampaignReadinessPanel } from './campaign-readiness-panel';
+import { MessageComposer } from './message-composer';
 import { useAuth } from '../../../components/auth-provider';
 import { APIError, apiRequest, type ListEnvelope } from '../../../lib/api';
 import { canonicalUUID, getCampaignDetail, type CampaignDetail } from '../../../lib/campaign-preparation-model';
@@ -407,6 +408,9 @@ function CampaignWorkspaceGeneration({ campaignId }: { campaignId: string }) {
 
       <CampaignDraftEditor campaign={campaign} onSaved={saved => { if (mounted.current) { setCampaign(saved); setReadinessGeneration(value => value + 1); } }} />
       <CampaignReadinessPanel key={readinessGeneration} campaign={campaign} />
+      {['AUDIENCE_VALIDATED','MESSAGE_REVIEW_PENDING','MESSAGE_APPROVED','COMMERCIAL_APPROVED','FINAL_APPROVAL_PENDING','SCHEDULED','DISPATCHING','PAUSED','COMPLETED','COMPLETED_WITH_EXCEPTIONS'].includes(campaign.status)
+        ? <MessageComposer campaign={campaign} onChanged={load} />
+        : null}
 
       <section className="grid grid-4" aria-label="Campaign metrics">
         <article className="card metric"><span className="muted">Campaign version</span><strong>{campaign.version}</strong></article>

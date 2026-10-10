@@ -64,6 +64,9 @@ func (s *Service) CreateDraft(ctx context.Context, input Input) (Version, error)
 		if err != nil {
 			return Version{}, err
 		}
+		if err := validateTrustedAssetMediaType(input.Type, asset.MediaType); err != nil {
+			return Version{}, err
+		}
 		input.Media = &Media{AssetID: asset.ID, ObjectKey: asset.ObjectKey, SHA256: asset.SHA256, MediaType: asset.MediaType, Size: asset.Size, ScanStatus: "CLEAN"}
 	} else if input.Media != nil && s.Assets != nil {
 		return Version{}, errors.New("direct media metadata is not accepted; use a trusted media asset")
@@ -76,6 +79,29 @@ func (s *Service) CreateDraft(ctx context.Context, input Input) (Version, error)
 		input.AllowedHosts = hosts
 	}
 	return s.repository.CreateDraft(ctx, input, s.clock())
+}
+
+func validateTrustedAssetMediaType(messageType Type, mediaType string) error {
+	mediaType = strings.ToLower(strings.TrimSpace(strings.Split(mediaType, ";")[0]))
+	switch messageType {
+	case TypeImageCaption:
+		if !strings.HasPrefix(mediaType, "image/") {
+			return errors.New("image-caption messages require image media")
+		}
+	case TypeVideo:
+		if !strings.HasPrefix(mediaType, "video/") {
+			return errors.New("video messages require video media")
+		}
+	case TypeDocument:
+		if mediaType == "" || mediaType == "application/octet-stream" {
+			return errors.New("document messages require a detected media type")
+		}
+	case TypeText:
+		return errors.New("text messages cannot use media assets")
+	default:
+		return errors.New("unsupported message type")
+	}
+	return nil
 }
 
 func (s *Service) Get(ctx context.Context, identifier string) (Version, error) {

@@ -33,6 +33,21 @@ const (
 	AssetStatusRevoked    AssetStatus = "REVOKED"
 )
 
+type RightsBasis string
+
+const (
+	RightsBasisOwned          RightsBasis = "OWNED"
+	RightsBasisLicensed       RightsBasis = "LICENSED"
+	RightsBasisClientSupplied RightsBasis = "CLIENT_SUPPLIED"
+	RightsBasisPublicDomain   RightsBasis = "PUBLIC_DOMAIN"
+)
+
+type RightsEvidence struct {
+	Basis     RightsBasis `json:"basis"`
+	Reference string      `json:"reference"`
+	ExpiresAt *time.Time  `json:"expiresAt,omitempty"`
+}
+
 type Asset struct {
 	ID               string       `json:"id"`
 	Purpose          AssetPurpose `json:"purpose"`
@@ -43,6 +58,9 @@ type Asset struct {
 	SHA256           string       `json:"sha256"`
 	Status           AssetStatus  `json:"status"`
 	ScanSignature    string       `json:"scanSignature,omitempty"`
+	RightsBasis      RightsBasis  `json:"rightsBasis,omitempty"`
+	RightsReference  string       `json:"rightsReference,omitempty"`
+	RightsExpiresAt  *time.Time   `json:"rightsExpiresAt,omitempty"`
 	CreatedBy        string       `json:"createdBy"`
 	CreatedAt        time.Time    `json:"createdAt"`
 	UpdatedAt        time.Time    `json:"updatedAt"`
@@ -50,9 +68,10 @@ type Asset struct {
 }
 
 var (
-	ErrAssetNotFound = errors.New("trusted asset not found")
-	ErrAssetConflict = errors.New("trusted asset version conflict")
-	ErrAssetNotClean = errors.New("trusted asset has not passed malware scanning")
+	ErrAssetNotFound      = errors.New("trusted asset not found")
+	ErrAssetConflict      = errors.New("trusted asset version conflict")
+	ErrAssetNotClean      = errors.New("trusted asset has not passed malware scanning")
+	ErrAssetRightsInvalid = errors.New("trusted message-media rights evidence is invalid")
 )
 
 type AssetRepository interface {
@@ -76,11 +95,20 @@ func (s *TrustedAssetService) now() time.Time {
 	return time.Now().UTC()
 }
 func (s *TrustedAssetService) Upload(ctx context.Context, purpose AssetPurpose, filename, declaredType, actor string, source io.Reader) (Asset, error) {
+	return s.UploadWithRights(ctx, purpose, filename, declaredType, actor, RightsEvidence{}, source)
+}
+
+func (s *TrustedAssetService) UploadWithRights(ctx context.Context, purpose AssetPurpose, filename, declaredType, actor string, rights RightsEvidence, source io.Reader) (Asset, error) {
 	if s == nil || s.Objects == nil || s.Repository == nil || s.Scanner == nil {
 		return Asset{}, errors.New("trusted asset intake dependencies are required")
 	}
 	if purpose != AssetPurposeMessageMedia && purpose != AssetPurposeConsentEvidence && purpose != AssetPurposeCampaignEvidence {
 		return Asset{}, errors.New("unsupported asset purpose")
+	}
+	now := s.now()
+	rights, err := normaliseRightsEvidence(purpose, rights, now)
+	if err != nil {
+		return Asset{}, err
 	}
 	filename = strings.TrimSpace(filepath.Base(filename))
 	if filename == "" || filename == "." {
@@ -116,8 +144,12 @@ func (s *TrustedAssetService) Upload(ctx context.Context, purpose AssetPurpose, 
 	if err != nil {
 		return Asset{}, err
 	}
-	now := s.now()
-	asset := Asset{ID: identifier, Purpose: purpose, ObjectKey: meta.Key, OriginalFilename: filename, MediaType: detected, Size: meta.Size, SHA256: meta.SHA256, Status: AssetStatusScanning, CreatedBy: actor, CreatedAt: now, UpdatedAt: now, Version: 1}
+	asset := Asset{
+		ID: identifier, Purpose: purpose, ObjectKey: meta.Key, OriginalFilename: filename, MediaType: detected,
+		Size: meta.Size, SHA256: meta.SHA256, Status: AssetStatusScanning,
+		RightsBasis: rights.Basis, RightsReference: rights.Reference, RightsExpiresAt: rights.ExpiresAt,
+		CreatedBy: actor, CreatedAt: now, UpdatedAt: now, Version: 1,
+	}
 	asset, err = s.Repository.Create(ctx, asset)
 	if err != nil {
 		if cleanupErr := s.Objects.Delete(ctx, key); cleanupErr != nil {
@@ -178,6 +210,11 @@ func (s *TrustedAssetService) ResolveClean(ctx context.Context, id string, purpo
 	if asset.Status != AssetStatusClean {
 		return Asset{}, ErrAssetNotClean
 	}
+	if err := validateRightsEvidence(asset.Purpose, RightsEvidence{
+		Basis: asset.RightsBasis, Reference: asset.RightsReference, ExpiresAt: asset.RightsExpiresAt,
+	}, s.now()); err != nil {
+		return Asset{}, err
+	}
 	if maximum > 0 && asset.Size > maximum {
 		return Asset{}, errors.New("trusted asset exceeds route limit")
 	}
@@ -199,6 +236,43 @@ func (s *TrustedAssetService) Revoke(ctx context.Context, id string, expected in
 		return Asset{}, errors.New("asset id, expected version, actor and a meaningful reason are required")
 	}
 	return s.Repository.Revoke(ctx, id, expected, strings.TrimSpace(actor), strings.TrimSpace(reason), s.now())
+}
+
+func normaliseRightsEvidence(purpose AssetPurpose, value RightsEvidence, now time.Time) (RightsEvidence, error) {
+	value.Basis = RightsBasis(strings.ToUpper(strings.TrimSpace(string(value.Basis))))
+	value.Reference = strings.TrimSpace(value.Reference)
+	if value.ExpiresAt != nil {
+		expires := value.ExpiresAt.UTC()
+		value.ExpiresAt = &expires
+	}
+	if purpose != AssetPurposeMessageMedia {
+		if value.Basis != "" || value.Reference != "" || value.ExpiresAt != nil {
+			return RightsEvidence{}, fmt.Errorf("%w: rights evidence is supported only for message media", ErrAssetRightsInvalid)
+		}
+		return RightsEvidence{}, nil
+	}
+	switch value.Basis {
+	case RightsBasisOwned, RightsBasisLicensed, RightsBasisClientSupplied, RightsBasisPublicDomain:
+	default:
+		return RightsEvidence{}, fmt.Errorf("%w: unsupported rights basis", ErrAssetRightsInvalid)
+	}
+	if len(value.Reference) < 3 || len(value.Reference) > 500 {
+		return RightsEvidence{}, fmt.Errorf("%w: evidence reference must contain 3 to 500 safe characters", ErrAssetRightsInvalid)
+	}
+	for _, character := range value.Reference {
+		if character == '' || character == '\n' || character == 0 {
+			return RightsEvidence{}, fmt.Errorf("%w: evidence reference contains prohibited control characters", ErrAssetRightsInvalid)
+		}
+	}
+	if value.ExpiresAt != nil && !value.ExpiresAt.After(now.UTC()) {
+		return RightsEvidence{}, fmt.Errorf("%w: media rights have expired", ErrAssetRightsInvalid)
+	}
+	return value, nil
+}
+
+func validateRightsEvidence(purpose AssetPurpose, value RightsEvidence, now time.Time) error {
+	_, err := normaliseRightsEvidence(purpose, value, now)
+	return err
 }
 
 func compatibleContentType(declared, detected string) bool {

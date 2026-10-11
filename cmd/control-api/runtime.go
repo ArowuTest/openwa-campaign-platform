@@ -173,7 +173,7 @@ func buildMemoryRuntime(cfg config.Config, protector *sharedcrypto.MSISDNProtect
 		m, err := executionStore.Metrics(ctx, id)
 		return campaignworkspace.DeliveryMetrics{Authorised: m.Authorised, Queued: m.Queued, Pending: m.Pending, Submitted: m.Submitted, Sent: m.Sent, Delivered: m.Delivered, Read: m.Read, Unknown: m.Unknown}, err
 	})}
-	routingPlans := &execution.RoutingAdministration{Store: execution.NewMemoryRoutingPlanStore(), Campaigns: campaigns, ProviderCapabilities: providerCapabilities, GatewayPools: gatewayPools}
+	routingPlans := &execution.RoutingAdministration{Store: execution.NewMemoryRoutingPlanStore(), Campaigns: campaigns, ProviderCapabilities: providerCapabilities, GatewayPools: gatewayPools, PacingPolicies: pacingPolicies}
 	applyMetaRoutingRuntime(routingPlans, metaRuntime, cfg.MetaHealthStaleAfter)
 	shardReallocations := &execution.ReallocationAdministration{Store: execution.NewMemoryShardRepository()}
 	executionCoordinator.RoutingPlans = routingPlans
@@ -347,7 +347,7 @@ func buildPostgreSQLRuntime(ctx context.Context, cfg config.Config, protector *s
 		m, err := executionStore.Metrics(ctx, id)
 		return campaignworkspace.DeliveryMetrics{Authorised: m.Authorised, Queued: m.Queued, Pending: m.Pending, Submitted: m.Submitted, Sent: m.Sent, Delivered: m.Delivered, Read: m.Read, Unknown: m.Unknown}, err
 	})}
-	routingPlans := &execution.RoutingAdministration{Store: &execution.PostgreSQLRoutingPlanStore{DB: db}, Campaigns: campaigns, ProviderCapabilities: providerCapabilities, GatewayPools: gatewayPools}
+	routingPlans := &execution.RoutingAdministration{Store: &execution.PostgreSQLRoutingPlanStore{DB: db}, Campaigns: campaigns, ProviderCapabilities: providerCapabilities, GatewayPools: gatewayPools, PacingPolicies: pacingPolicies}
 	applyMetaRoutingRuntime(routingPlans, metaRuntime, cfg.MetaHealthStaleAfter)
 	shardReallocations := &execution.ReallocationAdministration{Store: &execution.PostgreSQLShardRepository{DB: db}}
 	executionCoordinator.RoutingPlans = routingPlans

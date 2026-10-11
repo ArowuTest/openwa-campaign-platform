@@ -1255,6 +1255,58 @@ paths:
         '409': { description: CAMPAIGN_VERSION_CONFLICT or CAMPAIGN_READINESS_STAGE_UNSUPPORTED. Reload changed detail or use existing execution evidence for scheduled and later stages. }
         '500': { description: INTERNAL_ERROR with no persistence or private source details }
         '503': { description: CAMPAIGN_READINESS_UNAVAILABLE for missing required query wiring }
+  /campaigns/{id}/capacity-hold-proposal:
+    get:
+      operationId: getCampaignCapacityHoldProposal
+      summary: Read one server-derived Day-1 OpenWA capacity-hold proposal
+      description: Requires campaign.read. Returns read-only capacity evidence derived from the saved campaign window, current accepted exact-route controlled test, current preparation capacity measurement, effective pacing policy and current route. The browser cannot supply capacity or pacing values. No reservation is created.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Current server-derived hold proposal
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CampaignCapacityHoldProposal' }
+        '401': { description: Authentication required or invalid session }
+        '403': { description: Permission denied }
+        '404': { description: CAMPAIGN_NOT_FOUND }
+        '409': { description: CAPACITY_HOLD_STALE because the campaign changed while evidence was measured }
+        '422': { description: CAPACITY_HOLD_BLOCKED because current controlled-test, route, schedule, pacing or measured capacity evidence cannot support a hold }
+        '503': { description: CAPACITY_HOLD_UNAVAILABLE because required authoritative evidence is unavailable }
+  /campaigns/{id}/capacity-hold:
+    post:
+      operationId: createCampaignCapacityHold
+      summary: Confirm a server-derived Day-1 OpenWA capacity hold
+      description: Requires campaign.approve and recent MFA step-up. The client supplies only the expected campaign version, a meaningful approval reason and a stable client request ID. The server re-derives the accepted controlled test, route, current pacing and measured capacity evidence immediately before creation, then atomically rechecks overlapping reservations and pool limits while creating the approved one-route routing plan plus HELD reservation. Exact replays converge before proposal recomputation; semantic reuse of a client request ID fails closed.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CampaignCapacityHoldRequest' }
+      responses:
+        '200':
+          description: Exact idempotent replay of an existing governed hold
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CampaignCapacityHoldReplay' }
+        '201':
+          description: New governed routing plan and HELD capacity reservation created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CampaignCapacityHoldCreated' }
+        '400': { description: INVALID_JSON }
+        '401': { description: Authentication required or invalid session }
+        '403': { description: Permission denied or MFA_STEP_UP_REQUIRED }
+        '404': { description: CAMPAIGN_NOT_FOUND }
+        '409': { description: CAPACITY_HOLD_STALE, CAPACITY_HOLD_CONFLICT, CAPACITY_HOLD_REPLAY_CONFLICT or ROUTING_CAPACITY_OVERBOOKED }
+        '422': { description: Confirmation invalid, current evidence blocked, or governed hold rejected }
+        '503': { description: Required capacity-hold or replay authority unavailable }
   /campaigns/{id}/draft:
     put:
       operationId: saveCampaignDraft
@@ -1522,12 +1574,17 @@ paths:
                   hasMore: { type: boolean }
     post:
       operationId: createCampaignRoutingPlan
-      summary: Approve a multi-pool routing plan and atomically reserve pool capacity
+      summary: Approve advanced/non-Day-1 routing plans and atomically reserve pool capacity
+      description: Requires campaign.approve and recent MFA. OpenWA campaigns are deliberately rejected here; their capacity must be derived and approved through /campaigns/{id}/capacity-hold so operators cannot manufacture MPM/hourly/daily authority. This direct endpoint remains available only for non-OpenWA advanced routing administration.
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
         '201': { description: Routing plan approved }
-        '409': { description: Pool capacity is already reserved }
+        '400': { description: Invalid request }
+        '403': { description: Permission denied or MFA_STEP_UP_REQUIRED }
+        '404': { description: CAMPAIGN_NOT_FOUND }
+        '409': { description: Pool capacity is already reserved or ROUTING_PLAN_DIRECT_CREATE_DISABLED for Day-1 OpenWA }
+        '422': { description: Routing plan invalid }
   /routing-plans/{id}:
     get:
       operationId: getCampaignRoutingPlan
@@ -5525,6 +5582,106 @@ components:
           type: array
           uniqueItems: true
           items: { type: string, enum: [SEND_TEXT, SEND_TEMPLATE, SEND_IMAGE, SEND_VIDEO, SEND_DOCUMENT, DELIVERY_EVENTS, READ_EVENTS, INBOUND_MESSAGES, PAIRING_QR, PAIRING_CODE] }
+    CampaignCapacityHoldRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedCampaignVersion, reason, clientRequestId]
+      properties:
+        expectedCampaignVersion: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991 }
+        reason: { type: string, minLength: 8, maxLength: 1000, description: Trimmed capacity-approval reason recorded with the routing plan. }
+        clientRequestId: { type: string, minLength: 16, maxLength: 128, description: Stable client-generated idempotency key reused after ambiguous response loss. }
+    CampaignCapacityHoldProposal:
+      type: object
+      additionalProperties: false
+      required:
+        [campaignId, campaignVersion, senderPoolId, gatewayPoolId, provider, engine, reservationStart, reservationEnd, basisRecipientCount, measurementAsOf, healthySessions, healthyNodes, minimumHealthyNodes, availableMessagesPerMinute, availableHourlyUnits, availableDailyUnits, safetyMarginPercent, requiredMessagesPerMinute, reservedMessagesPerMinute, reservedHourlyUnits, reservedDailyUnits, pacingPolicyId, pacingPolicyVersion, pacingMessagesPerMinute, pacingHourlyAllowance, pacingDailyAllowance, routingPolicyVersion, capacityEvidenceVersion, classification]
+      properties:
+        campaignId: { type: string, format: uuid }
+        campaignVersion: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991 }
+        senderPoolId: { type: string, format: uuid }
+        gatewayPoolId: { type: string, format: uuid }
+        provider: { type: string, const: OPENWA }
+        engine: { type: string, enum: [WHATSAPP_WEB_JS, BAILEYS] }
+        reservationStart: { type: string, format: date-time }
+        reservationEnd: { type: string, format: date-time }
+        basisRecipientCount: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991 }
+        measurementAsOf: { type: string, format: date-time }
+        healthySessions: { type: integer, minimum: 0 }
+        healthyNodes: { type: integer, minimum: 0 }
+        minimumHealthyNodes: { type: integer, minimum: 0 }
+        availableMessagesPerMinute: { type: integer, minimum: 0 }
+        availableHourlyUnits: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991 }
+        availableDailyUnits: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991 }
+        safetyMarginPercent: { type: integer, minimum: 0, maximum: 90 }
+        requiredMessagesPerMinute: { type: number, minimum: 0 }
+        reservedMessagesPerMinute: { type: integer, minimum: 1 }
+        reservedHourlyUnits: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991 }
+        reservedDailyUnits: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991 }
+        pacingPolicyId: { type: string, minLength: 1 }
+        pacingPolicyVersion: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991 }
+        pacingMessagesPerMinute: { type: integer, minimum: 1 }
+        pacingHourlyAllowance: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991 }
+        pacingDailyAllowance: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991 }
+        routingPolicyVersion: { type: string, minLength: 1 }
+        capacityEvidenceVersion: { type: string, minLength: 1 }
+        classification: { type: string, const: READY_TO_HOLD }
+    CampaignCapacityHoldRoute:
+      type: object
+      additionalProperties: false
+      required: [senderPoolId, gatewayPoolId, provider, engine, providerAdapterVersion, providerDefinitionId, providerDefinitionVersion, gatewayPoolVersion, allocationWeight, maximumRecipients, reservedMessagesPerMinute, reservedHourlyUnits, reservedDailyUnits, allowReallocationIn, allowReallocationOut]
+      properties:
+        senderPoolId: { type: string, format: uuid }
+        gatewayPoolId: { type: string, format: uuid }
+        provider: { type: string, const: OPENWA }
+        engine: { type: string, enum: [WHATSAPP_WEB_JS, BAILEYS] }
+        providerAdapterVersion: { type: string, minLength: 1 }
+        providerDefinitionId: { type: string, format: uuid }
+        providerDefinitionVersion: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991 }
+        gatewayPoolVersion: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991 }
+        allocationWeight: { type: integer, minimum: 1, maximum: 10000 }
+        maximumRecipients: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991 }
+        reservedMessagesPerMinute: { type: integer, minimum: 1 }
+        reservedHourlyUnits: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991 }
+        reservedDailyUnits: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991 }
+        allowReallocationIn: { type: boolean, const: false }
+        allowReallocationOut: { type: boolean, const: false }
+    CampaignCapacityHoldPlan:
+      type: object
+      additionalProperties: false
+      required: [id, campaignId, version, routes, distributionMode, routingPolicyVersion, capacityEvidenceVersion, pacingPolicyVersion, fallbackMode, approvedAt, approvedBy, approvalReason, approvedCampaignVersion, idempotencyKey]
+      properties:
+        id: { type: string, format: uuid }
+        campaignId: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991 }
+        routes:
+          type: array
+          minItems: 1
+          maxItems: 1
+          items: { $ref: '#/components/schemas/CampaignCapacityHoldRoute' }
+        distributionMode: { type: string, enum: [WEIGHTED, AUTO] }
+        routingPolicyVersion: { type: string, minLength: 1 }
+        capacityEvidenceVersion: { type: string, minLength: 1 }
+        pacingPolicyVersion: { type: string, minLength: 1 }
+        fallbackMode: { type: string, const: NONE }
+        approvedAt: { type: string, format: date-time }
+        approvedBy: { type: string, format: uuid }
+        approvalReason: { type: string, minLength: 8, maxLength: 1000 }
+        approvedCampaignVersion: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991 }
+        idempotencyKey: { type: string, minLength: 16, maxLength: 128 }
+    CampaignCapacityHoldCreated:
+      type: object
+      additionalProperties: false
+      required: [plan, proposal]
+      properties:
+        plan: { $ref: '#/components/schemas/CampaignCapacityHoldPlan' }
+        proposal: { $ref: '#/components/schemas/CampaignCapacityHoldProposal' }
+    CampaignCapacityHoldReplay:
+      type: object
+      additionalProperties: false
+      required: [plan, replayed]
+      properties:
+        plan: { $ref: '#/components/schemas/CampaignCapacityHoldPlan' }
+        replayed: { type: boolean, const: true }
     CampaignReadiness:
       type: object
       additionalProperties: false

@@ -3,6 +3,7 @@ package execution
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -47,7 +48,7 @@ func TestRoutingAdministrationCreatesReservationsForEveryPool(t *testing.T) {
 	end := start.Add(24 * time.Hour)
 	store := NewMemoryRoutingPlanStore()
 	providers, gateways := governedRoutingDependencies(t, start, end.Add(time.Hour))
-	svc := &RoutingAdministration{Store: store, Campaigns: routingCampaignReader{value: campaign.Campaign{ID: "campaign-1", MaximumUniqueRecipients: 1000, RequestedStartAt: &start, CompletionDeadlineAt: &end, Transport: campaign.TransportSelection{RequiredCapabilities: []string{"SEND_TEXT"}}}}, ProviderCapabilities: providers, GatewayPools: gateways, Clock: func() time.Time { return start.Add(-time.Hour) }}
+	svc := &RoutingAdministration{Store: store, Campaigns: routingCampaignReader{value: campaign.Campaign{ID: "campaign-1", Version: 7, MaximumUniqueRecipients: 1000, RequestedStartAt: &start, CompletionDeadlineAt: &end, Transport: campaign.TransportSelection{RequiredCapabilities: []string{"SEND_TEXT"}}}}, ProviderCapabilities: providers, GatewayPools: gateways, Clock: func() time.Time { return start.Add(-time.Hour) }}
 	plan := validPlan()
 	plan.ApprovedBy = ""
 	plan.ApprovedAt = time.Time{}
@@ -55,7 +56,8 @@ func TestRoutingAdministrationCreatesReservationsForEveryPool(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if created.ID == "" || created.ApprovedBy != "approver-1" || created.Routes[0].ProviderDefinitionID == "" || created.Routes[0].GatewayPoolVersion != 1 {
+	if created.ID == "" || created.ApprovedBy != "approver-1" || created.ApprovedCampaignVersion != 7 ||
+		created.Routes[0].ProviderDefinitionID == "" || created.Routes[0].GatewayPoolVersion != 1 {
 		t.Fatalf("unexpected created plan: %+v", created)
 	}
 	reservations, err := svc.Reservations(context.Background(), created.ID)
@@ -233,5 +235,68 @@ func TestRoutingAdministrationRejectsNewPlanForNonPlannableCampaign(t *testing.T
 				t.Fatalf("status %s persisted %d routing plans", status, len(plans))
 			}
 		})
+	}
+}
+
+func approvedPacingPolicyForRoutingTest(t *testing.T, admin *sender.PacingAdministration, scope sender.PacingScope, scopeID string, effectiveFrom time.Time, suffix string) sender.PacingPolicy {
+	t.Helper()
+	policy, err := admin.CreateDraft(context.Background(), sender.PacingPolicy{
+		Scope: scope, ScopeID: scopeID,
+		MinimumDelayMS: 0, MaximumDelayMS: 1000, JitterMode: sender.JitterNone,
+		MaxInFlight: 1, MessagesPerMinute: 10, HourlyAllowance: 100, DailyAllowance: 1000,
+		MaxActiveCampaigns: 1, BurstSize: 1, EffectiveFrom: effectiveFrom,
+	}, "maker-"+suffix, "create pacing "+suffix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err = admin.Submit(context.Background(), policy.ID, policy.Version, "maker-"+suffix, "submit pacing "+suffix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err = admin.Decide(context.Background(), policy.ID, policy.Version, true, "checker-"+suffix, "approve pacing "+suffix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return policy
+}
+
+func TestRoutingAdministrationRevalidatesCanonicalFrozenPacingAuthority(t *testing.T) {
+	start := time.Date(2026, 10, 12, 10, 0, 0, 0, time.UTC)
+	end := start.Add(6 * time.Hour)
+	pacing := &sender.PacingAdministration{Store: sender.NewMemoryPacingStore(), Clock: func() time.Time { return start.Add(-time.Hour) }}
+	first := approvedPacingPolicyForRoutingTest(t, pacing, sender.PacingSenderPool, "pool-a", start.Add(-time.Hour), "first")
+	admin := &RoutingAdministration{PacingPolicies: pacing}
+	entity := campaign.Campaign{
+		ID: "campaign-pacing-fence", RequestedStartAt: &start, CompletionDeadlineAt: &end,
+		Transport: campaign.TransportSelection{
+			Provider: campaign.ProviderOpenWA, Engine: campaign.EngineBaileys,
+			GatewayPoolID: "gateway-a", SenderPoolID: "pool-a",
+		},
+	}
+	plan := RoutingPlan{PacingPolicyVersion: first.ID + "/v" + strconv.FormatInt(first.Version, 10)}
+	if err := admin.validateFrozenPacingAuthority(context.Background(), plan, entity); err != nil {
+		t.Fatalf("exact frozen pacing authority rejected: %v", err)
+	}
+
+	_ = approvedPacingPolicyForRoutingTest(t, pacing, sender.PacingSenderPool, "pool-a", start.Add(3*time.Hour), "replacement")
+	if err := admin.validateFrozenPacingAuthority(context.Background(), plan, entity); err == nil {
+		t.Fatal("mid-window pacing replacement did not invalidate frozen routing-plan authority")
+	}
+}
+
+func TestRoutingAdministrationPacingEvidenceCompatibilityAndValidation(t *testing.T) {
+	start := time.Date(2026, 10, 12, 10, 0, 0, 0, time.UTC)
+	end := start.Add(time.Hour)
+	admin := &RoutingAdministration{}
+	entity := campaign.Campaign{RequestedStartAt: &start, CompletionDeadlineAt: &end}
+
+	if err := admin.validateFrozenPacingAuthority(context.Background(), RoutingPlan{PacingPolicyVersion: "legacy-pace-v1"}, entity); err != nil {
+		t.Fatalf("legacy pre-canonical pacing evidence must remain readable: %v", err)
+	}
+	if err := admin.validateFrozenPacingAuthority(context.Background(), RoutingPlan{PacingPolicyVersion: "10000000-0000-4000-8000-000000000001/vx"}, entity); !errors.Is(err, ErrRoutingPlanInvalid) {
+		t.Fatalf("malformed canonical pacing evidence error=%v", err)
+	}
+	if err := admin.validateFrozenPacingAuthority(context.Background(), RoutingPlan{PacingPolicyVersion: "10000000-0000-4000-8000-000000000001/v4"}, entity); err == nil {
+		t.Fatal("canonical pacing evidence unexpectedly passed without pacing governance")
 	}
 }

@@ -294,6 +294,8 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/campaigns", s.require("campaign.read", s.listCampaigns))
 	mux.Handle("GET /api/v1/campaigns/{id}", s.require("campaign.read", s.getCampaign))
 	mux.Handle("GET /api/v1/campaigns/{id}/readiness", s.require("campaign.read", s.getCampaignReadiness))
+	mux.Handle("GET /api/v1/campaigns/{id}/capacity-hold-proposal", s.require("campaign.read", s.getCampaignCapacityHoldProposal))
+	mux.Handle("POST /api/v1/campaigns/{id}/capacity-hold", s.require("campaign.approve", s.createCampaignCapacityHold))
 	mux.Handle("PUT /api/v1/campaigns/{id}/draft", s.require("campaign.write", s.saveCampaignDraft))
 	mux.Handle("POST /api/v1/campaigns", s.require("campaign.write", s.createCampaign))
 	mux.Handle("POST /api/v1/campaigns/{id}/transition", s.require("campaign.write", s.transitionCampaign))
@@ -3651,13 +3653,31 @@ func (s *Server) listCampaignRoutingPlans(w http.ResponseWriter, r *http.Request
 	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 func (s *Server) createCampaignRoutingPlan(w http.ResponseWriter, r *http.Request) {
-	if s.deps.RoutingPlans == nil {
+	if s.deps.RoutingPlans == nil || s.deps.Campaigns == nil {
 		httpx.WriteError(w, r, http.StatusServiceUnavailable, "ROUTING_PLAN_UNAVAILABLE", "Campaign routing-plan administration is not configured.", nil)
 		return
 	}
 	principal, _ := identity.PrincipalFromContext(r.Context())
 	if !identity.StepUpSatisfied(principal.Session, time.Now().UTC(), 10*time.Minute) {
 		httpx.WriteError(w, r, http.StatusForbidden, "MFA_STEP_UP_REQUIRED", "Recent MFA verification is required.", nil)
+		return
+	}
+	campaignID := id.CanonicalUUID(r.PathValue("id"))
+	if !id.IsUUID(campaignID) {
+		httpx.WriteError(w, r, http.StatusNotFound, "CAMPAIGN_NOT_FOUND", "The campaign was not found.", nil)
+		return
+	}
+	entity, err := s.deps.Campaigns.Get(r.Context(), campaignID)
+	if errors.Is(err, campaign.ErrNotFound) {
+		httpx.WriteError(w, r, http.StatusNotFound, "CAMPAIGN_NOT_FOUND", "The campaign was not found.", nil)
+		return
+	}
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	if entity.Transport.Provider == campaign.ProviderOpenWA {
+		httpx.WriteError(w, r, http.StatusConflict, "ROUTING_PLAN_DIRECT_CREATE_DISABLED", "OpenWA capacity must be created from the server-derived capacity-hold workflow.", nil)
 		return
 	}
 	var input execution.RoutingPlan

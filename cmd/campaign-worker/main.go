@@ -167,7 +167,7 @@ func main() {
 	executionCommitter := &execution.PostgreSQLLifecycleCommitter{
 		DB: db, Retry: postgresrepo.DefaultRetryPolicy(),
 	}
-	routingPlans := buildExecutionRoutingAdministration(db, campaignService, senderStore, cfg.MetaHealthStaleAfter)
+	routingPlans := buildExecutionRoutingAdministration(db, campaignService, senderStore, pacingPolicies, cfg.MetaHealthStaleAfter)
 	executionCoordinator := &execution.Coordinator{
 		Campaigns: campaignService, Store: executionStore, Committer: executionCommitter,
 		SafetyMarginPercent: 15, RoutingPlans: routingPlans, Maintenance: maintenance,
@@ -272,7 +272,7 @@ func healthcheckOK(client *http.Client, url string) bool {
 	}
 	return err == nil && response != nil && response.StatusCode == http.StatusOK
 }
-func buildExecutionRoutingAdministration(db *sql.DB, campaigns execution.CampaignReader, senderStore *sender.PostgreSQLGovernanceStore, metaHealthStaleAfter time.Duration) *execution.RoutingAdministration {
+func buildExecutionRoutingAdministration(db *sql.DB, campaigns execution.CampaignReader, senderStore *sender.PostgreSQLGovernanceStore, pacingPolicies *sender.PacingAdministration, metaHealthStaleAfter time.Duration) *execution.RoutingAdministration {
 	if senderStore == nil {
 		senderStore = &sender.PostgreSQLGovernanceStore{DB: db}
 	}
@@ -280,6 +280,7 @@ func buildExecutionRoutingAdministration(db *sql.DB, campaigns execution.Campaig
 		Store: &execution.PostgreSQLRoutingPlanStore{DB: db}, Campaigns: campaigns,
 		ProviderCapabilities: &provider.Service{Store: &provider.PostgreSQLStore{DB: db}},
 		GatewayPools:         &sender.GatewayPoolService{Store: senderStore},
+		PacingPolicies:       pacingPolicies,
 		MetaSenders:          &metacloud.PostgreSQLStore{DB: db}, MetaTemplates: &metacloud.PostgreSQLTemplateStore{DB: db},
 		MetaHealthStaleAfter: metaHealthStaleAfter,
 	}

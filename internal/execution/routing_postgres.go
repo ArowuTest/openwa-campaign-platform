@@ -15,6 +15,10 @@ func (s *PostgreSQLRoutingPlanStore) Create(ctx context.Context, plan RoutingPla
 	if s == nil || s.DB == nil {
 		return RoutingPlan{}, errors.New("database is required")
 	}
+	plan.ApprovalReason = strings.TrimSpace(plan.ApprovalReason)
+	if plan.ApprovalReason != "" && (len(plan.ApprovalReason) < 8 || len(plan.ApprovalReason) > 1000 || plan.ApprovedCampaignVersion < 1) {
+		return RoutingPlan{}, ErrRoutingPlanInvalid
+	}
 	tx, err := s.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		return RoutingPlan{}, err
@@ -24,12 +28,16 @@ func (s *PostgreSQLRoutingPlanStore) Create(ctx context.Context, plan RoutingPla
 	// inside the same transaction. This prevents two approvers from both
 	// creating version 1 (or otherwise colliding on a client-supplied version).
 	var campaignLock, campaignOrganisationID, campaignStatus string
+	var campaignVersion int64
 	var campaignStart, campaignEnd sql.NullTime
-	if err := tx.QueryRowContext(ctx, `SELECT id::text,organisation_id::text,status,requested_start_at,completion_deadline_at FROM campaigns WHERE id=$1::uuid FOR UPDATE`, plan.CampaignID).Scan(&campaignLock, &campaignOrganisationID, &campaignStatus, &campaignStart, &campaignEnd); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT id::text,organisation_id::text,status,version,requested_start_at,completion_deadline_at FROM campaigns WHERE id=$1::uuid FOR UPDATE`, plan.CampaignID).Scan(&campaignLock, &campaignOrganisationID, &campaignStatus, &campaignVersion, &campaignStart, &campaignEnd); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return RoutingPlan{}, ErrRoutingPlanInvalid
 		}
 		return RoutingPlan{}, err
+	}
+	if plan.ApprovedCampaignVersion > 0 && campaignVersion != plan.ApprovedCampaignVersion {
+		return RoutingPlan{}, ErrRoutingPlanConflict
 	}
 	var existingID, existingHash string
 	err = tx.QueryRowContext(ctx, `SELECT id::text,request_hash FROM campaign_routing_plans WHERE campaign_id=$1::uuid AND idempotency_key=$2`, plan.CampaignID, plan.IdempotencyKey).Scan(&existingID, &existingHash)
@@ -105,7 +113,7 @@ func (s *PostgreSQLRoutingPlanStore) Create(ctx context.Context, plan RoutingPla
 			return RoutingPlan{}, ErrCapacityOverbooked
 		}
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO campaign_routing_plans(id,campaign_id,plan_version,distribution_mode,routing_policy_version,capacity_evidence_version,pacing_policy_version,fallback_mode,approved_at,approved_by,idempotency_key,request_hash) VALUES($1::uuid,$2::uuid,$3,$4,$5,$6,$7,$8,$9,$10::uuid,$11,$12)`, plan.ID, plan.CampaignID, plan.Version, plan.DistributionMode, plan.RoutingPolicyVersion, plan.CapacityEvidenceVersion, plan.PacingPolicyVersion, plan.FallbackMode, plan.ApprovedAt, plan.ApprovedBy, plan.IdempotencyKey, plan.RequestHash)
+	_, err = tx.ExecContext(ctx, `INSERT INTO campaign_routing_plans(id,campaign_id,plan_version,distribution_mode,routing_policy_version,capacity_evidence_version,pacing_policy_version,fallback_mode,approved_at,approved_by,approval_reason,approved_campaign_version,idempotency_key,request_hash) VALUES($1::uuid,$2::uuid,$3,$4,$5,$6,$7,$8,$9,$10::uuid,NULLIF($11,''),NULLIF($12,0),$13,$14)`, plan.ID, plan.CampaignID, plan.Version, plan.DistributionMode, plan.RoutingPolicyVersion, plan.CapacityEvidenceVersion, plan.PacingPolicyVersion, plan.FallbackMode, plan.ApprovedAt, plan.ApprovedBy, plan.ApprovalReason, plan.ApprovedCampaignVersion, plan.IdempotencyKey, plan.RequestHash)
 	if err != nil {
 		return RoutingPlan{}, err
 	}
@@ -132,7 +140,7 @@ func (s *PostgreSQLRoutingPlanStore) Get(ctx context.Context, id string) (Routin
 		return RoutingPlan{}, errors.New("database is required")
 	}
 	var p RoutingPlan
-	err := s.DB.QueryRowContext(ctx, `SELECT id::text,campaign_id::text,plan_version,coalesce(distribution_mode,'WEIGHTED'),routing_policy_version,capacity_evidence_version,pacing_policy_version,fallback_mode,approved_at,approved_by::text,idempotency_key,request_hash FROM campaign_routing_plans WHERE id=$1::uuid`, id).Scan(&p.ID, &p.CampaignID, &p.Version, &p.DistributionMode, &p.RoutingPolicyVersion, &p.CapacityEvidenceVersion, &p.PacingPolicyVersion, &p.FallbackMode, &p.ApprovedAt, &p.ApprovedBy, &p.IdempotencyKey, &p.RequestHash)
+	err := s.DB.QueryRowContext(ctx, `SELECT id::text,campaign_id::text,plan_version,coalesce(distribution_mode,'WEIGHTED'),routing_policy_version,capacity_evidence_version,pacing_policy_version,fallback_mode,approved_at,approved_by::text,coalesce(approval_reason,''),coalesce(approved_campaign_version,0),idempotency_key,request_hash FROM campaign_routing_plans WHERE id=$1::uuid`, id).Scan(&p.ID, &p.CampaignID, &p.Version, &p.DistributionMode, &p.RoutingPolicyVersion, &p.CapacityEvidenceVersion, &p.PacingPolicyVersion, &p.FallbackMode, &p.ApprovedAt, &p.ApprovedBy, &p.ApprovalReason, &p.ApprovedCampaignVersion, &p.IdempotencyKey, &p.RequestHash)
 	if errors.Is(err, sql.ErrNoRows) {
 		return RoutingPlan{}, ErrRoutingPlanNotFound
 	}
@@ -153,6 +161,21 @@ func (s *PostgreSQLRoutingPlanStore) Get(ctx context.Context, id string) (Routin
 	}
 	return p, rows.Err()
 }
+func (s *PostgreSQLRoutingPlanStore) GetByIdempotencyKey(ctx context.Context, campaignID, idempotencyKey string) (RoutingPlan, error) {
+	if s == nil || s.DB == nil {
+		return RoutingPlan{}, errors.New("database is required")
+	}
+	var identifier string
+	err := s.DB.QueryRowContext(ctx, `SELECT id::text FROM campaign_routing_plans WHERE campaign_id=$1::uuid AND idempotency_key=$2`, campaignID, idempotencyKey).Scan(&identifier)
+	if errors.Is(err, sql.ErrNoRows) {
+		return RoutingPlan{}, ErrRoutingPlanNotFound
+	}
+	if err != nil {
+		return RoutingPlan{}, err
+	}
+	return s.Get(ctx, identifier)
+}
+
 func (s *PostgreSQLRoutingPlanStore) ListByCampaign(ctx context.Context, campaignID string) ([]RoutingPlan, error) {
 	if s == nil || s.DB == nil {
 		return nil, errors.New("database is required")

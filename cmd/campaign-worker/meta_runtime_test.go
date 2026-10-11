@@ -5,12 +5,14 @@ import (
 	"testing"
 	"time"
 
+	"campaign-platform/internal/sender"
 	workerconfig "campaign-platform/internal/worker/config"
 )
 
 func TestBuildExecutionRoutingAdministrationWiresGovernance(t *testing.T) {
-	routes := buildExecutionRoutingAdministration(nil, nil, nil, 7*time.Minute)
-	if routes == nil || routes.ProviderCapabilities == nil || routes.GatewayPools == nil || routes.MetaSenders == nil || routes.MetaTemplates == nil {
+	pacing := &sender.PacingAdministration{}
+	routes := buildExecutionRoutingAdministration(nil, nil, nil, pacing, 7*time.Minute)
+	if routes == nil || routes.ProviderCapabilities == nil || routes.GatewayPools == nil || routes.PacingPolicies != pacing || routes.MetaSenders == nil || routes.MetaTemplates == nil {
 		t.Fatalf("execution routing governance is incomplete: %#v", routes)
 	}
 	if routes.MetaHealthStaleAfter != 7*time.Minute {

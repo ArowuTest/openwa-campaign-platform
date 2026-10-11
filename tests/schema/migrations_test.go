@@ -498,3 +498,26 @@ func TestMessageMediaRightsMigrationAddsDurableEvidenceWithoutFabricatedBackfill
 		t.Fatal("migration must not fabricate rights authority for legacy media")
 	}
 }
+
+func TestRoutingPlanApprovalEvidenceMigrationStrengthensEvidenceWithoutFabricatedBackfill(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(migrationDirectory(t), "0098_routing_plan_approval_reason.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(content)
+	for _, required := range []string{
+		"ADD COLUMN IF NOT EXISTS approval_reason text NULL",
+		"ADD COLUMN IF NOT EXISTS approved_campaign_version bigint NULL",
+		"campaign_routing_plans_approval_reason_check",
+		"length(btrim(approval_reason)) BETWEEN 8 AND 1000",
+		"campaign_routing_plans_approved_campaign_version_check",
+		"approved_campaign_version IS NULL OR approved_campaign_version > 0",
+	} {
+		if !strings.Contains(source, required) {
+			t.Fatalf("routing-plan approval-evidence migration missing %q", required)
+		}
+	}
+	if strings.Contains(strings.ToUpper(source), "UPDATE CAMPAIGN_ROUTING_PLANS") {
+		t.Fatal("migration must not fabricate approval evidence for historical routing plans")
+	}
+}

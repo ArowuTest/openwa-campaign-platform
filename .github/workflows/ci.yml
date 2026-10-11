@@ -38,3 +38,50 @@ jobs:
       - name: Gateway dependency audit
         run: npm audit --audit-level=moderate --package-lock-only --prefix services/openwa-gateway --workspaces=false
       - run: ./scripts/check.sh
+
+  postgres-native-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17.5
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: campaign_platform
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d campaign_platform"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23.2'
+          cache: true
+      - name: Install native PostgreSQL client dependencies
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y libpq-dev pkg-config
+      - name: Verify cgo PostgreSQL driver
+        env:
+          CGO_ENABLED: '1'
+        run: |
+          set -o pipefail
+          go test -count=1 -v ./internal/persistence/database/libpqdriver | tee driver.log
+          grep -F -- '--- PASS: TestDriverIsRegistered' driver.log
+      - name: Replay ordered migrations
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/campaign_platform?sslmode=disable
+        run: |
+          set -o pipefail
+          python3 scripts/validate-postgres-migrations.py | tee migration.log
+      - name: Run PostgreSQL adversarial smoke
+        env:
+          CGO_ENABLED: '1'
+          POSTGRES_ADVERSARIAL_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/campaign_platform?sslmode=disable
+        run: |
+          set -o pipefail
+          go test -count=1 -v ./tests/integration -run '^TestPostgresAdversarialConcurrency$' | tee adversarial.log
+          grep -F -- '--- PASS: TestPostgresAdversarialConcurrency' adversarial.log

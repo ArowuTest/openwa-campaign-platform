@@ -117,7 +117,7 @@ func (s *Server) require(permission string, next http.HandlerFunc) http.Handler 
 		}
 		// Cookie-authenticated unsafe requests require a CSRF token. Bearer tokens are not
 		// ambient browser credentials and therefore do not require this additional check.
-		if r.Header.Get("Authorization") == "" && isUnsafeMethod(r.Method) && !identity.CSRFTokenValid(session, r.Header.Get("X-CSRF-Token")) {
+		if !hasBearerAuthorization(r) && isUnsafeMethod(r.Method) && !identity.CSRFTokenValid(session, r.Header.Get("X-CSRF-Token")) {
 			httpx.WriteError(w, r, http.StatusForbidden, "CSRF_VALIDATION_FAILED", "The request could not be verified.", nil)
 			return
 		}
@@ -133,6 +133,11 @@ func hasAnyPermission(user identity.User, expression string) bool {
 		}
 	}
 	return false
+}
+
+func hasBearerAuthorization(r *http.Request) bool {
+	value := strings.TrimSpace(r.Header.Get("Authorization"))
+	return strings.HasPrefix(strings.ToLower(value), "bearer ")
 }
 
 func bearerOrCookie(r *http.Request) string {

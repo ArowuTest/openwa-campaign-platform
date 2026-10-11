@@ -162,7 +162,7 @@ func (s *Server) writeIdentityAdministrationError(w http.ResponseWriter, r *http
 		httpx.WriteError(w, r, http.StatusConflict, "USER_EMAIL_EXISTS", "An internal user already uses that email address.", nil)
 	case errors.Is(err, identity.ErrLastSuperAdmin):
 		httpx.WriteError(w, r, http.StatusConflict, "LAST_SUPER_ADMIN", "The last active super administrator cannot be disabled or de-roled.", nil)
-	case errors.Is(err, identity.ErrUnknownRole), errors.Is(err, identity.ErrGenericSharedAccount):
+	case errors.Is(err, identity.ErrUnknownRole), errors.Is(err, identity.ErrGenericSharedAccount), errors.Is(err, identity.ErrMFARequired):
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "IDENTITY_POLICY_VIOLATION", err.Error(), nil)
 	default:
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "IDENTITY_ADMINISTRATION_INVALID", err.Error(), nil)

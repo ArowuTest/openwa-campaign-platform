@@ -36,6 +36,35 @@ func TestAdministrationProvisionUpdateResetAndRevoke(t *testing.T) {
 	}
 }
 
+func TestAdministrationRejectsMFABypass(t *testing.T) {
+	repo := NewMemoryAdministrationRepository("CAMPAIGN_OPERATOR")
+	service := NewAdministrationService(repo, NewMemorySessionRepository())
+	created, err := service.Create(context.Background(), CreateAccountInput{
+		Email: "mfa@example.test", DisplayName: "MFA Operator",
+		TemporaryPassword: "a-temporary-password-long-enough",
+		RoleCodes:         []string{"CAMPAIGN_OPERATOR"}, ActorID: "admin", Reason: "onboard operator",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = service.Update(context.Background(), created.Account.ID, UpdateAccountInput{
+		DisplayName: created.Account.DisplayName, Status: StatusActive,
+		RoleCodes: []string{"CAMPAIGN_OPERATOR"}, MFARequired: false,
+		ExpectedVersion: created.Account.Version, ActorID: "admin", Reason: "disable mfa",
+	})
+	if !errors.Is(err, ErrMFARequired) {
+		t.Fatalf("expected mandatory-MFA rejection, got %v", err)
+	}
+	current, err := service.Get(context.Background(), created.Account.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !current.MFARequired || current.Version != created.Account.Version {
+		t.Fatalf("MFA downgrade mutated account: %+v", current)
+	}
+}
+
 func TestAdministrationProtectsLastSuperAdmin(t *testing.T) {
 	repo := NewMemoryAdministrationRepository("SUPER_ADMIN")
 	sessions := NewMemorySessionRepository()

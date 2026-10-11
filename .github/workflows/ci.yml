@@ -20,11 +20,21 @@ jobs:
           cache: true
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '22.19.0'
           cache: 'npm'
           cache-dependency-path: |
             apps/admin-web/package-lock.json
             services/openwa-gateway/package-lock.json
       - run: npm ci --include=dev --prefix apps/admin-web
       - run: npm ci --include=dev --prefix services/openwa-gateway
+      - name: Admin web typecheck
+        run: npm run typecheck --prefix apps/admin-web
+      - name: Admin web lint
+        run: npm run lint --prefix apps/admin-web
+      - name: Admin web tests
+        run: npm run test --prefix apps/admin-web
+      - name: Admin web dependency audit
+        run: npm audit --audit-level=moderate --package-lock-only --prefix apps/admin-web
+      - name: Gateway dependency audit
+        run: npm audit --audit-level=moderate --package-lock-only --prefix services/openwa-gateway --workspaces=false
       - run: ./scripts/check.sh

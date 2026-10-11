@@ -195,6 +195,8 @@ export function CommercialGovernance({
 
   useEffect(() => {
     if (!visible || !canReadCommercial) return;
+    // The load callback synchronizes remote campaign state into local state.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void load();
   }, [canReadCommercial, load, visible]);
 

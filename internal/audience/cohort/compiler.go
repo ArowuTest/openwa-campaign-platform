@@ -36,14 +36,76 @@ func (c *Compiler) Compile(group audiencefilter.Group, eligibility EligibilityCo
 // CompileForPermissions is the untrusted-user entry point. It prevents callers
 // from bypassing hidden sensitive filters by submitting their codes directly.
 func (c *Compiler) CompileForPermissions(group audiencefilter.Group, eligibility EligibilityContext, hasPermission func(string) bool) (CompiledQuery, error) {
-	if err := group.ValidateForPermissions(c.registry, hasPermission); err != nil {
+	builder, bindings, segmentSQL, err := c.compileEligibilityContext(group, eligibility, hasPermission)
+	if err != nil {
 		return CompiledQuery{}, err
 	}
+	sql := `SELECT c.id
+FROM contacts c
+WHERE c.status = 'ACTIVE'
+  AND ` + activeOrganisationPredicate(bindings) + `
+  AND ` + currentConsentPredicate("c.id", bindings) + `
+  AND ` + notSuppressedPredicate("c.id", bindings) + `
+  AND ` + notFrequencyCappedPredicate("c.id", bindings) + `
+  AND (` + segmentSQL + `)`
+	return CompiledQuery{SQL: sql, Args: builder.args}, nil
+}
+
+// CompileBreakdownForPermissions returns one authoritative query whose staged
+// counts use the exact same eligibility predicates as CompileForPermissions.
+// The stages are monotonic: matched profiles -> current consent -> unsuppressed
+// -> final eligible after frequency caps.
+func (c *Compiler) CompileBreakdownForPermissions(group audiencefilter.Group, eligibility EligibilityContext, hasPermission func(string) bool) (CompiledQuery, error) {
+	builder, bindings, segmentSQL, err := c.compileEligibilityContext(group, eligibility, hasPermission)
+	if err != nil {
+		return CompiledQuery{}, err
+	}
+	sql := `WITH matched_profiles AS (
+  SELECT c.id
+  FROM contacts c
+  WHERE c.status = 'ACTIVE'
+    AND ` + activeOrganisationPredicate(bindings) + `
+    AND (` + segmentSQL + `)
+),
+consent_eligible AS (
+  SELECT m.id
+  FROM matched_profiles m
+  WHERE ` + currentConsentPredicate("m.id", bindings) + `
+),
+unsuppressed AS (
+  SELECT c.id
+  FROM consent_eligible c
+  WHERE ` + notSuppressedPredicate("c.id", bindings) + `
+),
+final_eligible AS (
+  SELECT c.id
+  FROM unsuppressed c
+  WHERE ` + notFrequencyCappedPredicate("c.id", bindings) + `
+)
+SELECT
+  (SELECT count(*) FROM matched_profiles) AS matched_profiles,
+  (SELECT count(*) FROM consent_eligible) AS consent_eligible,
+  (SELECT count(*) FROM unsuppressed) AS unsuppressed,
+  (SELECT count(*) FROM final_eligible) AS final_eligible`
+	return CompiledQuery{SQL: sql, Args: builder.args}, nil
+}
+
+type eligibilityBindings struct {
+	organisation string
+	purpose      string
+	channel      string
+	asOf         string
+}
+
+func (c *Compiler) compileEligibilityContext(group audiencefilter.Group, eligibility EligibilityContext, hasPermission func(string) bool) (*sqlBuilder, eligibilityBindings, string, error) {
+	if err := group.ValidateForPermissions(c.registry, hasPermission); err != nil {
+		return nil, eligibilityBindings{}, "", err
+	}
 	if strings.TrimSpace(eligibility.OrganisationID) == "" {
-		return CompiledQuery{}, errors.New("organisation ID is required")
+		return nil, eligibilityBindings{}, "", errors.New("organisation ID is required")
 	}
 	if strings.TrimSpace(eligibility.PurposeID) == "" {
-		return CompiledQuery{}, errors.New("purpose ID is required")
+		return nil, eligibilityBindings{}, "", errors.New("purpose ID is required")
 	}
 	if strings.TrimSpace(eligibility.Channel) == "" {
 		eligibility.Channel = "WHATSAPP"
@@ -51,36 +113,39 @@ func (c *Compiler) CompileForPermissions(group audiencefilter.Group, eligibility
 	if eligibility.AsOf.IsZero() {
 		eligibility.AsOf = time.Now().UTC()
 	}
-
 	builder := &sqlBuilder{}
-	organisationPlaceholder := builder.add(eligibility.OrganisationID)
-	purposePlaceholder := builder.add(eligibility.PurposeID)
-	channelPlaceholder := builder.add(strings.ToUpper(eligibility.Channel))
-	asOfPlaceholder := builder.add(eligibility.AsOf)
-
+	bindings := eligibilityBindings{
+		organisation: builder.add(eligibility.OrganisationID),
+		purpose:      builder.add(eligibility.PurposeID),
+		channel:      builder.add(strings.ToUpper(strings.TrimSpace(eligibility.Channel))),
+		asOf:         builder.add(eligibility.AsOf.UTC()),
+	}
 	segmentSQL, err := c.compileGroup(group, builder)
 	if err != nil {
-		return CompiledQuery{}, err
+		return nil, eligibilityBindings{}, "", err
 	}
+	return builder, bindings, segmentSQL, nil
+}
 
-	sql := `SELECT c.id
-FROM contacts c
-WHERE c.status = 'ACTIVE'
-  AND EXISTS (
+func activeOrganisationPredicate(b eligibilityBindings) string {
+	return `EXISTS (
     SELECT 1 FROM organisations o
-    WHERE o.id = ` + organisationPlaceholder + `::uuid
+    WHERE o.id = ` + b.organisation + `::uuid
       AND o.status = 'ACTIVE'
-  )
-  AND EXISTS (
+  )`
+}
+
+func currentConsentPredicate(contactID string, b eligibilityBindings) string {
+	return `EXISTS (
     SELECT 1
     FROM consent_grants cg
-    WHERE cg.contact_id = c.id
-      AND cg.organisation_id = ` + organisationPlaceholder + `
-      AND cg.purpose_id = ` + purposePlaceholder + `
-      AND cg.channel = ` + channelPlaceholder + `
+    WHERE cg.contact_id = ` + contactID + `
+      AND cg.organisation_id = ` + b.organisation + `
+      AND cg.purpose_id = ` + b.purpose + `
+      AND cg.channel = ` + b.channel + `
       AND cg.status = 'ACTIVE'
-      AND cg.granted_at <= ` + asOfPlaceholder + `
-      AND (cg.expires_at IS NULL OR cg.expires_at > ` + asOfPlaceholder + `)
+      AND cg.granted_at <= ` + b.asOf + `
+      AND (cg.expires_at IS NULL OR cg.expires_at > ` + b.asOf + `)
       AND NOT EXISTS (
         SELECT 1
         FROM consent_grants newer
@@ -88,56 +153,60 @@ WHERE c.status = 'ACTIVE'
           AND newer.organisation_id = cg.organisation_id
           AND newer.purpose_id = cg.purpose_id
           AND newer.channel = cg.channel
-          AND newer.granted_at <= ` + asOfPlaceholder + `
+          AND newer.granted_at <= ` + b.asOf + `
           AND (
             newer.granted_at > cg.granted_at
             OR (newer.granted_at = cg.granted_at AND newer.created_at > cg.created_at)
             OR (newer.granted_at = cg.granted_at AND newer.created_at = cg.created_at AND newer.id > cg.id)
           )
       )
-  )
-  AND NOT EXISTS (
+  )`
+}
+
+func notSuppressedPredicate(contactID string, b eligibilityBindings) string {
+	return `NOT EXISTS (
     SELECT 1
     FROM suppressions s
-    WHERE s.contact_id = c.id
+    WHERE s.contact_id = ` + contactID + `
       AND s.active = true
-      AND s.effective_at <= ` + asOfPlaceholder + `
-      AND (s.expires_at IS NULL OR s.expires_at > ` + asOfPlaceholder + `)
+      AND s.effective_at <= ` + b.asOf + `
+      AND (s.expires_at IS NULL OR s.expires_at > ` + b.asOf + `)
       AND (
         s.scope = 'GLOBAL'
-        OR (s.scope = 'ORGANISATION' AND s.organisation_id = ` + organisationPlaceholder + `)
-        OR (s.scope = 'PURPOSE' AND s.purpose_id = ` + purposePlaceholder + `)
-        OR (s.scope = 'CHANNEL' AND s.channel = ` + channelPlaceholder + `)
+        OR (s.scope = 'ORGANISATION' AND s.organisation_id = ` + b.organisation + `)
+        OR (s.scope = 'PURPOSE' AND s.purpose_id = ` + b.purpose + `)
+        OR (s.scope = 'CHANNEL' AND s.channel = ` + b.channel + `)
         OR (s.scope = 'TEMPORARY' AND (
-          s.organisation_id IS NULL OR s.organisation_id = ` + organisationPlaceholder + `
+          s.organisation_id IS NULL OR s.organisation_id = ` + b.organisation + `
         ))
       )
-  )
-  AND NOT EXISTS (
+  )`
+}
+
+func notFrequencyCappedPredicate(contactID string, b eligibilityBindings) string {
+	return `NOT EXISTS (
     SELECT 1
     FROM organisation_policy_versions op
     CROSS JOIN LATERAL jsonb_to_recordset(op.frequency_caps)
       AS fc("purposeId" text, "channel" text, "maxMessages" integer, "windowHours" integer)
-    WHERE op.organisation_id = ` + organisationPlaceholder + `::uuid
+    WHERE op.organisation_id = ` + b.organisation + `::uuid
       AND op.status = 'ACTIVE'
-      AND op.effective_from <= ` + asOfPlaceholder + `
-      AND (op.effective_to IS NULL OR op.effective_to > ` + asOfPlaceholder + `)
-      AND (coalesce(fc."purposeId", '') = '' OR fc."purposeId" = ` + purposePlaceholder + `)
-      AND upper(fc."channel") = upper(` + channelPlaceholder + `)
+      AND op.effective_from <= ` + b.asOf + `
+      AND (op.effective_to IS NULL OR op.effective_to > ` + b.asOf + `)
+      AND (coalesce(fc."purposeId", '') = '' OR fc."purposeId" = ` + b.purpose + `)
+      AND upper(fc."channel") = upper(` + b.channel + `)
       AND (
         SELECT count(*)
         FROM campaign_recipients recent
         JOIN campaigns recent_campaign ON recent_campaign.id = recent.campaign_id
-        WHERE recent.contact_id = c.id
-          AND recent_campaign.organisation_id = ` + organisationPlaceholder + `::uuid
-          AND recent_campaign.purpose_id::text = ` + purposePlaceholder + `
+        WHERE recent.contact_id = ` + contactID + `
+          AND recent_campaign.organisation_id = ` + b.organisation + `::uuid
+          AND recent_campaign.purpose_id::text = ` + b.purpose + `
           AND recent.status NOT IN ('CANCELLED','SUPPRESSED_BEFORE_SEND')
-          AND recent.authorised_at > ` + asOfPlaceholder + ` - make_interval(hours => fc."windowHours")
+          AND recent.authorised_at > ` + b.asOf + ` - make_interval(hours => fc."windowHours")
+          AND recent.authorised_at <= ` + b.asOf + `
       ) >= fc."maxMessages"
-  )
-  AND (` + segmentSQL + `)`
-
-	return CompiledQuery{SQL: sql, Args: builder.args}, nil
+  )`
 }
 
 func (c *Compiler) compileGroup(group audiencefilter.Group, builder *sqlBuilder) (string, error) {

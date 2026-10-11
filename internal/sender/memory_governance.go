@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"campaign-platform/internal/gateway"
+	"campaign-platform/internal/shared/id"
 )
 
 type MemoryGovernanceStore struct {
@@ -75,7 +76,11 @@ func (m *MemoryGovernanceStore) CreatePool(_ context.Context, v Pool, _, _ strin
 		}
 	}
 	now := time.Now().UTC()
-	v.ID = m.next("pool")
+	identifier, err := id.New()
+	if err != nil {
+		return Pool{}, err
+	}
+	v.ID = identifier
 	v.Version = 1
 	v.CreatedAt = now
 	v.UpdatedAt = now

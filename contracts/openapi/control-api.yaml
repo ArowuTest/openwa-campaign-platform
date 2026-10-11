@@ -549,12 +549,108 @@ paths:
     post:
       operationId: estimateCohort
       summary: Calculate the current eligible audience count for a governed cohort
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CompileCohortRequest' }
       responses:
-        '200': { description: Cohort estimate returned }
+        '200':
+          description: Cohort estimate returned
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [eligibleCount, calculatedAt]
+                properties:
+                  eligibleCount: { type: integer, format: int64, minimum: 0 }
+                  breakdown:
+                    type: object
+                    additionalProperties: false
+                    required: [matchedProfiles, consentEligible, consentExcluded, unsuppressed, suppressionExcluded, eligible, frequencyCapExcluded]
+                    properties:
+                      matchedProfiles: { type: integer, format: int64, minimum: 0 }
+                      consentEligible: { type: integer, format: int64, minimum: 0 }
+                      consentExcluded: { type: integer, format: int64, minimum: 0 }
+                      unsuppressed: { type: integer, format: int64, minimum: 0 }
+                      suppressionExcluded: { type: integer, format: int64, minimum: 0 }
+                      eligible: { type: integer, format: int64, minimum: 0 }
+                      frequencyCapExcluded: { type: integer, format: int64, minimum: 0 }
+                  calculatedAt: { type: string, format: date-time }
         '400': { description: Invalid request }
         '401': { description: Authentication required }
         '403': { description: Permission denied }
         '422': { description: Cohort could not be estimated }
+  /cohort-estimates:
+    post:
+      operationId: scheduleCohortEstimate
+      summary: Schedule a restart-safe governed cohort estimate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ScheduleCohortEstimateRequest' }
+      responses:
+        '202':
+          description: New durable estimate scheduled
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CohortEstimateJob' }
+        '200':
+          description: Exact idempotent replay converged on the existing estimate
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CohortEstimateJob' }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+        '409': { description: Client request ID reused with different content }
+        '422': { description: Cohort definition or estimate request rejected }
+        '503': { description: Durable cohort estimation unavailable }
+    get:
+      operationId: listCohortEstimates
+      summary: List recoverable cohort estimates for one organisation
+      parameters:
+        - { name: organisationId, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
+      responses:
+        '200':
+          description: Cohort estimates returned
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/CohortEstimateJob' }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
+        '400': { description: Missing organisation or invalid pagination request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+        '503': { description: Durable cohort estimation unavailable }
+  /cohort-estimates/{id}:
+    get:
+      operationId: getCohortEstimate
+      summary: Get one durable cohort estimate without exposing worker lease internals
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: organisationId, in: query, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Cohort estimate returned
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CohortEstimateJob' }
+        '400': { description: organisationId is required }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+        '404': { description: Cohort estimate not found for the organisation }
+        '503': { description: Durable cohort estimation unavailable }
   /segments:
     get:
       operationId: listSegments
@@ -578,8 +674,16 @@ paths:
     post:
       operationId: createSegment
       summary: Create a saved governed audience segment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateSegmentRequest' }
       responses:
         '201': { description: Segment created }
+        '400': { description: Invalid request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
         '422': { description: Segment rejected }
   /segments/{id}:
     get:
@@ -854,6 +958,31 @@ paths:
                   nextCursor: { type: string }
                   hasMore: { type: boolean }
         '404': { $ref: '#/components/responses/NotFound' }
+  /consent-purposes:
+    get:
+      operationId: listConsentPurposes
+      summary: List governed consent purposes for audience and campaign selection
+      parameters:
+        - { name: organisationId, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: consentReviewId, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: includeInactive, in: query, required: false, schema: { type: boolean, default: false } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
+      responses:
+        '200':
+          description: Governed consent-purpose inventory
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/ConsentPurpose' } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
+        '400': { description: Invalid page or includeInactive value }
+        '503': { description: Consent-purpose inventory unavailable }
   /consent-reviews:
     get:
       operationId: listConsentReviews
@@ -998,11 +1127,61 @@ paths:
         '200':
           description: Aggregate preview and row-level issues; no raw MSISDNs
         '422': { $ref: '#/components/responses/ValidationError' }
+  /campaigns/{id}:
+    get:
+      operationId: getCampaign
+      summary: Read the saved campaign aggregate for an internal platform operator
+      description: Requires campaign.read. Historical suspended organisations and retired transport sources remain readable. Does not rebind sources or authorise release. No contacts, credentials, private object keys, workspace notes or financial data are included.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid }, description: Canonical UUID of the campaign. }
+      responses:
+        '200':
+          description: Saved campaign aggregate with UTC ISO 8601 timestamps
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+              description: Sensitive operator evidence is never cached.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CampaignDetail' }
+        '400':
+          description: INVALID_CAMPAIGN_ID
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '401':
+          description: AUTHENTICATION_REQUIRED or SESSION_INVALID
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '403':
+          description: PERMISSION_DENIED
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '404':
+          description: CAMPAIGN_NOT_FOUND
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '500':
+          description: Canonical INTERNAL_ERROR without repository details
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+        '503':
+          description: CAMPAIGNS_UNAVAILABLE
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorResponse' }
+
   /campaigns:
     get:
       operationId: listCampaigns
       summary: List internal campaigns using bounded keyset pagination
       parameters:
+        - { name: organisationId, in: query, required: false, schema: { type: string, format: uuid }, description: Optional organisation scope applied server-side. }
+        - { name: status, in: query, required: false, schema: { type: string }, description: Optional exact campaign status filter applied server-side. }
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
         - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque cursor returned by the previous page. }
       responses:
@@ -1028,6 +1207,58 @@ paths:
       responses:
         '201': { description: Draft campaign created }
         '422': { $ref: '#/components/responses/ValidationError' }
+  /campaigns/{id}/readiness:
+    get:
+      operationId: getCampaignReadiness
+      summary: Read advisory preparation evidence for the saved campaign
+      description: Requires campaign.read. Read-only evidence for DRAFT through FINAL_APPROVAL_PENDING. Uses only the persisted ID and saved version; no browser forecast, approval claim or counts are accepted. Does not approve, hold capacity, schedule, send or dispatch. Final approval revalidates current evidence. READY_FOR_FINAL_REVIEW does not establish competing-reservation or deadline feasibility.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Safe ordered readiness checks. Expected missing, pending and unavailable evidence is represented in checks.
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CampaignReadiness' }
+        '400': { description: INVALID_CAMPAIGN_ID }
+        '401': { description: AUTHENTICATION_REQUIRED or SESSION_INVALID }
+        '403': { description: PERMISSION_DENIED }
+        '404': { description: CAMPAIGN_NOT_FOUND }
+        '409': { description: CAMPAIGN_VERSION_CONFLICT or CAMPAIGN_READINESS_STAGE_UNSUPPORTED. Reload changed detail or use existing execution evidence for scheduled and later stages. }
+        '500': { description: INTERNAL_ERROR with no persistence or private source details }
+        '503': { description: CAMPAIGN_READINESS_UNAVAILABLE for missing required query wiring }
+  /campaigns/{id}/draft:
+    put:
+      operationId: saveCampaignDraft
+      summary: Save governed editable DRAFT preparation fields
+      description: Requires campaign.write and authenticated actor; cookie authentication requires CSRF. Accepts a strict full replacement JSON object at most 256 KiB. Organisation, purpose and consent-review IDs must equal the saved tuple. Current governance and exact frozen provider/gateway authority are checked. Incomplete schedules are allowed; omission or null clears dates. No-op still guards current version/state under the row lock and creates no event. Does not approve, release, create routing or dispatch.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CampaignDraftSaveRequest' }
+      responses:
+        '200':
+          description: Saved CampaignDetail; version advances once only when editable fields changed
+          headers:
+            Cache-Control:
+              schema: { type: string, enum: [no-store] }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CampaignDetail' }
+        '400': { description: INVALID_JSON or INVALID_CAMPAIGN_ID }
+        '401': { description: Authentication required or invalid session }
+        '403': { description: Permission denied or CSRF validation failed }
+        '404': { description: CAMPAIGN_NOT_FOUND }
+        '409': { description: CAMPAIGN_VERSION_CONFLICT, CAMPAIGN_DRAFT_NOT_EDITABLE or CAMPAIGN_DRAFT_REFERENCES_LOCKED. Preserve unsaved values and explicitly reconcile current server state. }
+        '422': { description: CAMPAIGN_DRAFT_INVALID with safe field codes }
+        '500': { description: INTERNAL_ERROR with no persistence details }
+        '503': { description: CAMPAIGN_DRAFT_GOVERNANCE_UNAVAILABLE or campaign services unavailable }
   /campaigns/{id}/clone:
     post:
       operationId: cloneCampaign
@@ -1681,7 +1912,212 @@ paths:
         '400': { description: Invalid request }
         '401': { description: Authentication required }
         '403': { description: Permission denied }
+  /audience-import-upload-sessions:
+    post:
+      operationId: createAudienceImportUploadSession
+      summary: Create or replay a resumable governed audience-source upload session
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string, minLength: 16, maxLength: 128, pattern: '^[A-Za-z0-9._:-]+$' }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateAudienceUploadSessionRequest' }
+      responses:
+        '200':
+          description: Existing exact upload session replayed
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AudienceUploadSessionEnvelope' }
+        '201':
+          description: Upload session created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AudienceUploadSessionEnvelope' }
+        '400': { description: Invalid governed upload request }
+        '409': { description: Idempotency key reused with different upload metadata }
+        '413': { description: Source exceeds configured upload limit }
+        '503': { description: Resumable upload is unavailable }
+  /audience-import-upload-sessions/{id}:
+    get:
+      operationId: getAudienceImportUploadSession
+      summary: Resume or inspect a durable audience-source upload session
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Upload session returned
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AudienceUploadSessionEnvelope' }
+        '404': { description: Upload session not found }
+        '503': { description: Resumable upload is unavailable }
+  /audience-import-upload-sessions/{id}/parts/{part}:
+    put:
+      operationId: putAudienceImportUploadPart
+      summary: Upload or replay one bounded immutable source part through the relay transport
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: part, in: path, required: true, schema: { type: integer, minimum: 1, maximum: 1024 } }
+        - name: X-Content-SHA256
+          in: header
+          required: true
+          schema: { type: string, pattern: '^[0-9a-f]{64}$' }
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        '200':
+          description: Part accepted or exact replay converged
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AudienceUploadPartEnvelope' }
+        '404': { description: Upload session not found }
+        '409': { description: Part conflicts with immutable evidence already recorded }
+        '410': { description: Upload session expired }
+        '413': { description: Part exceeds the server-declared size }
+        '422': { description: Part or session state is invalid }
+  /audience-import-upload-sessions/{id}/parts/{part}/target:
+    post:
+      operationId: createAudienceImportDirectUploadPartTarget
+      summary: Create a short-lived one-part direct object-store upload target when that transport is enabled
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: part, in: path, required: true, schema: { type: integer, minimum: 1, maximum: 1024 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DirectUploadPartRequest' }
+      responses:
+        '200':
+          description: Short-lived target issued, or the exact part was already durably recorded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AudienceDirectUploadPartTargetEnvelope' }
+        '404': { description: Upload session not found }
+        '409': { description: Direct transport unavailable or part conflicts with immutable evidence }
+        '410': { description: Upload session expired }
+        '422': { description: Part or session state is invalid }
+  /audience-import-upload-sessions/{id}/parts/{part}/confirm:
+    post:
+      operationId: confirmAudienceImportDirectUploadPart
+      summary: Verify the directly uploaded quarantine object and record immutable part progress
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: part, in: path, required: true, schema: { type: integer, minimum: 1, maximum: 1024 } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DirectUploadPartRequest' }
+      responses:
+        '200':
+          description: Direct part confirmed or exact replay converged
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AudienceUploadPartEnvelope' }
+        '404': { description: Upload session not found }
+        '409': { description: Direct transport unavailable, object absent, or immutable part evidence conflicts }
+        '410': { description: Upload session expired }
+        '422': { description: Part or session state is invalid }
+  /audience-import-upload-sessions/{id}/complete:
+    post:
+      operationId: completeAudienceImportUploadSession
+      summary: Verify durable part accounting and mark the source ready for asynchronous finalisation
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UploadSessionVersionRequest' }
+      responses:
+        '200':
+          description: Upload session marked UPLOADED
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AudienceUploadSessionEnvelope' }
+        '404': { description: Upload session not found }
+        '409': { description: Optimistic version conflict }
+        '410': { description: Upload session expired }
+        '422': { description: Upload manifest is incomplete or session state is invalid }
+  /audience-import-upload-sessions/{id}/abort:
+    post:
+      operationId: abortAudienceImportUploadSession
+      summary: Abort a resumable upload before asynchronous finalisation takes ownership
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AbortUploadSessionRequest' }
+      responses:
+        '200':
+          description: Upload session aborted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AudienceUploadSessionEnvelope' }
+        '404': { description: Upload session not found }
+        '409': { description: Optimistic version conflict }
+        '422': { description: Session cannot be aborted from its current state }
   /audience-imports:
+    get:
+      operationId: listAudienceImports
+      summary: List recent audience imports for one organisation without recipient-level data
+      parameters:
+        - { name: organisationId, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
+      responses:
+        '200':
+          description: Audience import summaries returned
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [id, organisationId, consentReviewId, purposeId, sourceName, originalFilename, byteSize, status, malwareStatus, uploadedRows, validRows, invalidRows, duplicateRows, suppressedRows, insertedContacts, updatedContacts, createdAt, updatedAt]
+                      properties:
+                        id: { type: string, format: uuid }
+                        organisationId: { type: string, format: uuid }
+                        consentReviewId: { type: string, format: uuid }
+                        purposeId: { type: string, format: uuid }
+                        sourceName: { type: string }
+                        sourceSystem: { type: string }
+                        originalFilename: { type: string }
+                        byteSize: { type: integer, format: int64, minimum: 1 }
+                        status: { type: string }
+                        malwareStatus: { type: string }
+                        uploadedRows: { type: integer, format: int64, minimum: 0 }
+                        validRows: { type: integer, format: int64, minimum: 0 }
+                        invalidRows: { type: integer, format: int64, minimum: 0 }
+                        duplicateRows: { type: integer, format: int64, minimum: 0 }
+                        suppressedRows: { type: integer, format: int64, minimum: 0 }
+                        insertedContacts: { type: integer, format: int64, minimum: 0 }
+                        updatedContacts: { type: integer, format: int64, minimum: 0 }
+                        failureReason: { type: string }
+                        createdAt: { type: string, format: date-time }
+                        updatedAt: { type: string, format: date-time }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
+        '400': { description: Missing organisation or invalid pagination request }
+        '401': { description: Authentication required }
+        '403': { description: Permission denied }
+        '503': { description: Audience import inventory unavailable }
     post:
       operationId: intakeAudienceImport
       summary: intakeAudienceImport
@@ -1842,9 +2278,13 @@ paths:
   /auth/me:
     get:
       operationId: me
-      summary: me
+      summary: Return the authoritative browser operator/session context
       responses:
-        '200': { description: Request completed }
+        '200':
+          description: Authenticated operator context returned
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthenticatedOperatorContext' }
         '400': { description: Invalid request }
         '401': { description: Authentication required }
         '403': { description: Permission denied }
@@ -1861,19 +2301,20 @@ paths:
             schema:
               type: object
               additionalProperties: false
-              required: [definition, definitionVersion, consentPolicyVersion, configurationVersion]
+              required: [definitionVersion, estimateId]
+              oneOf:
+                - required: [segmentId]
+                - required: [definition]
               properties:
-                definition: { type: object }
-                segmentId: { type: string }
+                definition: { $ref: '#/components/schemas/FilterGroup' }
+                segmentId: { type: string, format: uuid }
                 definitionVersion: { type: integer, minimum: 1 }
-                consentPolicyVersion: { type: string, minLength: 1 }
-                configurationVersion: { type: string, minLength: 1 }
-                asOf: { type: string, format: date-time }
+                estimateId: { type: string, format: uuid }
       responses:
-        '202': { description: Audience materialisation scheduled }
-        '404': { description: Campaign not found }
+        '202': { description: Audience materialisation scheduled from completed durable estimate evidence }
+        '404': { description: Campaign or durable cohort estimate not found }
         '409': { description: Campaign is not building an audience }
-        '422': { description: Cohort invalid, empty or exceeds campaign entitlement }
+        '422': { description: Durable estimate missing, incomplete, mismatched, empty or exceeds campaign entitlement }
     get:
       operationId: listAudienceMaterialisations
       summary: List durable audience materialisation jobs for a campaign
@@ -1999,11 +2440,23 @@ paths:
       summary: releaseCampaignAudience
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedVersion]
+              properties:
+                expectedVersion: { type: integer, minimum: 1 }
       responses:
         '200': { description: Request completed }
         '400': { description: Invalid request }
         '401': { description: Authentication required }
         '403': { description: Permission denied }
+        '409': { description: Campaign version, pilot evidence or entitlement conflict }
+        '422': { description: Pilot admission or release evidence rejected }
   /consent-events:
     get:
       operationId: listConsentEvents
@@ -3975,6 +4428,178 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
   schemas:
+    AuthenticatedOperatorContext:
+      type: object
+      additionalProperties: false
+      required: [id, email, displayName, permissions, sessionId, environment, classification, scopeType, organisationIds]
+      properties:
+        id: { type: string }
+        email: { type: string, format: email }
+        displayName: { type: string }
+        permissions:
+          type: array
+          uniqueItems: true
+          items: { type: string }
+        sessionId: { type: string }
+        lastLoginAt: { type: string, format: date-time, nullable: true }
+        environment: { type: string, minLength: 1, maxLength: 64 }
+        classification: { type: string, minLength: 1, maxLength: 64 }
+        scopeType:
+          type: string
+          enum: [PLATFORM]
+          description: Current identity authority is platform-scoped; organisation-scoped user bindings are not yet implemented.
+        organisationIds:
+          type: array
+          maxItems: 0
+          items: { type: string }
+          description: Empty while identity authority remains platform-scoped.
+    AudienceImportColumnMapping:
+      type: object
+      additionalProperties: false
+      required: [msisdn]
+      properties:
+        worksheet: { type: string }
+        msisdn: { type: string, minLength: 1, maxLength: 250 }
+        country: { type: string, maxLength: 250 }
+        state: { type: string, maxLength: 250 }
+        lga: { type: string, maxLength: 250 }
+        age: { type: string, maxLength: 250 }
+        gender: { type: string, maxLength: 250 }
+    CreateAudienceUploadSessionRequest:
+      type: object
+      additionalProperties: false
+      required: [organisationId, consentReviewId, purposeId, channel, wordingVersion, sourceName, originalFilename, templateVersion, mapping, updatePolicy, expectedBytes]
+      properties:
+        organisationId: { type: string, format: uuid }
+        consentReviewId: { type: string, format: uuid }
+        purposeId: { type: string, format: uuid }
+        channel: { type: string, enum: [WHATSAPP] }
+        wordingVersion: { type: string, minLength: 1, maxLength: 250 }
+        sourceName: { type: string, minLength: 1, maxLength: 500 }
+        sourceSystem: { type: string, maxLength: 250 }
+        defaultCountryIso2: { type: string, pattern: '^[A-Za-z]{2}$' }
+        originalFilename: { type: string, minLength: 1, maxLength: 255 }
+        templateVersion: { type: string, minLength: 1, maxLength: 250 }
+        mappingDefinitionId: { type: string, format: uuid }
+        mapping: { $ref: '#/components/schemas/AudienceImportColumnMapping' }
+        updatePolicy: { type: string, enum: [INSERT_ONLY, FILL_NULL, NEWEST_SOURCE, TRUSTED_SOURCE, MANUAL_CONFLICT] }
+        expectedBytes: { type: integer, format: int64, minimum: 1 }
+    AudienceUploadPart:
+      type: object
+      additionalProperties: false
+      required: [number, offset, expectedBytes, state]
+      properties:
+        number: { type: integer, minimum: 1, maximum: 1024 }
+        offset: { type: integer, format: int64, minimum: 0 }
+        expectedBytes: { type: integer, format: int64, minimum: 1, maximum: 33554432 }
+        state: { type: string, enum: [PENDING, UPLOADED] }
+        sha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        uploadedBytes: { type: integer, format: int64, minimum: 0 }
+        uploadedAt: { type: string, format: date-time }
+      description: Storage object keys are intentionally not exposed.
+    AudienceUploadSession:
+      type: object
+      additionalProperties: false
+      required: [id, organisationId, consentReviewId, purposeId, channel, wordingVersion, sourceName, originalFilename, templateVersion, mapping, updatePolicy, uploadedBy, expectedBytes, uploadedBytes, partSize, partCount, uploadedParts, state, version, expiresAt, createdAt, updatedAt, parts]
+      properties:
+        id: { type: string, format: uuid }
+        organisationId: { type: string, format: uuid }
+        consentReviewId: { type: string, format: uuid }
+        purposeId: { type: string, format: uuid }
+        channel: { type: string, enum: [WHATSAPP] }
+        wordingVersion: { type: string }
+        sourceName: { type: string }
+        sourceSystem: { type: string }
+        defaultCountryIso2: { type: string, pattern: '^[A-Z]{2}$' }
+        originalFilename: { type: string }
+        templateVersion: { type: string }
+        mappingDefinitionId: { type: string, format: uuid }
+        mapping: { $ref: '#/components/schemas/AudienceImportColumnMapping' }
+        updatePolicy: { type: string, enum: [INSERT_ONLY, FILL_NULL, NEWEST_SOURCE, TRUSTED_SOURCE, MANUAL_CONFLICT] }
+        uploadedBy: { type: string, format: uuid }
+        expectedBytes: { type: integer, format: int64, minimum: 1 }
+        uploadedBytes: { type: integer, format: int64, minimum: 0 }
+        partSize: { type: integer, format: int64, minimum: 5242880, maximum: 33554432 }
+        partCount: { type: integer, minimum: 1, maximum: 1024 }
+        uploadedParts: { type: integer, minimum: 0, maximum: 1024 }
+        state: { type: string, enum: [CREATED, UPLOADING, UPLOADED, FINALISING, IMPORT_CREATED, ABORTED, EXPIRED, FAILED] }
+        version: { type: integer, format: int64, minimum: 1 }
+        failureReason: { type: string }
+        expiresAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        parts:
+          type: array
+          maxItems: 1024
+          items: { $ref: '#/components/schemas/AudienceUploadPart' }
+      description: Client request keys and storage object keys are never serialized.
+    AudienceUploadSessionEnvelope:
+      type: object
+      additionalProperties: false
+      required: [transport, transports, preferredTransport, session]
+      properties:
+        transport:
+          type: string
+          enum: [DIRECT_S3, RELAY]
+          description: Backward-compatible alias of preferredTransport.
+        transports:
+          type: array
+          minItems: 1
+          maxItems: 2
+          uniqueItems: true
+          items: { type: string, enum: [DIRECT_S3, RELAY] }
+        preferredTransport: { type: string, enum: [DIRECT_S3, RELAY] }
+        session: { $ref: '#/components/schemas/AudienceUploadSession' }
+    DirectUploadPartRequest:
+      type: object
+      additionalProperties: false
+      required: [sha256]
+      properties:
+        sha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+    DirectUploadTarget:
+      type: object
+      additionalProperties: false
+      required: [method, url, headers, expectedBytes, expiresAt]
+      properties:
+        method: { type: string, enum: [PUT] }
+        url:
+          type: string
+          format: uri
+          description: Ephemeral one-part upload capability. Never persist or log this value.
+        headers:
+          type: object
+          additionalProperties: { type: string }
+          description: Exact signed request headers required by the object store.
+        expectedBytes: { type: integer, format: int64, minimum: 1, maximum: 33554432 }
+        expiresAt: { type: string, format: date-time }
+    AudienceDirectUploadPartTargetEnvelope:
+      type: object
+      additionalProperties: false
+      required: [partNumber, alreadyUploaded]
+      properties:
+        partNumber: { type: integer, minimum: 1, maximum: 1024 }
+        alreadyUploaded: { type: boolean }
+        target: { $ref: '#/components/schemas/DirectUploadTarget' }
+    AudienceUploadPartEnvelope:
+      type: object
+      additionalProperties: false
+      required: [changed, session]
+      properties:
+        changed: { type: boolean }
+        session: { $ref: '#/components/schemas/AudienceUploadSession' }
+    UploadSessionVersionRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 1 }
+    AbortUploadSessionRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, reason]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 1 }
+        reason: { type: string, minLength: 8, maxLength: 1000 }
     MetaSenderDraftRequest:
       type: object
       required: [organisationId, senderPoolId, wabaId, phoneNumberId, displayName, businessPhoneDisplay, credentialKey, graphApiVersion, reason]
@@ -4213,6 +4838,7 @@ components:
           items: { $ref: '#/components/schemas/FilterGroup' }
     CompileCohortRequest:
       type: object
+      additionalProperties: false
       required: [definition, organisationId, purposeId]
       properties:
         definition: { $ref: '#/components/schemas/FilterGroup' }
@@ -4220,6 +4846,75 @@ components:
         purposeId: { type: string, format: uuid }
         channel: { type: string, default: WHATSAPP }
         asOf: { type: string, format: date-time }
+    ScheduleCohortEstimateRequest:
+      type: object
+      additionalProperties: false
+      required: [definition, organisationId, purposeId, clientRequestId]
+      properties:
+        definition: { $ref: '#/components/schemas/FilterGroup' }
+        organisationId: { type: string, format: uuid }
+        purposeId: { type: string, format: uuid }
+        channel: { type: string, enum: [WHATSAPP], default: WHATSAPP }
+        clientRequestId: { type: string, minLength: 8, maxLength: 200 }
+    CohortEligibilityBreakdown:
+      type: object
+      additionalProperties: false
+      required: [matchedProfiles, consentEligible, consentExcluded, unsuppressed, suppressionExcluded, eligible, frequencyCapExcluded]
+      properties:
+        matchedProfiles: { type: integer, format: int64, minimum: 0 }
+        consentEligible: { type: integer, format: int64, minimum: 0 }
+        consentExcluded: { type: integer, format: int64, minimum: 0 }
+        unsuppressed: { type: integer, format: int64, minimum: 0 }
+        suppressionExcluded: { type: integer, format: int64, minimum: 0 }
+        eligible: { type: integer, format: int64, minimum: 0 }
+        frequencyCapExcluded: { type: integer, format: int64, minimum: 0 }
+    CohortEstimateResult:
+      type: object
+      additionalProperties: false
+      required: [eligibleCount, breakdown, calculatedAt]
+      properties:
+        eligibleCount: { type: integer, format: int64, minimum: 0 }
+        breakdown: { $ref: '#/components/schemas/CohortEligibilityBreakdown' }
+        calculatedAt: { type: string, format: date-time }
+    CohortEstimateEvidence:
+      type: object
+      additionalProperties: false
+      properties:
+        consentReviewId: { type: string, format: uuid }
+        consentReviewVersion: { type: integer, format: int64, minimum: 1 }
+        consentWordingVersion: { type: string }
+        organisationPolicyId: { type: string, format: uuid }
+        organisationPolicyVersion: { type: integer, format: int64, minimum: 1 }
+    CohortEstimateJob:
+      type: object
+      additionalProperties: false
+      required: [id, organisationId, purposeId, channel, asOf, requestedBy, clientRequestId, status, attemptCount, maxAttempts, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        organisationId: { type: string, format: uuid }
+        purposeId: { type: string, format: uuid }
+        channel: { type: string, enum: [WHATSAPP] }
+        asOf: { type: string, format: date-time }
+        requestedBy: { type: string, format: uuid }
+        clientRequestId: { type: string }
+        status: { type: string, enum: [PENDING, PROCESSING, COMPLETED, DEAD_LETTER, CANCELLED] }
+        attemptCount: { type: integer, minimum: 0 }
+        maxAttempts: { type: integer, minimum: 1 }
+        lastErrorCode: { type: string }
+        result: { $ref: '#/components/schemas/CohortEstimateResult' }
+        evidence: { $ref: '#/components/schemas/CohortEstimateEvidence' }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        completedAt: { type: string, format: date-time }
+    CreateSegmentRequest:
+      type: object
+      additionalProperties: false
+      required: [organisationId, name, definition]
+      properties:
+        organisationId: { type: string, format: uuid }
+        name: { type: string, minLength: 1, maxLength: 160 }
+        description: { type: string, maxLength: 2000 }
+        definition: { $ref: '#/components/schemas/FilterGroup' }
     CreateOrganisation:
       type: object
       required: [legalName]
@@ -4245,6 +4940,24 @@ components:
         expectedVersion: { type: integer, minimum: 1 }
         status: { type: string, enum: [ACTIVE, SUSPENDED, UNDER_REVIEW, CLOSED] }
         reason: { type: string, minLength: 1 }
+    ConsentPurpose:
+      type: object
+      additionalProperties: false
+      required: [id, code, name, channel, wordingVersion, active, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        organisationId: { type: string, format: uuid }
+        consentReviewId: { type: string, format: uuid }
+        code: { type: string, minLength: 1 }
+        name: { type: string, minLength: 1 }
+        description: { type: string }
+        channel: { type: string, enum: [WHATSAPP] }
+        wordingVersion: { type: string, minLength: 1 }
+        permittedMessageCategory: { type: string }
+        expiresAfterDays: { type: integer, minimum: 1 }
+        active: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
     CreateConsentReview:
       type: object
       additionalProperties: false
@@ -4556,6 +5269,156 @@ components:
         maximumMessagesPerRecipient: { type: integer, enum: [1], default: 1 }
         senderPool: { type: string, description: Legacy display label; governed routing uses transport.senderPoolId. }
         transport: { $ref: '#/components/schemas/TransportSelectionRequest' }
+    CampaignDraftSaveRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, reason, name, organisationId, purposeId, consentReviewId, maximumUniqueRecipients, maximumMessagesPerRecipient, timezone, transport]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 1 }
+        reason: { type: string, minLength: 8, maxLength: 1000, description: Trimmed operator reason. }
+        name: { type: string, minLength: 1, maxLength: 250, pattern: '\S' }
+        organisationId: { type: string, format: uuid, description: Locked saved organisation ID. }
+        purposeId: { type: string, format: uuid, description: Locked saved purpose ID. }
+        consentReviewId: { type: string, format: uuid, description: Locked saved review ID. }
+        maximumUniqueRecipients: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991 }
+        maximumMessagesPerRecipient: { type: integer, const: 1 }
+        requestedStartAt: { type: [string, "null"], format: date-time, description: UTC instant; omission or null clears. }
+        completionDeadlineAt: { type: [string, "null"], format: date-time, description: UTC instant; if both dates supplied must be later than start. Omission or null clears. }
+        timezone: { type: string, minLength: 1, description: Valid IANA timezone; does not reinterpret stored UTC instants. }
+        quietHoursStart: { type: string, pattern: '^$|^([01][0-9]|2[0-3]):[0-5][0-9]$', description: Paired with quietHoursEnd; omission or empty clears both. }
+        quietHoursEnd: { type: string, pattern: '^$|^([01][0-9]|2[0-3]):[0-5][0-9]$', description: Paired with quietHoursStart and must be unequal. }
+        transport: { $ref: '#/components/schemas/DraftTransportRequest' }
+    DraftTransportRequest:
+      type: object
+      additionalProperties: false
+      required: [channel, provider, engine, routingMode, gatewayPoolId, senderPoolId, adapterVersion, routingPolicyVersion, capacityEvidenceVersion, fallbackMode, requiredCapabilities]
+      properties:
+        channel: { type: string, const: WHATSAPP }
+        provider: { type: string, const: OPENWA }
+        engine: { type: string, enum: [WHATSAPP_WEB_JS, BAILEYS] }
+        routingMode: { type: string, const: SENDER_POOL }
+        gatewayPoolId: { type: string, format: uuid }
+        senderPoolId: { type: string, format: uuid }
+        adapterVersion: { type: string, minLength: 1, maxLength: 100, pattern: '\S' }
+        routingPolicyVersion: { type: string, minLength: 1, maxLength: 100, pattern: '\S' }
+        capacityEvidenceVersion: { type: string, minLength: 1, maxLength: 100, pattern: '\S' }
+        fallbackMode: { type: string, const: NONE }
+        requiredCapabilities:
+          type: array
+          uniqueItems: true
+          items: { type: string, enum: [SEND_TEXT, SEND_TEMPLATE, SEND_IMAGE, SEND_VIDEO, SEND_DOCUMENT, DELIVERY_EVENTS, READ_EVENTS, INBOUND_MESSAGES, PAIRING_QR, PAIRING_CODE] }
+    CampaignReadiness:
+      type: object
+      additionalProperties: false
+      required: ["campaignId","campaignVersion","campaignStatus","assessedAt","state","readyForFinalReview","checks","limitations"]
+      properties:
+        campaignId: {"type":"string","format":"uuid"}
+        campaignVersion: {"type":"integer","format":"int64","minimum":1,"maximum":9007199254740991}
+        campaignStatus: {"type":"string","enum":["DRAFT","CONSENT_REVIEW_PENDING","CONSENT_APPROVED","AUDIENCE_BUILDING","AUDIENCE_VALIDATED","MESSAGE_REVIEW_PENDING","MESSAGE_APPROVED","COMMERCIAL_APPROVED","FINAL_APPROVAL_PENDING"]}
+        assessedAt: {"type":"string","format":"date-time","description":"UTC ISO 8601 instant."}
+        effectiveStartAt: {"type":"string","format":"date-time","description":"UTC ISO 8601 instant."}
+        state: {"type":"string","enum":["BLOCKED","REQUIRES_REVIEW","READY_FOR_FINAL_REVIEW"]}
+        readyForFinalReview: {"type":"boolean","description":"Derived only from state; grants no approval or dispatch authority."}
+        checks: {"type":"array","minItems":12,"maxItems":12,"items":{"$ref":"#/components/schemas/ReadinessCheck"}}
+        capacity: {"$ref":"#/components/schemas/CapacityPreview"}
+        limitations: {"type":"array","minItems":1,"items":{"type":"string","minLength":1}}
+    ReadinessCheck:
+      type: object
+      additionalProperties: false
+      required: ["key","status","code","message","remediation","evidence"]
+      properties:
+        key: {"type":"string","enum":["organisation","purpose","consent","audience","message","transport","schedule","capacity","pilot","commercial","maintenance","finalReview"]}
+        status: {"type":"string","enum":["PASS","BLOCKED","PENDING_REVIEW","UNAVAILABLE","NOT_APPLICABLE"]}
+        code: {"type":"string","minLength":1}
+        message: {"type":"string","minLength":1}
+        remediation: {"type":"string","minLength":1}
+        evidence: {"type":"array","items":{"$ref":"#/components/schemas/EvidenceReference"}}
+    EvidenceReference:
+      type: object
+      additionalProperties: false
+      required: ["kind","id"]
+      properties:
+        kind: {"type":"string","minLength":1}
+        id: {"type":"string","minLength":1}
+        version: {"type":"integer","format":"int64","minimum":1,"maximum":9007199254740991}
+        hash: {"type":"string","minLength":1}
+        status: {"type":"string","minLength":1}
+        observedAt: {"type":"string","format":"date-time","description":"UTC ISO 8601 instant."}
+    CapacityPreview:
+      type: object
+      additionalProperties: false
+      required: ["senderPoolId","gatewayPoolId","healthySessions","healthyNodes","minimumHealthyNodes","availableMessagesPerMinute","availableHourlyUnits","availableDailyUnits","safetyMarginPercent","basisRecipientCount","basis","measurementAsOf","classification","reasons"]
+      properties:
+        senderPoolId: {"type":"string","format":"uuid"}
+        gatewayPoolId: {"type":"string","format":"uuid"}
+        healthySessions: {"type":"integer","format":"int64","minimum":0,"maximum":9007199254740991}
+        healthyNodes: {"type":"integer","format":"int64","minimum":0,"maximum":9007199254740991}
+        minimumHealthyNodes: {"type":"integer","format":"int64","minimum":0,"maximum":9007199254740991}
+        availableMessagesPerMinute: {"type":"integer","format":"int64","minimum":0,"maximum":9007199254740991}
+        availableHourlyUnits: {"type":"integer","format":"int64","minimum":0,"maximum":9007199254740991}
+        availableDailyUnits: {"type":"integer","format":"int64","minimum":0,"maximum":9007199254740991}
+        safetyMarginPercent: {"type":"integer","format":"int64","minimum":0,"maximum":90}
+        basisRecipientCount: {"type":"integer","format":"int64","minimum":0,"maximum":9007199254740991}
+        basis: {"type":"string","enum":["SNAPSHOT","AUTHORISED_MAXIMUM"]}
+        requiredMessagesPerMinute: {"type":"number","exclusiveMinimum":0}
+        projectedCompletionAt: {"type":"string","format":"date-time","description":"UTC ISO 8601 instant."}
+        measurementAsOf: {"type":"string","format":"date-time","description":"Aggregate assessment time with fresh node/session heartbeats, not provider delivery freshness."}
+        classification: {"type":"string","enum":["ADVISORY_ONLY","BLOCKED"]}
+        reasons: {"type":"array","items":{"type":"string","minLength":1},"description":"Includes RESERVATION_WINDOW_FEASIBILITY_NOT_ASSESSED; dynamic competing campaign holds are not deducted."}
+    CampaignDetail:
+      type: object
+      additionalProperties: false
+      required: [id, organisationId, name, purposeId, consentReviewId, status, timezone, maximumUniqueRecipients, maximumMessagesPerRecipient, eligibleAudienceCount, transport, createdBy, createdAt, updatedAt, version]
+      properties:
+        id: { type: string, format: uuid, readOnly: true }
+        organisationId: { type: string, format: uuid, readOnly: true }
+        name: { type: string }
+        purposeId: { type: string, readOnly: true }
+        consentReviewId: { type: string, format: uuid, readOnly: true }
+        status: { type: string, readOnly: true }
+        requestedStartAt: { type: string, format: date-time }
+        completionDeadlineAt: { type: string, format: date-time }
+        timezone: { type: string }
+        quietHoursStart: { type: string }
+        quietHoursEnd: { type: string }
+        maximumUniqueRecipients: { type: integer, format: int64 }
+        maximumMessagesPerRecipient: { type: integer }
+        audienceSnapshotId: { type: string, format: uuid, readOnly: true }
+        audienceSnapshotHash: { type: string, readOnly: true }
+        eligibleAudienceCount: { type: integer, format: int64, readOnly: true }
+        messageVersionId: { type: string, format: uuid, readOnly: true }
+        messageContentHash: { type: string, readOnly: true }
+        senderPool: { type: string }
+        transport: { $ref: '#/components/schemas/CampaignTransport' }
+        createdBy: { type: string, readOnly: true }
+        finalApprovedBy: { type: string, readOnly: true }
+        commercialApprovalId: { type: string, format: uuid, readOnly: true }
+        pauseReason: { type: string, readOnly: true }
+        createdAt: { type: string, format: date-time, readOnly: true }
+        updatedAt: { type: string, format: date-time, readOnly: true }
+        version: { type: integer, format: int64, readOnly: true }
+    CampaignTransport:
+      type: object
+      additionalProperties: false
+      required: [channel, provider, engine, routingMode, adapterVersion, fallbackMode, routingPolicyVersion, capacityEvidenceVersion]
+      properties:
+        channel: { type: string }
+        provider: { type: string, enum: [OPENWA, META] }
+        engine: { type: string, enum: [WHATSAPP_WEB_JS, BAILEYS, CLOUD_API] }
+        routingMode: { type: string, enum: [SPECIFIC_SESSION, SENDER_POOL] }
+        gatewayPoolId: { type: string, format: uuid, readOnly: true }
+        gatewayPoolVersion: { type: integer, format: int64, readOnly: true }
+        metaSenderId: { type: string, format: uuid, readOnly: true }
+        sessionId: { type: string, format: uuid, readOnly: true }
+        senderPoolId: { type: string, format: uuid, readOnly: true }
+        adapterVersion: { type: string, readOnly: true }
+        providerDefinitionId: { type: string, format: uuid, readOnly: true }
+        providerDefinitionVersion: { type: integer, format: int64, readOnly: true }
+        requiredCapabilities: { type: array, items: { type: string } }
+        fallbackMode: { type: string, enum: [NONE] }
+        routingPolicyVersion: { type: string, readOnly: true }
+        capacityEvidenceVersion: { type: string, readOnly: true }
+
     CampaignMaterialAmendment:
       type: object
       required: [expectedVersion, reason]

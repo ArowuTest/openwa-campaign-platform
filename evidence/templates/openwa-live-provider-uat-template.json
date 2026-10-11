@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "evidence_type": "openwa-live-provider-uat",
+  "observed_at": null,
+  "source_commit": "daa9f3ddede0ecc5b7d6a52e579fba140a0c5e8d",
+  "target_environment": "production",
+  "core_uat_complete": false,
+  "release_certification_claimed": false,
+  "organisation": {
+    "id": null,
+    "status": "PENDING",
+    "evidence_ref": null
+  },
+  "consent": {
+    "review_id": null,
+    "status": "PENDING",
+    "offline_validation_ref": null
+  },
+  "test_recipient": {
+    "id": null,
+    "masked_msisdn": "+234******999",
+    "status": "PENDING",
+    "evidence_ref": null
+  },
+  "sender_session": {
+    "id": null,
+    "masked_msisdn": "+234******321",
+    "engine": "WHATSAPP_WEB_JS",
+    "sender_pool_id": null,
+    "gateway_pool_id": null,
+    "status": "PENDING",
+    "pairing_evidence_ref": null,
+    "ready_evidence_ref": null,
+    "qr_persisted": false
+  },
+  "campaign": {
+    "id": null,
+    "status": "PENDING",
+    "message_version_id": null,
+    "evidence_ref": null
+  },
+  "controlled_test": {
+    "id": null,
+    "status": "PENDING",
+    "evidence_ref": null
+  },
+  "routing": {
+    "routing_plan_id": null,
+    "reservation_id": null,
+    "reservation_status": "PENDING",
+    "evidence_ref": null
+  },
+  "text_send": {
+    "provider_accepted": false,
+    "sent": false,
+    "delivered": false,
+    "read": false,
+    "evidence_ref": null
+  },
+  "media_send": {
+    "provider_accepted": false,
+    "sent": false,
+    "delivered": false,
+    "read": false,
+    "evidence_ref": null
+  },
+  "inbound_reply": {
+    "received": false,
+    "evidence_ref": null
+  },
+  "reconnect": {
+    "disconnect_observed": false,
+    "ready_after_reconnect": false,
+    "evidence_ref": null
+  },
+  "unknown_outcome_exercise": {
+    "status": "NOT_RUN",
+    "evidence_ref": null,
+    "duplicate_send_observed": false
+  },
+  "operational_release_evidence": {
+    "backup_restore": {
+      "status": "NOT_RUN",
+      "evidence_ref": null
+    },
+    "monitoring": {
+      "status": "NOT_RUN",
+      "evidence_ref": null
+    },
+    "capacity": {
+      "status": "NOT_RUN",
+      "evidence_ref": null
+    },
+    "security": {
+      "status": "NOT_RUN",
+      "evidence_ref": null
+    },
+    "rollback": {
+      "status": "NOT_RUN",
+      "evidence_ref": null
+    }
+  },
+  "notes": []
+}

@@ -302,6 +302,24 @@ FOR UPDATE`, planID)
 	return campaignID, statuses, nil
 }
 
+func validateHeldRoutingReservations(
+	ctx context.Context,
+	executor routingMutationExecutor,
+	planID string,
+	campaignID string,
+) error {
+	_, statuses, err := lockRoutingReservations(ctx, executor, planID, campaignID)
+	if err != nil {
+		return err
+	}
+	for _, status := range statuses {
+		if status != "HELD" {
+			return ErrRoutingPlanConflict
+		}
+	}
+	return nil
+}
+
 func activateRoutingReservations(
 	ctx context.Context,
 	executor routingMutationExecutor,

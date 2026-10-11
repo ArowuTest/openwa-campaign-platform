@@ -1,0 +1,257 @@
+{
+  "schema_version": 1,
+  "evidence_type": "openwa-champion-hosting-integrated-candidate",
+  "observed_at": "2026-10-06T02:03:31+01:00",
+  "branch": "work/champion-hosting-integration-20261005",
+  "base_head": "1511b73f6fff123dca49835fb2a0ddcb9d3093fc",
+  "current_head": "1511b73f6fff123dca49835fb2a0ddcb9d3093fc",
+  "candidate_fingerprint_sha256": "8e25f064ddddff1f1e6d124ea9e5f65d46d584b07e640b5d79c758e774b50b96",
+  "candidate_fingerprint_scope": "tracked diff plus sorted untracked file paths and SHA-256 values, excluding production-admin-web-plan-2026-10-05.json and the hosting/integrated evidence manifests to avoid self-reference",
+  "source_state": {
+    "dirty": true,
+    "staged": false,
+    "committed": false,
+    "pushed": false,
+    "deployed": false,
+    "acceptance_claimed": true
+  },
+  "composition": {
+    "champion_parent": "work/champion-integration-20261005-v3",
+    "hosting_parent": "work/admin-web-hosting-20261005",
+    "parent_worktrees_modified": false,
+    "merge_boundary": "full Day-1 operator console/backend candidate plus hardened Railway admin-web runtime proxy/deployment contract"
+  },
+  "frontend": {
+    "framework": "Next.js 16.3.8 / React 19 / TypeScript 5.9",
+    "operator_page_routes": 15,
+    "runtime_routes": [
+      "/api/[...path]",
+      "/healthz"
+    ],
+    "verification": [
+      {
+        "kind": "unified_frontend_tests",
+        "status": "PASS",
+        "summary": "21/21 tests: audience builder 5, hosting 6, navigation 4, safety 6"
+      },
+      {
+        "kind": "lint",
+        "status": "PASS",
+        "summary": "ESLint with TypeScript + React Hooks"
+      },
+      {
+        "kind": "typecheck",
+        "status": "PASS",
+        "summary": "tsc --noEmit"
+      },
+      {
+        "kind": "production_build",
+        "status": "PASS",
+        "summary": "Next 16.3.8 standalone production build, 15 operator page routes plus runtime /api proxy and /healthz"
+      },
+      {
+        "kind": "npm_audit",
+        "status": "PASS",
+        "summary": "0 info/low/moderate/high/critical vulnerabilities"
+      },
+      {
+        "kind": "node_security",
+        "status": "PASS",
+        "summary": "repository node-security validator passed with no production exceptions"
+      }
+    ],
+    "browser_production_image": {
+      "path": "simulated Railway edge -> built admin-web image -> private control-api fixture",
+      "fixture_only": true,
+      "real_provider_claim": false,
+      "desktop": {
+        "dashboard_violations": 0,
+        "campaign_violations": 0,
+        "senders_violations": 0,
+        "operations_violations": 0,
+        "reports_violations": 0
+      },
+      "mobile_390x844": {
+        "dashboard_violations": 0,
+        "campaign_violations": 0,
+        "senders_violations": 0,
+        "operations_violations": 0,
+        "reports_violations": 0
+      },
+      "manual_interactions": {
+        "campaign_workspace_loaded": true,
+        "campaign_scroll_regions_keyboard_focusable": true,
+        "reports_campaign_and_organisation_loaded": true,
+        "sender_selection_worked": true,
+        "sender_msisdn_masked": true,
+        "unknown_exception_selection_worked": true,
+        "duplicate_risk_copy_present": true,
+        "mobile_navigation_previously_verified": true
+      }
+    }
+  },
+  "hosting": {
+    "local_image": {
+      "tag": "openwa-admin-web-integrated-candidate:local",
+      "id": "sha256:ad53591d6f3fbfe81db4fc538b774ac5bd95d459c5ce54c3a607a69a554b81e9",
+      "runtime_user": "campaign",
+      "exposed_port": 3000,
+      "registry_digest": null
+    },
+    "runtime_proxy": {
+      "production_upstream": "Railway private DNS only",
+      "variable": "ADMIN_WEB_CONTROL_API_URL",
+      "recommended_reference": "http://${{control-api.RAILWAY_PRIVATE_DOMAIN}}:${{control-api.PORT}}",
+      "public_override_forbidden": "NEXT_PUBLIC_CONTROL_API_BASE",
+      "gateway_authority_variable_not_reused": "CONTROL_API_INTERNAL_URL",
+      "unsafe_mutation_retry": false,
+      "request_body_streaming": true,
+      "backend_cookie_preservation": true,
+      "spoofable_proxy_headers_stripped": true,
+      "railway_client_context": "validated X-Railway-Edge + X-Real-IP; Railway-marked requests ignore X-Forwarded-For",
+      "missing_network_context_status": 403
+    },
+    "container_smoke": {
+      "status": "PASS",
+      "restrictions": [
+        "read-only filesystem",
+        "cap-drop ALL",
+        "no-new-privileges",
+        "tmpfs /tmp"
+      ],
+      "healthz": 200,
+      "private_proxy_get": "PASS",
+      "private_proxy_post": "PASS",
+      "cookies_csrf_idempotency_preserved": true
+    },
+    "governance": {
+      "linux_governance_tests": "PASS 65/65",
+      "hosting_verifier": "PASS",
+      "split_topology": "PASS: 7 Railway backend/control services, Hostinger OpenWA gateway-only nodes, direct Meta sibling transport",
+      "production_compose": "PASS: 7 backend/control services and 25 secrets; admin-web separately governed"
+    }
+  },
+  "backend": {
+    "gofmt": "PASS",
+    "go_test_all": "PASS",
+    "go_race_all": "PASS",
+    "go_vet_all": "PASS",
+    "go_build_all": "PASS",
+    "direct_api_pilot_bypass_tests": "PASS",
+    "pilot_admission": {
+      "final_approval": "validates HELD reservation atomically",
+      "start": "revalidates route/capacity and activates the exact assessed routing plan; replacement-plan races fail closed",
+      "resume": "requires authoritative ACTIVE route",
+      "release": "expected-version guarded and pilot-validated"
+    },
+    "unknown_semantics": "sticky, evidence-led, no blind resend"
+  },
+  "contracts_security_evidence": {
+    "openapi": "PASS 294/294 implemented /api/v1 method/path pairs",
+    "deployment_readiness": "PASS with declared external evidence still pending",
+    "railway_plan_checks": "PASS shell/variables/images/Postgres",
+    "committed_secret_scan": "PASS",
+    "sbom": "PASS CycloneDX 33 components; no tracked drift",
+    "traceability": "PASS 398 total: 186 IMPLEMENTED_TESTED, 166 PARTIAL, 29 NOT_STARTED, 17 BLOCKED_EXTERNAL; no tracked drift",
+    "diff_check": "PASS"
+  },
+  "railway_read_only_observation": {
+    "project": "openwa-prod",
+    "environment": "production",
+    "admin_web_present": false,
+    "staged_changes": null,
+    "empty_pending_work_patch": {
+      "id": "patch:d2cfbecd-82cc-4ead-9cf4-e617071112d6",
+      "status": "staged",
+      "changes_count": 0
+    },
+    "control_api": {
+      "state": "live",
+      "latest_deployment_status": "SUCCESS",
+      "latest_deployment_created_at": "2026-10-04T19:42:21.566Z",
+      "source_commit": "cc125fbfacfd171d179440a780fc4062a8c54c0a",
+      "private_reference_supported": true,
+      "current_sensitive_variable_values_redacted": true,
+      "trusted_proxy_historical_same_day_boolean_evidence": true,
+      "trusted_proxy_current_reconfirmed": false
+    },
+    "live_application_services": [
+      "control-api",
+      "audience-worker",
+      "campaign-worker",
+      "export-worker",
+      "inbound-governance-worker",
+      "metrics-worker",
+      "platform-governance-worker"
+    ],
+    "managed_dependencies": [
+      "Postgres",
+      "Redis",
+      "ClamAV"
+    ]
+  },
+  "external_open_gates": {
+    "admin_web_railway_service": false,
+    "admin_web_public_domain": false,
+    "registry_published_image": false,
+    "source_commit_for_candidate": false,
+    "push": false,
+    "deployment": false,
+    "real_organisation_approved": false,
+    "real_test_msisdn_approved": false,
+    "real_session_paired": false,
+    "live_text_media_send": false,
+    "delivery_read_inbound_reconnect_evidence": false,
+    "production_release_certification": false
+  },
+  "review": {
+    "status": "ACCEPTED",
+    "acceptance_claimed": true,
+    "roles": [
+      {
+        "role": "security/distributed-systems trust boundary",
+        "initialVerdict": "CHANGES",
+        "finding": "F-02 Railway-marked proxy traffic trusted X-Forwarded-For instead of Railway-documented X-Real-IP.",
+        "remediation": "RED→GREEN frontend and backend regressions; X-Railway-Edge + validated X-Real-IP only; runtime fixture proved forwardedFor=null.",
+        "finalVerdict": "APPROVE",
+        "workId": "work-1791241416648-b1e987"
+      },
+      {
+        "role": "release governance",
+        "finalVerdict": "APPROVE",
+        "findings": [],
+        "workId": "work-1791241561052-85a982"
+      },
+      {
+        "role": "backend concurrency",
+        "initialVerdict": "CHANGES",
+        "finding": "C1 Start could activate a different latest routing plan than Plan() assessed.",
+        "remediation": "CapacityEvidence now retains private routingPlanID; Start activates the exact assessed plan; focused identity tests PASS.",
+        "finalVerdict": "APPROVE",
+        "workId": "work-1791248490634-50b4a2"
+      }
+    ],
+    "rejectedFindings": [
+      {
+        "id": "F-01",
+        "reason": "Proxy query strings are required by numerous control-api pagination/filter endpoints; stripping them would break legitimate contracts."
+      },
+      {
+        "id": "F-03",
+        "reason": "Proxy streams bodies; route-specific Go handlers enforce MaxBytesReader limits, including upload/import paths."
+      },
+      {
+        "id": "F-04",
+        "reason": "Pilot admission is intentionally OpenWA-specific; provider-aware call sites keep Meta outside the OpenWA Day-1 pilot gate."
+      }
+    ]
+  },
+  "explicit_non_claims": [
+    "This is not proof that admin-web exists on Railway.",
+    "This is not a pushed or registry-published image.",
+    "This is not browser UAT against a Railway admin-web domain.",
+    "This is not live WhatsApp/provider UAT.",
+    "This does not close a production release gate.",
+    "This candidate has not been committed, pushed or deployed."
+  ]
+}

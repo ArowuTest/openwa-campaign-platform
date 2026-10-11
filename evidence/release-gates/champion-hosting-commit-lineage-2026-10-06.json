@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "evidence_type": "openwa-accepted-source-commit-lineage",
+  "observed_at": "2026-10-06T02:25:30+01:00",
+  "reviewed_application_commit": "f264237829e1caf4b0bac06c3aacd961885fc7c8",
+  "reviewed_application_tree": "1df0e7abfaf0177103e30c4f74efb765e3e7d909",
+  "evidence_followup_commit": "daa9f3ddede0ecc5b7d6a52e579fba140a0c5e8d",
+  "evidence_followup_tree": "b1e34346843f196532ef221271def4ca6e348a66",
+  "evidence_followup_parent": "f264237829e1caf4b0bac06c3aacd961885fc7c8",
+  "delta": [
+    {
+      "status": "A",
+      "path": "evidence/release-gates/champion-hosting-accepted-source-commit-2026-10-06.json",
+      "sha256": "e2acd4f65385d3e9eab4489531f7d4c78372eb3b4ab5ebeffaae6abbc53d2a3c"
+    }
+  ],
+  "git_verification": "PASS",
+  "note": "Generated from native Git because Linux governance containers cannot resolve the Windows worktree .git pointer. This record lets portable governance verify the accepted application-to-evidence follow-up relationship without weakening provenance."
+}

@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "evidence_type": "audience-import-day1-ui-acceptance",
+  "observed_at": "2026-10-06T20:58:00+01:00",
+  "branch": "feat/large-audience-ingestion-20261006",
+  "backend_foundation_commit": "7a2f846",
+  "status": "ACCEPTED_UI_AND_RECOVERY_TRANCHE_PENDING_COMMIT",
+  "design_sources": {
+    "ui_ux_spec": "OpenWA Internal Campaign Platform — UI/UX Design Specification and Mock-up Brief v1.0",
+    "designer_package": "design-canvas-export.zip",
+    "designer_screen_count": 25,
+    "screens_reviewed": [
+      "Audience-Import-Upload-_-Mapping.html",
+      "Audience-Import-Validation-_-Deliveram.html",
+      "Import-Processing-_-Error-Report.html",
+      "Segment-Builder-_-Deliveram.html",
+      "Audience-Snapshot-Review-_-Deliveram.html"
+    ]
+  },
+  "implemented_ui": [
+    "six-stage journey: Source & governance -> Map columns -> Transfer -> Validate -> Approve & merge -> Reconcile",
+    "active organisation inventory",
+    "approved non-expired consent-review inventory",
+    "active WhatsApp consent-purpose inventory",
+    "CSV bounded header probe and explicit XLSX mapping",
+    "server-declared resumable parts with direct-S3 preference only when advertised",
+    "bounded relay fallback",
+    "v2 local resume metadata with bounded first/last 64KiB SHA-256 file fingerprint",
+    "durable upload progress and browser-close independence",
+    "server-authoritative malware/validation/import states",
+    "maker-checker validation approval boundary",
+    "bounded issue-report download",
+    "masked manual-conflict workbench",
+    "post-merge reconciliation and closure",
+    "organisation-scoped recent-import server inventory with refresh, pagination and reopen"
+  ],
+  "recovery_backend": {
+    "route": "GET /api/v1/audience-imports?organisationId=<uuid>",
+    "summary_only": true,
+    "privacy_excludes": ["objectKey", "mapping", "fileSha256", "clientRequestId", "recipient rows", "raw MSISDN"],
+    "order": "created_at DESC, id DESC",
+    "pagination": "opaque cursor",
+    "organisation_required": true,
+    "canonical_uuid_validated": true,
+    "postgresql_integration": "PASS on fresh PostgreSQL 17 schema through migration 0095"
+  },
+  "frontend_verification": {
+    "unit_tests": "26/26 PASS",
+    "typecheck": "PASS",
+    "lint": "PASS with zero warnings",
+    "production_build": "PASS; /audiences/imports included in generated route set",
+    "desktop_accessibility": "0 violations / 25 passes at 1440x1000",
+    "mobile_accessibility": "0 violations / 25 passes at 390x844",
+    "warm_dev_dom_content_loaded_ms": 201,
+    "warm_dev_first_contentful_paint_ms": 224
+  },
+  "backend_delta_verification": {
+    "linux_normal_tests": "PASS: audience/importer, full httpserver, cmd/control-api",
+    "linux_vet": "PASS on changed backend packages",
+    "race_audience_importer": "PASS",
+    "race_httpserver": "PASS (182.430s)",
+    "governance": "208/208 PASS",
+    "openapi_routes": "303/303 implemented /api/v1 method/path pairs",
+    "postgresql_recent_import_inventory": "PASS: organisation scoping, newest-first order, stable cursor continuation",
+    "committed_secret_scan": "PASS",
+    "git_diff_check": "PASS"
+  },
+  "browser_qa": {
+    "auth": "real admin-web auth shell with isolated local read-only QA control API; production auth code unchanged",
+    "proxy_inventory_read": "HTTP 200",
+    "proxy_specific_import_read": "HTTP 200",
+    "desktop_render": "PASS",
+    "mobile_render": "PASS"
+  },
+  "non_claims": [
+    "This tranche is not yet pushed to GitHub.",
+    "This tranche is not yet deployed to Railway production.",
+    "Direct S3 upload remains disabled by default pending the explicit object-store CORS/security rollout gate.",
+    "Browser QA used a local non-sensitive QA principal and read-only mock inventories; no real recipient data was used.",
+    "Authenticated live-provider campaign UAT remains separate.",
+    "Cohort/snapshot and the remaining Day-1 frontend capability tranches are not accepted by this record."
+  ]
+}

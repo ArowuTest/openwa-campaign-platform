@@ -3,6 +3,7 @@ package cohort
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -47,6 +48,44 @@ func testGroup() audiencefilter.Group {
 }
 func testEligibility() EligibilityContext {
 	return EligibilityContext{OrganisationID: "org", PurposeID: "purpose", Channel: "WHATSAPP", AsOf: time.Date(2026, 8, 5, 9, 0, 0, 0, time.UTC)}
+}
+
+type fakeBreakdownRepository struct {
+	fakeQueryRepository
+	breakdown      EligibilityBreakdown
+	breakdownErr   error
+	breakdownQuery CompiledQuery
+}
+
+func (f *fakeBreakdownRepository) CountBreakdown(_ context.Context, q CompiledQuery) (EligibilityBreakdown, error) {
+	f.breakdownQuery = q
+	return f.breakdown, f.breakdownErr
+}
+
+func TestExecutionEstimateReturnsAuthoritativeEligibilityBreakdown(t *testing.T) {
+	repo := &fakeBreakdownRepository{breakdown: EligibilityBreakdown{
+		MatchedProfiles:      100,
+		ConsentEligible:      80,
+		Unsuppressed:         70,
+		Eligible:             60,
+		ConsentExcluded:      20,
+		SuppressionExcluded:  10,
+		FrequencyCapExcluded: 10,
+	}}
+	got, err := testExecutionService(repo).Estimate(context.Background(), testGroup(), testEligibility(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.EligibleCount != 60 || got.Breakdown == nil {
+		t.Fatalf("unexpected estimate %+v", got)
+	}
+	if got.Breakdown.MatchedProfiles != 100 || got.Breakdown.ConsentExcluded != 20 ||
+		got.Breakdown.SuppressionExcluded != 10 || got.Breakdown.FrequencyCapExcluded != 10 {
+		t.Fatalf("unexpected breakdown %+v", got.Breakdown)
+	}
+	if repo.breakdownQuery.SQL == "" || !strings.Contains(repo.breakdownQuery.SQL, "matched_profiles") {
+		t.Fatalf("breakdown query was not used: %+v", repo.breakdownQuery)
+	}
 }
 
 func TestExecutionEstimate(t *testing.T) {

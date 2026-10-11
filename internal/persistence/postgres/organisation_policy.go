@@ -12,6 +12,14 @@ import (
 
 type OrganisationPolicyRepository struct{ DB *sql.DB }
 
+// Validate checks database configuration without making a database request.
+func (r *OrganisationPolicyRepository) Validate() error {
+	if r == nil || r.DB == nil {
+		return errors.New("database is required")
+	}
+	return nil
+}
+
 func (r *OrganisationPolicyRepository) List(ctx context.Context, organisationID string) ([]organisation.Policy, error) {
 	rows, err := r.DB.QueryContext(ctx, policySelect+` WHERE organisation_id=$1::uuid ORDER BY created_at DESC LIMIT 1000`, organisationID)
 	if err != nil {

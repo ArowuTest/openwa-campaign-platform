@@ -20,6 +20,7 @@ import (
 
 type Config struct {
 	Environment                       string
+	DataClassification                string
 	HTTPAddr                          string
 	LogLevel                          string
 	ProfilingToken                    string
@@ -83,6 +84,10 @@ type Config struct {
 // value is always rejected so deployed services fail closed.
 func Load() (Config, error) {
 	environment := strings.ToLower(strings.TrimSpace(envOrDefault("APP_ENV", "development")))
+	classification := strings.ToUpper(strings.TrimSpace(envOrDefault("DATA_CLASSIFICATION", "INTERNAL")))
+	if classification == "" || len(classification) > 64 {
+		return Config{}, errors.New("DATA_CLASSIFICATION must contain 1 to 64 characters")
+	}
 	if err := envfile.Resolve(environment, "DATABASE_URL", "BOOTSTRAP_ADMIN_PASSWORD", "BOOTSTRAP_ADMIN_TOTP_SECRET", "MSISDN_ENCRYPTION_KEY_BASE64", "MSISDN_LOOKUP_KEY_BASE64", "IDENTITY_SECRET_KEY_BASE64", "INBOUND_CONTENT_KEY_BASE64", "INBOUND_CONTENT_KEYS_JSON", "PRIVACY_EVIDENCE_KEY_BASE64", "PRIVACY_EVIDENCE_KEYS_JSON", "SENDER_PROXY_KEYS_JSON", "GATEWAY_CALLBACK_SECRET", "GATEWAY_CALLBACK_SECRET_PREVIOUS", "GATEWAY_COMMAND_SECRET", "GATEWAY_COMMAND_SECRET_PREVIOUS", "GATEWAY_RUNTIME_SECRET", "GATEWAY_RUNTIME_SECRET_PREVIOUS", "META_CLOUD_CREDENTIALS_JSON", "MEDIA_DOWNLOAD_SECRET", "S3_ACCESS_KEY_ID", "S3_SECRET_ACCESS_KEY", "S3_SESSION_TOKEN", "PROFILING_TOKEN"); err != nil {
 		return Config{}, err
 	}
@@ -214,6 +219,7 @@ func Load() (Config, error) {
 
 	cfg := Config{
 		Environment:                       environment,
+		DataClassification:                classification,
 		HTTPAddr:                          strings.TrimSpace(envOrDefault("HTTP_ADDR", ":8080")),
 		LogLevel:                          strings.ToLower(strings.TrimSpace(envOrDefault("LOG_LEVEL", "info"))),
 		ProfilingToken:                    strings.TrimSpace(os.Getenv("PROFILING_TOKEN")),

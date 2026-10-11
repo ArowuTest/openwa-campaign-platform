@@ -41,6 +41,9 @@
         "object-store",
         "msisdn",
         "profiling"
+      ],
+      "required_environment": [
+        "CLAMAV_ADDRESS"
       ]
     },
     "campaign-worker": {

@@ -2,6 +2,8 @@
 
 import { FormEvent, useState } from 'react';
 
+import { apiRequest } from '../../../lib/api';
+
 type Preview = {
   uploadedRows: number;
   validRows: number;
@@ -21,11 +23,14 @@ export function ImportPreview() {
     setError('');
     setPreview(null);
     const body = new FormData(event.currentTarget);
-    const response = await fetch('/api/v1/audience-imports/preview', { method: 'POST', body });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok) setError(result.message ?? 'Import preview failed');
-    else setPreview(result);
-    setLoading(false);
+    try {
+      const result = await apiRequest<Preview>('/v1/audience-imports/preview', { method: 'POST', body });
+      setPreview(result);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Import preview failed');
+    } finally {
+      setLoading(false);
+    }
   }
 
   return (

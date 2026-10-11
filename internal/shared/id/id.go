@@ -4,6 +4,8 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"regexp"
+	"strings"
 )
 
 // New returns a UUIDv4-compatible identifier without requiring an external dependency.
@@ -25,4 +27,18 @@ func New() (string, error) {
 	buf[23] = '-'
 	hex.Encode(buf[24:36], raw[10:16])
 	return string(buf), nil
+}
+
+var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
+// IsUUID accepts the hyphenated UUID spelling used by the public API.
+func IsUUID(value string) bool { return uuidPattern.MatchString(value) }
+
+// CanonicalUUID normalises only UUID-shaped identities. Opaque domain identifiers
+// retain their exact spelling; this function does not validate them for an API.
+func CanonicalUUID(value string) string {
+	if IsUUID(value) {
+		return strings.ToLower(value)
+	}
+	return value
 }

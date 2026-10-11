@@ -25,28 +25,32 @@ import (
 // written by this adapter carries an immutable SHA-256 metadata value, allowing
 // exact idempotent replay and integrity verification without trusting an ETag.
 type S3Store struct {
-	Endpoint     *url.URL
-	Bucket       string
-	Region       string
-	AccessKey    string
-	SecretKey    string
-	SessionToken string
-	PathStyle    bool
-	Client       *http.Client
-	TempDir      string
-	Now          func() time.Time
+	Endpoint             *url.URL
+	DirectUploadEndpoint *url.URL
+	Bucket               string
+	Region               string
+	AccessKey            string
+	SecretKey            string
+	SessionToken         string
+	PathStyle            bool
+	DirectUploadAllowed  bool
+	Client               *http.Client
+	TempDir              string
+	Now                  func() time.Time
 }
 
 type S3Options struct {
-	Endpoint     string
-	Bucket       string
-	Region       string
-	AccessKey    string
-	SecretKey    string
-	SessionToken string
-	PathStyle    bool
-	Client       *http.Client
-	TempDir      string
+	Endpoint             string
+	DirectUploadEndpoint string
+	Bucket               string
+	Region               string
+	AccessKey            string
+	SecretKey            string
+	SessionToken         string
+	PathStyle            bool
+	DirectUploadAllowed  bool
+	Client               *http.Client
+	TempDir              string
 }
 
 func NewS3Store(options S3Options) (*S3Store, error) {
@@ -73,7 +77,30 @@ func NewS3Store(options S3Options) (*S3Store, error) {
 		client = &http.Client{Timeout: 5 * time.Minute}
 	}
 	endpoint.Path = strings.TrimSuffix(endpoint.Path, "/")
-	return &S3Store{Endpoint: endpoint, Bucket: bucket, Region: region, AccessKey: strings.TrimSpace(options.AccessKey), SecretKey: options.SecretKey, SessionToken: strings.TrimSpace(options.SessionToken), PathStyle: options.PathStyle, Client: client, TempDir: options.TempDir}, nil
+
+	var directUploadEndpoint *url.URL
+	if options.DirectUploadAllowed {
+		raw := strings.TrimSpace(options.DirectUploadEndpoint)
+		parsed, parseErr := url.Parse(raw)
+		if raw == "" || parseErr != nil || parsed.Scheme != "https" || parsed.Host == "" ||
+			parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return nil, errors.New("enabled direct S3 upload requires a browser-reachable HTTPS S3_DIRECT_UPLOAD_ENDPOINT without credentials, query, or fragment")
+		}
+		parsed.Path = strings.TrimSuffix(parsed.Path, "/")
+		directUploadEndpoint = parsed
+	}
+	return &S3Store{
+		Endpoint: endpoint, DirectUploadEndpoint: directUploadEndpoint,
+		Bucket: bucket, Region: region,
+		AccessKey: strings.TrimSpace(options.AccessKey), SecretKey: options.SecretKey,
+		SessionToken: strings.TrimSpace(options.SessionToken), PathStyle: options.PathStyle,
+		DirectUploadAllowed: options.DirectUploadAllowed,
+		Client:              client, TempDir: options.TempDir,
+	}, nil
+}
+
+func (s *S3Store) DirectUploadEnabled() bool {
+	return s != nil && s.DirectUploadAllowed && s.DirectUploadEndpoint != nil
 }
 
 func (s *S3Store) now() time.Time {
@@ -81,6 +108,95 @@ func (s *S3Store) now() time.Time {
 		return s.Now().UTC()
 	}
 	return time.Now().UTC()
+}
+
+func (s *S3Store) CreateDirectUploadTarget(ctx context.Context, key string, expectedBytes int64, checksum string, ttl time.Duration) (DirectUploadTarget, error) {
+	if s == nil || s.Endpoint == nil {
+		return DirectUploadTarget{}, errors.New("S3 store is not configured")
+	}
+	if !s.DirectUploadEnabled() {
+		return DirectUploadTarget{}, errors.New("direct S3 upload is not enabled")
+	}
+	if err := validateObjectKey(key); err != nil {
+		return DirectUploadTarget{}, err
+	}
+	if expectedBytes <= 0 {
+		return DirectUploadTarget{}, errors.New("positive direct-upload size is required")
+	}
+	checksum = strings.ToLower(strings.TrimSpace(checksum))
+	if len(checksum) != 64 {
+		return DirectUploadTarget{}, errors.New("direct-upload SHA-256 must be a 64-character hexadecimal digest")
+	}
+	if decoded, err := hex.DecodeString(checksum); err != nil || len(decoded) != 32 {
+		return DirectUploadTarget{}, errors.New("direct-upload SHA-256 must be valid hexadecimal")
+	}
+	if ttl <= 0 || ttl > 15*time.Minute {
+		return DirectUploadTarget{}, errors.New("direct-upload target TTL must be greater than zero and at most 15 minutes")
+	}
+	expiresSeconds := int64(ttl / time.Second)
+	if ttl%time.Second != 0 {
+		expiresSeconds++
+	}
+	if expiresSeconds < 1 {
+		expiresSeconds = 1
+	}
+
+	now := s.now()
+	request, err := s.requestAt(ctx, http.MethodPut, key, nil, s.DirectUploadEndpoint)
+	if err != nil {
+		return DirectUploadTarget{}, err
+	}
+	request.Header.Set("If-None-Match", "*")
+	request.Header.Set("X-Amz-Content-Sha256", unsignedPayloadSHA256)
+	request.Header.Set("X-Amz-Meta-Sha256", checksum)
+	request.Header.Set("X-Amz-Meta-Size", strconv.FormatInt(expectedBytes, 10))
+	request.Header.Set("X-Amz-Meta-Created-At", now.Format(time.RFC3339Nano))
+
+	amzDate := now.Format("20060102T150405Z")
+	date := now.Format("20060102")
+	scope := date + "/" + s.Region + "/s3/aws4_request"
+	canonicalHeaders, signedHeaders := canonicalS3Headers(request)
+	query := request.URL.Query()
+	query.Set("X-Amz-Algorithm", "AWS4-HMAC-SHA256")
+	query.Set("X-Amz-Credential", s.AccessKey+"/"+scope)
+	query.Set("X-Amz-Date", amzDate)
+	query.Set("X-Amz-Expires", strconv.FormatInt(expiresSeconds, 10))
+	query.Set("X-Amz-SignedHeaders", signedHeaders)
+	if s.SessionToken != "" {
+		query.Set("X-Amz-Security-Token", s.SessionToken)
+	}
+	canonicalRequest := strings.Join([]string{
+		request.Method,
+		request.URL.EscapedPath(),
+		canonicalPresignedQuery(query),
+		canonicalHeaders,
+		signedHeaders,
+		unsignedPayloadSHA256,
+	}, "\n")
+	requestHash := sha256.Sum256([]byte(canonicalRequest))
+	stringToSign := "AWS4-HMAC-SHA256\n" + amzDate + "\n" + scope + "\n" + hex.EncodeToString(requestHash[:])
+	dateKey := hmacSHA256([]byte("AWS4"+s.SecretKey), date)
+	regionKey := hmacSHA256(dateKey, s.Region)
+	serviceKey := hmacSHA256(regionKey, "s3")
+	signingKey := hmacSHA256(serviceKey, "aws4_request")
+	signature := hex.EncodeToString(hmacSHA256(signingKey, stringToSign))
+	query.Set("X-Amz-Signature", signature)
+	request.URL.RawQuery = canonicalPresignedQuery(query)
+
+	return DirectUploadTarget{
+		Method: http.MethodPut,
+		URL:    request.URL.String(),
+		Headers: map[string]string{
+			"Content-Type":          "application/octet-stream",
+			"If-None-Match":         "*",
+			"X-Amz-Content-Sha256":  unsignedPayloadSHA256,
+			"X-Amz-Meta-Sha256":     checksum,
+			"X-Amz-Meta-Size":       strconv.FormatInt(expectedBytes, 10),
+			"X-Amz-Meta-Created-At": now.Format(time.RFC3339Nano),
+		},
+		ExpectedBytes: expectedBytes,
+		ExpiresAt:     now.Add(time.Duration(expiresSeconds) * time.Second),
+	}, nil
 }
 
 func (s *S3Store) Put(ctx context.Context, key string, reader io.Reader, maxBytes int64) (Metadata, error) {
@@ -304,10 +420,20 @@ func (t *temporaryObject) Close() error {
 	return errors.Join(err, removeErr)
 }
 
-const emptySHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+const (
+	emptySHA256           = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	unsignedPayloadSHA256 = "UNSIGNED-PAYLOAD"
+)
 
 func (s *S3Store) request(ctx context.Context, method, key string, body io.Reader) (*http.Request, error) {
-	base := *s.Endpoint
+	return s.requestAt(ctx, method, key, body, s.Endpoint)
+}
+
+func (s *S3Store) requestAt(ctx context.Context, method, key string, body io.Reader, endpoint *url.URL) (*http.Request, error) {
+	if endpoint == nil {
+		return nil, errors.New("S3 endpoint is not configured")
+	}
+	base := *endpoint
 	if s.PathStyle {
 		base.Path = strings.TrimSuffix(base.Path, "/") + "/" + s.Bucket + "/" + key
 	} else {
@@ -371,6 +497,27 @@ func canonicalS3Headers(request *http.Request) (string, string) {
 		canonical.WriteByte('\n')
 	}
 	return canonical.String(), strings.Join(keys, ";")
+}
+
+func canonicalPresignedQuery(values url.Values) string {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0)
+	for _, key := range keys {
+		entries := append([]string(nil), values[key]...)
+		sort.Strings(entries)
+		for _, value := range entries {
+			parts = append(parts, awsQueryEscape(key)+"="+awsQueryEscape(value))
+		}
+	}
+	return strings.Join(parts, "&")
+}
+
+func awsQueryEscape(value string) string {
+	return strings.ReplaceAll(url.QueryEscape(value), "+", "%20")
 }
 
 func canonicalQuery(values url.Values) string {

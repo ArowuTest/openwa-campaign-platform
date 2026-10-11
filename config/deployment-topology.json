@@ -18,6 +18,18 @@
     ],
     "openwa_gateway_allowed": false
   },
+  "railway_frontend": {
+    "service": "admin-web",
+    "public_ingress": true,
+    "tls_required": true,
+    "control_api_service": "control-api",
+    "control_api_upstream_env": "ADMIN_WEB_CONTROL_API_URL",
+    "control_api_upstream_reference": "http://${{control-api.RAILWAY_PRIVATE_DOMAIN}}:${{control-api.PORT}}",
+    "browser_api_prefix": "/api",
+    "health_path": "/healthz",
+    "network_admission_owner": "control-api",
+    "forwarded_client_context": "sanitized-railway-edge-x-real-ip"
+  },
   "hostinger": {
     "services": [
       "openwa-gateway"

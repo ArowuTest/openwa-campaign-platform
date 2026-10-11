@@ -32,12 +32,13 @@ type ReleaseService struct {
 	Organisations interface {
 		Get(context.Context, string) (organisation.Organisation, error)
 	}
-	Snapshots   SnapshotReader
-	Store       AtomicStore
-	Eligibility EligibilityChecker
-	BatchSize   int
-	ShardCount  int
-	Clock       func() time.Time
+	Snapshots      SnapshotReader
+	Store          AtomicStore
+	Eligibility    EligibilityChecker
+	PilotAdmission func(context.Context, campaign.Campaign) error
+	BatchSize      int
+	ShardCount     int
+	Clock          func() time.Time
 }
 
 // ReleaseSummary is cumulative for this invocation. Existing recipients are
@@ -56,6 +57,17 @@ type ReleaseSummary struct {
 }
 
 func (s *ReleaseService) Release(ctx context.Context, campaignID string) (ReleaseSummary, error) {
+	return s.release(ctx, campaignID, 0, false)
+}
+
+func (s *ReleaseService) ReleaseGuarded(ctx context.Context, campaignID string, expectedVersion int64) (ReleaseSummary, error) {
+	if expectedVersion <= 0 {
+		return ReleaseSummary{}, ErrReleaseConflict
+	}
+	return s.release(ctx, campaignID, expectedVersion, true)
+}
+
+func (s *ReleaseService) release(ctx context.Context, campaignID string, expectedVersion int64, enforcePilot bool) (ReleaseSummary, error) {
 	if s == nil || s.Campaigns == nil || s.Snapshots == nil || s.Store == nil || s.Eligibility == nil {
 		return ReleaseSummary{}, errors.New("release service dependencies are required")
 	}
@@ -66,6 +78,19 @@ func (s *ReleaseService) Release(ctx context.Context, campaignID string) (Releas
 	entity, err := s.Campaigns.Get(ctx, campaignID)
 	if err != nil {
 		return ReleaseSummary{}, fmt.Errorf("load campaign: %w", err)
+	}
+	if expectedVersion > 0 && entity.Version != expectedVersion {
+		return ReleaseSummary{}, ErrReleaseConflict
+	}
+	if enforcePilot {
+		if entity.Transport.Provider == campaign.ProviderOpenWA && s.PilotAdmission == nil {
+			return ReleaseSummary{}, errors.New("day-one OpenWA pilot admission is required")
+		}
+		if s.PilotAdmission != nil {
+			if err := s.PilotAdmission(ctx, entity); err != nil {
+				return ReleaseSummary{}, err
+			}
+		}
 	}
 	if s.Organisations != nil {
 		org, orgErr := s.Organisations.Get(ctx, entity.OrganisationID)
@@ -127,7 +152,8 @@ func (s *ReleaseService) Release(ctx context.Context, campaignID string) (Releas
 			commandMembers[i] = Member{ContactID: member.ContactID, EligibilityEvidenceHash: member.EligibilityEvidenceHash}
 		}
 		result, err := s.Store.Authorise(ctx, Command{
-			CampaignID: entity.ID, SnapshotID: snapshot.ID, MessageVersionID: entity.MessageVersionID,
+			CampaignID: entity.ID, ExpectedCampaignVersion: expectedVersion,
+			SnapshotID: snapshot.ID, MessageVersionID: entity.MessageVersionID,
 			OrganisationID: entity.OrganisationID, PurposeID: entity.PurposeID, Channel: "WHATSAPP",
 			MaximumUniqueRecipients: entity.MaximumUniqueRecipients, Members: commandMembers,
 			ShardSize: shardCount, AsOf: now,

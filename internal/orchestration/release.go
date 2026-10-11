@@ -40,6 +40,7 @@ func (f EligibilityFunc) Check(ctx context.Context, contactID, organisationID, p
 
 type Command struct {
 	CampaignID              string
+	ExpectedCampaignVersion int64
 	SnapshotID              string
 	MessageVersionID        string
 	OrganisationID          string

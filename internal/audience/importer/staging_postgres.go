@@ -397,6 +397,15 @@ func (r *PostgreSQLStagingRepository) ClaimReady(ctx context.Context, limit int)
 	rows, err := r.DB.QueryContext(ctx, `WITH candidates AS (
   SELECT id FROM audience_imports
   WHERE status='VALIDATING' AND malware_scan_status='CLEAN' AND content_signature_valid=true
+    AND (
+      upload_session_id IS NULL
+      OR EXISTS (
+        SELECT 1 FROM audience_import_upload_sessions aus
+        WHERE aus.id=audience_imports.upload_session_id
+          AND aus.state='IMPORT_CREATED'
+          AND aus.linked_import_id=audience_imports.id
+      )
+    )
     AND (validation_lease_owner IS NULL OR validation_lease_expires_at<=$1)
   ORDER BY created_at,id
   FOR UPDATE SKIP LOCKED
@@ -408,7 +417,7 @@ SET validation_lease_owner=$3,validation_lease_expires_at=$4,
     version=ai.version+1,updated_at=$1,failure_reason=NULL
 FROM candidates c
 WHERE ai.id=c.id
-RETURNING ai.id::text,ai.object_key,ai.original_filename,ai.detected_media_type,
+RETURNING ai.id::text,ai.object_key,coalesce(ai.upload_session_id::text,''),ai.original_filename,ai.detected_media_type,
  ai.file_sha256,ai.byte_size,coalesce(ai.default_country_iso2::text,''),ai.mapping,
  ai.validation_lease_owner,ai.validation_lease_version,ai.validation_lease_expires_at`,
 		now, limit, r.workerID(), now.Add(r.leaseDuration()))
@@ -420,7 +429,7 @@ RETURNING ai.id::text,ai.object_key,ai.original_filename,ai.detected_media_type,
 	for rows.Next() {
 		var item ValidationWork
 		var mapping []byte
-		if err := rows.Scan(&item.ImportID, &item.ObjectKey, &item.OriginalFilename, &item.DetectedMediaType,
+		if err := rows.Scan(&item.ImportID, &item.ObjectKey, &item.UploadSessionID, &item.OriginalFilename, &item.DetectedMediaType,
 			&item.FileSHA256, &item.ByteSize, &item.DefaultCountryISO2, &mapping,
 			&item.Lease.Owner, &item.Lease.Version, &item.Lease.ExpiresAt); err != nil {
 			return nil, err

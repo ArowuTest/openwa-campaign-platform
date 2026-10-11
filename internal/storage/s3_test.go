@@ -6,9 +6,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 type fakeS3Object struct {
@@ -93,6 +95,89 @@ func TestS3StoreRoundTripAndExactReplay(t *testing.T) {
 	}
 	if _, err = store.Stat(context.Background(), "reports/my report.json"); err != ErrNotFound {
 		t.Fatalf("stat after delete=%v", err)
+	}
+}
+
+func TestS3StoreCreatesShortLivedDirectPartTargetWithoutSecretLeak(t *testing.T) {
+	now := time.Date(2026, 10, 6, 13, 0, 0, 0, time.UTC)
+	store, err := NewS3Store(S3Options{
+		Endpoint:             "https://s3-internal.example.test",
+		DirectUploadEndpoint: "https://s3-upload.example.test",
+		Bucket:               "private-bucket",
+		Region:               "eu-west-2",
+		AccessKey:            "ACCESSKEY",
+		SecretKey:            "super-secret-do-not-leak",
+		SessionToken:         "session-token-value",
+		PathStyle:            true,
+		DirectUploadAllowed:  true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.Now = func() time.Time { return now }
+	checksum := strings.Repeat("a", 64)
+	target, err := store.CreateDirectUploadTarget(context.Background(), "imports/uploads/session/part-000001.bin", 8<<20, checksum, 5*time.Minute)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.Method != http.MethodPut || target.ExpectedBytes != 8<<20 || !target.ExpiresAt.Equal(now.Add(5*time.Minute)) {
+		t.Fatalf("target=%+v", target)
+	}
+	if strings.Contains(target.URL, store.SecretKey) {
+		t.Fatal("presigned target leaked reusable S3 secret")
+	}
+	parsed, err := url.Parse(target.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Host != "s3-upload.example.test" || parsed.Path != "/private-bucket/imports/uploads/session/part-000001.bin" {
+		t.Fatalf("direct target host/path=%q %q", parsed.Host, parsed.Path)
+	}
+	query := parsed.Query()
+	if query.Get("X-Amz-Algorithm") != "AWS4-HMAC-SHA256" ||
+		query.Get("X-Amz-Date") != "20261006T130000Z" ||
+		query.Get("X-Amz-Expires") != "300" ||
+		query.Get("X-Amz-Security-Token") != "session-token-value" ||
+		!strings.HasPrefix(query.Get("X-Amz-Credential"), "ACCESSKEY/20261006/eu-west-2/s3/aws4_request") ||
+		len(query.Get("X-Amz-Signature")) != 64 {
+		t.Fatalf("unexpected presign query: %s", parsed.RawQuery)
+	}
+	signed := query.Get("X-Amz-SignedHeaders")
+	for _, required := range []string{"host", "if-none-match", "x-amz-content-sha256", "x-amz-meta-created-at", "x-amz-meta-sha256", "x-amz-meta-size"} {
+		if !strings.Contains(signed, required) {
+			t.Fatalf("signed headers %q missing %q", signed, required)
+		}
+	}
+	if target.Headers["If-None-Match"] != "*" ||
+		target.Headers["X-Amz-Content-Sha256"] != unsignedPayloadSHA256 ||
+		target.Headers["X-Amz-Meta-Sha256"] != checksum ||
+		target.Headers["X-Amz-Meta-Size"] != stringInt64(8<<20) ||
+		target.Headers["Content-Type"] != "application/octet-stream" {
+		t.Fatalf("target headers=%v", target.Headers)
+	}
+}
+
+func TestS3StoreDirectPartTargetRejectsUnsafeEnvelope(t *testing.T) {
+	store, err := NewS3Store(S3Options{
+		Endpoint: "https://s3-internal.example.test", DirectUploadEndpoint: "https://s3-upload.example.test",
+		Bucket: "private-bucket", Region: "eu-west-2",
+		AccessKey: "access", SecretKey: "secret", PathStyle: true, DirectUploadAllowed: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	validSHA := strings.Repeat("a", 64)
+	if _, err := store.CreateDirectUploadTarget(context.Background(), "imports/uploads/session/part.bin", 0, validSHA, time.Minute); err == nil {
+		t.Fatal("zero-byte target accepted")
+	}
+	if _, err := store.CreateDirectUploadTarget(context.Background(), "imports/uploads/session/part.bin", 10, "not-a-sha", time.Minute); err == nil {
+		t.Fatal("invalid SHA target accepted")
+	}
+	if _, err := store.CreateDirectUploadTarget(context.Background(), "imports/uploads/session/part.bin", 10, validSHA, 16*time.Minute); err == nil {
+		t.Fatal("overlong target TTL accepted")
+	}
+	if _, err := store.CreateDirectUploadTarget(context.Background(), "../escape", 10, validSHA, time.Minute); err == nil {
+		t.Fatal("unsafe object key accepted")
 	}
 }
 

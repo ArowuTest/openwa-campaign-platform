@@ -122,3 +122,64 @@ func TestMemoryStoreEnforcesEntitlementAcrossBatches(t *testing.T) {
 		t.Fatalf("expected entitlement error, got %v", err)
 	}
 }
+
+func TestReleaseServiceGuardedRequiresExpectedVersionAndPilotAdmission(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 10, 5, 14, 0, 0, 0, time.UTC)
+	definition := audiencefilter.Group{Join: audiencefilter.JoinAnd, Rules: []audiencefilter.Rule{{DefinitionCode: "COUNTRY", Operator: audiencefilter.OperatorEquals, Values: []any{"NG"}}}}
+	builder, err := segment.NewBuilder("campaign-guarded", "", definition, 1, "consent-v1", "config-v1", "operator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	member := segment.Member{ContactID: "contact-1", EligibilityEvidenceHash: "evidence"}
+	if err := builder.Add(member.ContactID, member.EligibilityEvidenceHash); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := builder.Finalise(now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	campaigns := campaign.NewMemoryRepository()
+	entity := campaign.Campaign{
+		ID: "campaign-guarded", OrganisationID: "org-1", PurposeID: "purpose-1",
+		Status: campaign.StatusScheduled, MaximumUniqueRecipients: 1,
+		AudienceSnapshotID: snapshot.ID, AudienceSnapshotHash: snapshot.SnapshotHash,
+		EligibleAudienceCount: 1, MessageVersionID: "message-1", MessageContentHash: "hash", Version: 7,
+		Transport: campaign.TransportSelection{Provider: campaign.ProviderOpenWA},
+	}
+	if err := campaigns.Create(ctx, entity); err != nil {
+		t.Fatal(err)
+	}
+	snapshots := segment.NewMemoryRepository()
+	if err := snapshots.CreateWithMembers(ctx, snapshot, []segment.Member{member}); err != nil {
+		t.Fatal(err)
+	}
+	gateCalls := 0
+	service := ReleaseService{
+		Campaigns: campaign.NewService(campaigns), Snapshots: segment.NewService(snapshots),
+		Store: NewMemoryStore(), Eligibility: EligibilityFunc(func(context.Context, string, string, string, string, time.Time) (EligibilityDecision, error) {
+			return EligibilityDecision{Eligible: true}, nil
+		}),
+		PilotAdmission: func(_ context.Context, got campaign.Campaign) error {
+			gateCalls++
+			if got.ID != entity.ID {
+				t.Fatalf("gate campaign=%s", got.ID)
+			}
+			return nil
+		},
+		Clock: func() time.Time { return now },
+	}
+
+	if _, err := service.ReleaseGuarded(ctx, entity.ID, entity.Version-1); !errors.Is(err, ErrReleaseConflict) {
+		t.Fatalf("stale version should fail closed, got %v", err)
+	}
+	if gateCalls != 0 {
+		t.Fatalf("pilot gate called for stale version: %d", gateCalls)
+	}
+	if _, err := service.ReleaseGuarded(ctx, entity.ID, entity.Version); err != nil {
+		t.Fatalf("guarded release failed: %v", err)
+	}
+	if gateCalls != 1 {
+		t.Fatalf("pilot gate calls=%d", gateCalls)
+	}
+}

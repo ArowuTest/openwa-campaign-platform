@@ -16,8 +16,9 @@ const (
 )
 
 type CapacityEvidence struct {
-	CampaignID                 string            `json:"campaignId"`
-	PoolID                     string            `json:"poolId"`
+	CampaignID                 string `json:"campaignId"`
+	PoolID                     string `json:"poolId"`
+	routingPlanID              string
 	EvidenceVersion            string            `json:"evidenceVersion"`
 	RemainingRecipients        int64             `json:"remainingRecipients"`
 	AvailableMessagesPerMinute int               `json:"availableMessagesPerMinute"`

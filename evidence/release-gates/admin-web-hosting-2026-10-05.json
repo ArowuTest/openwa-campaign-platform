@@ -1,0 +1,143 @@
+{
+  "schema_version": 1,
+  "evidence_type": "admin-web-hosting-local-candidate",
+  "observed_at": "2026-10-05T18:11:45+01:00",
+  "branch": "work/admin-web-hosting-20261005",
+  "base_head": "1511b73f6fff123dca49835fb2a0ddcb9d3093fc",
+  "candidate_fingerprint_sha256": "2be3e40b1b529101afb5c51735398df4948d14416c2f7b90af6e84eebbb4bb24",
+  "candidate_fingerprint_scope": "tracked git diff plus sorted untracked file paths and bytes, excluding this evidence manifest to avoid self-reference",
+  "source_state": {
+    "committed": false,
+    "pushed": false,
+    "deployed": false,
+    "standalone_deploy_forbidden": true,
+    "integration_target": "work/champion-integration-20261005-v3"
+  },
+  "local_image": {
+    "tag": "openwa-admin-web-hosting-candidate:local",
+    "id": "sha256:69289b79893cf89d2a70d44adf3fd55593e3e0fc0bf73b344b861dcfb7d49a21",
+    "runtime_user": "campaign",
+    "exposed_port": 3000,
+    "registry_digest": null
+  },
+  "verification": [
+    {
+      "kind": "hosting_governance_tests",
+      "status": "PASS",
+      "summary": "12/12 native hosting governance tests"
+    },
+    {
+      "kind": "runtime_proxy_tests",
+      "status": "PASS",
+      "summary": "6/6 runtime control-api proxy tests"
+    },
+    {
+      "kind": "linux_governance",
+      "status": "PASS",
+      "summary": "65/65 split-topology plus admin-web hosting governance tests"
+    },
+    {
+      "kind": "hosting_verifier",
+      "status": "PASS",
+      "summary": "admin-web hosting contract and read-only plan valid"
+    },
+    {
+      "kind": "openapi",
+      "status": "PASS",
+      "summary": "294/294 implemented /api/v1 method/path pairs covered"
+    },
+    {
+      "kind": "production_compose",
+      "status": "PASS",
+      "summary": "7 backend/control services and 25 secrets; admin-web remains separately governed"
+    },
+    {
+      "kind": "committed_secret_scan",
+      "status": "PASS",
+      "summary": "native Git committed-secret scan passed"
+    },
+    {
+      "kind": "node_security",
+      "status": "PASS",
+      "summary": "normal-mode Node security verification passed with no production exceptions"
+    },
+    {
+      "kind": "npm_audit_admin_web",
+      "status": "PASS",
+      "summary": "0 vulnerabilities across info/low/moderate/high/critical"
+    },
+    {
+      "kind": "sbom",
+      "status": "PASS",
+      "summary": "CycloneDX SBOM regenerated with 30 components"
+    },
+    {
+      "kind": "traceability",
+      "status": "PASS",
+      "summary": "398 requirements; 186 IMPLEMENTED_TESTED, 166 PARTIAL, 29 NOT_STARTED, 17 BLOCKED_EXTERNAL; no tracked drift"
+    },
+    {
+      "kind": "docker_build",
+      "status": "PASS",
+      "summary": "Next.js 16.3.8 standalone image built on Node 22.19"
+    },
+    {
+      "kind": "container_smoke",
+      "status": "PASS",
+      "summary": "read-only, no capabilities, no-new-privileges; /healthz 200; missing Railway network context 403; valid GET/POST proxy succeeds with sanitized client-first IP, cookies, CSRF and idempotency"
+    },
+    {
+      "kind": "diff_check",
+      "status": "PASS",
+      "summary": "git diff --check clean"
+    },
+    {
+      "kind": "browser_api_same_origin",
+      "status": "PASS",
+      "summary": "NEXT_PUBLIC_CONTROL_API_BASE removed; browser API fixed to same-origin /api and contract forbids public override"
+    },
+    {
+      "kind": "railway_trusted_proxy_live_check",
+      "status": "PASS",
+      "summary": "Authenticated Railway read reduced to boolean confirms production TRUSTED_PROXY_CIDRS covers Railway private ULA; value not persisted"
+    }
+  ],
+  "railway_read_only_observation": {
+    "project_id": "8633a0b9-3b15-4c8d-b6f2-0306b284f4dd",
+    "environment_id": "546fd711-cf80-4402-89b0-cb3ae5671fa9",
+    "admin_web_present": false,
+    "staged_changes": null,
+    "control_api": {
+      "service_id": "751fd9e6-e26f-411d-94bb-d00bff06abda",
+      "state": "live",
+      "latest_deployment_status": "SUCCESS",
+      "source_commit": "cc125fbfacfd171d179440a780fc4062a8c54c0a",
+      "private_domain_variable_available": true,
+      "port_variable_available": true,
+      "trusted_proxy_covers_railway_private_ula": true,
+      "trusted_proxy_value_disclosed": false
+    },
+    "recommended_reference": "http://${{control-api.RAILWAY_PRIVATE_DOMAIN}}:${{control-api.PORT}}"
+  },
+  "non_claims": [
+    "This is not proof that admin-web exists on Railway.",
+    "This is not a pushed or registry-published image.",
+    "This is not browser UAT against a Railway admin-web domain.",
+    "This does not close a production release gate.",
+    "This hosting-only branch does not contain the full 15-route champion operator console and must not be deployed standalone."
+  ],
+  "review": {
+    "blind_review_status": "BLOCKED_TOOLING",
+    "attempts": [
+      {
+        "model": "qwen/qwen3.8-27b:free",
+        "result": "openrouter 404 invalid_request_or_unknown"
+      },
+      {
+        "model": "inclusionai/ling-3.1-flash",
+        "result": "FS V2B intelligence tool internal failure before review completion"
+      }
+    ],
+    "acceptance_claimed": false
+  }
+}

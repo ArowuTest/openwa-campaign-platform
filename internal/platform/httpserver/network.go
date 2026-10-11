@@ -28,16 +28,16 @@ func (p NetworkPolicy) ClientIP(r *http.Request) (netip.Addr, bool) {
 		return peer, true
 	}
 
-	// Railway controls X-Forwarded-For and places the original client first.
-	// Its CDN can add an unlisted public hop to the right of that address, so
-	// use Railway's explicit edge marker before applying the generic proxy-chain
-	// algorithm below.
+	// Railway documents X-Real-IP as the original client address and
+	// X-Railway-Edge as the edge marker. For a Railway-marked request arriving
+	// through an explicitly trusted private/edge proxy, prefer that dedicated
+	// client-address header and ignore X-Forwarded-For entirely.
 	if strings.TrimSpace(r.Header.Get("X-Railway-Edge")) != "" {
-		if candidate, ok := firstForwardedAddress(r.Header.Get("X-Forwarded-For")); ok {
+		if candidate, ok := remoteAddress(r.Header.Get("X-Real-IP")); ok {
 			return candidate, true
 		}
-		// A Railway-marked request with no valid client-first hop must fail
-		// closed; falling through could accept a later forged address.
+		// A Railway-marked request with no valid X-Real-IP must fail closed;
+		// falling through could accept a forged forwarding chain.
 		return netip.Addr{}, false
 	}
 
@@ -55,11 +55,6 @@ func (p NetworkPolicy) ClientIP(r *http.Request) (netip.Addr, bool) {
 		}
 	}
 	return peer, true
-}
-
-func firstForwardedAddress(value string) (netip.Addr, bool) {
-	first, _, _ := strings.Cut(value, ",")
-	return remoteAddress(first)
 }
 
 func (p NetworkPolicy) Allows(r *http.Request) (netip.Addr, bool) {

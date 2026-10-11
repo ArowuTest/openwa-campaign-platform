@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -186,7 +187,81 @@ func (s *MaterialisationService) Cancel(ctx context.Context, identifier, actor, 
 	return withProgress(item), err
 }
 
+type MaterialisationEvidenceResolver interface {
+	ResolveMaterialisationEvidence(context.Context, MaterialisationJob) (string, string, error)
+}
+
+// GovernanceEvidenceResolver binds the worker to the same authoritative
+// purpose, consent-review and organisation-policy evidence used by estimates.
+type GovernanceEvidenceResolver struct {
+	Evidence cohort.EstimateEvidenceResolver
+}
+
+func (r *GovernanceEvidenceResolver) Validate() error {
+	if r == nil {
+		return errors.New("materialisation governance evidence resolver is unavailable")
+	}
+	if err := validateGovernanceDependency(r.Evidence); err != nil {
+		return err
+	}
+	if authoritative, ok := r.Evidence.(*cohort.GovernanceEvidenceResolver); ok {
+		if authoritative.Purposes == nil || authoritative.Reviews == nil || authoritative.Policies == nil {
+			return errors.New("materialisation governance evidence resolver is unavailable")
+		}
+		if err := validateGovernanceDependency(authoritative.Purposes.Repository); err != nil {
+			return err
+		}
+		if err := authoritative.Reviews.Validate(); err != nil {
+			return err
+		}
+		return validateGovernanceDependency(authoritative.Policies.Store)
+	}
+	return nil
+}
+
+// Providers may expose configuration validation, but it is not required.
+// Reject nil interface payloads before invoking either validation or resolution.
+func validateGovernanceDependency(dependency any) error {
+	if dependency == nil {
+		return errors.New("materialisation governance evidence resolver is unavailable")
+	}
+	value := reflect.ValueOf(dependency)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		if value.IsNil() {
+			return errors.New("materialisation governance evidence resolver is unavailable")
+		}
+	}
+	if validator, ok := dependency.(interface{ Validate() error }); ok {
+		return validator.Validate()
+	}
+	return nil
+}
+
+func (r *GovernanceEvidenceResolver) ResolveMaterialisationEvidence(ctx context.Context, job MaterialisationJob) (string, string, error) {
+	if err := r.Validate(); err != nil {
+		return "", "", err
+	}
+	evidence, err := r.Evidence.ResolveEstimateEvidence(ctx, cohort.EstimateJobRecord{
+		OrganisationID: job.Eligibility.OrganisationID,
+		PurposeID:      job.Eligibility.PurposeID,
+		Channel:        job.Eligibility.Channel,
+		AsOf:           job.Eligibility.AsOf.UTC(),
+	})
+	if err != nil {
+		return "", "", err
+	}
+	if strings.TrimSpace(evidence.ConsentReviewID) == "" || evidence.ConsentReviewVersion <= 0 ||
+		strings.TrimSpace(evidence.ConsentWordingVersion) == "" || strings.TrimSpace(evidence.OrganisationPolicyID) == "" ||
+		evidence.OrganisationPolicyVersion <= 0 {
+		return "", "", errors.New("materialisation governance evidence is incomplete")
+	}
+	return fmt.Sprintf("consent-review/%s/v%d/wording/%s", evidence.ConsentReviewID, evidence.ConsentReviewVersion, strings.TrimSpace(evidence.ConsentWordingVersion)),
+		fmt.Sprintf("organisation-policy/%s/v%d", evidence.OrganisationPolicyID, evidence.OrganisationPolicyVersion), nil
+}
+
 type MaterialisationWorker struct {
+	Evidence      MaterialisationEvidenceResolver
 	Repository    MaterialisationRepository
 	Cohorts       *cohort.ExecutionService
 	Snapshots     segment.Store
@@ -204,12 +279,26 @@ type MaterialisationWorker struct {
 
 func (w *MaterialisationWorker) Active() int64 { return w.active.Load() }
 
-func (w *MaterialisationWorker) Run(ctx context.Context) error {
-	if w.Repository == nil || w.Cohorts == nil || w.Cohorts.Compiler == nil || w.Cohorts.Repository == nil || w.Snapshots == nil {
+// Validate checks required dependencies before the worker is marked ready.
+func (w *MaterialisationWorker) Validate() error {
+	if w == nil || w.Repository == nil || w.Cohorts == nil || w.Cohorts.Compiler == nil || w.Cohorts.Repository == nil || w.Snapshots == nil {
 		return errors.New("materialisation worker dependencies are required")
+	}
+	if w.Evidence == nil {
+		return errors.New("materialisation governance evidence resolver is required")
+	}
+	if err := validateGovernanceDependency(w.Evidence); err != nil {
+		return err
 	}
 	if strings.TrimSpace(w.WorkerID) == "" {
 		return errors.New("worker ID is required")
+	}
+	return nil
+}
+
+func (w *MaterialisationWorker) Run(ctx context.Context) error {
+	if err := w.Validate(); err != nil {
+		return err
 	}
 	if w.BatchSize <= 0 || w.BatchSize > 10_000 {
 		w.BatchSize = 5_000
@@ -319,6 +408,9 @@ func (w *MaterialisationWorker) processWithLease(ctx context.Context, job Materi
 }
 
 func (w *MaterialisationWorker) process(ctx context.Context, job MaterialisationJob) error {
+	if err := w.validateGovernance(ctx, job); err != nil {
+		return err
+	}
 	compiled, err := w.Cohorts.Compiler.Compile(job.Definition, job.Eligibility)
 	if err != nil {
 		return err
@@ -335,16 +427,25 @@ func (w *MaterialisationWorker) process(ctx context.Context, job Materialisation
 		if job.ProcessedCount != job.ExpectedCount {
 			return fmt.Errorf("eligible count changed during materialisation: expected %d processed %d", job.ExpectedCount, job.ProcessedCount)
 		}
+		committer, atomicCommit := w.Repository.(snapshotCommitter)
+		var members []segment.Member
+		if !atomicCommit {
+			members, err = loadAllStagedMembers(ctx, w.Repository, job.ID)
+			if err != nil {
+				return err
+			}
+		}
+		// An empty page also publishes state. Re-resolve after all reads and
+		// immediately before finalising the frozen snapshot.
+		if err := w.validateGovernance(ctx, job); err != nil {
+			return err
+		}
 		snapshot, err := builder.Finalise(w.now())
 		if err != nil {
 			return err
 		}
-		if committer, ok := w.Repository.(snapshotCommitter); ok {
+		if atomicCommit {
 			_, err = committer.CommitSnapshot(ctx, job.ID, job.LeaseToken, snapshot, w.now())
-			return err
-		}
-		members, err := loadAllStagedMembers(ctx, w.Repository, job.ID)
-		if err != nil {
 			return err
 		}
 		stored, _, err := w.Snapshots.EnsureWithMembers(ctx, snapshot, members)
@@ -366,8 +467,31 @@ func (w *MaterialisationWorker) process(ctx context.Context, job Materialisation
 	if processedCount > job.ExpectedCount {
 		return fmt.Errorf("materialisation exceeded expected count %d", job.ExpectedCount)
 	}
+	if err := w.validateGovernance(ctx, job); err != nil {
+		return err
+	}
 	_, err = w.Repository.AppendMembers(ctx, job.ID, job.LeaseToken, members, lastContactID, rollingHash, processedCount, w.now())
 	return err
+}
+
+func (w *MaterialisationWorker) validateGovernance(ctx context.Context, job MaterialisationJob) error {
+	if w == nil || w.Evidence == nil {
+		return errors.New("materialisation governance evidence resolver is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	consentVersion, configurationVersion, err := w.Evidence.ResolveMaterialisationEvidence(ctx, job)
+	if err != nil {
+		return fmt.Errorf("resolve materialisation governance evidence: %w", err)
+	}
+	if strings.TrimSpace(consentVersion) == "" || strings.TrimSpace(configurationVersion) == "" {
+		return errors.New("materialisation governance evidence is incomplete")
+	}
+	if consentVersion != job.ConsentPolicyVersion || configurationVersion != job.ConfigurationVersion {
+		return errors.New("materialisation governance evidence changed from the frozen job")
+	}
+	return ctx.Err()
 }
 
 func (w *MaterialisationWorker) now() time.Time {

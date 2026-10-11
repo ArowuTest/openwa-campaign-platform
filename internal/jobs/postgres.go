@@ -18,13 +18,29 @@ func (r *PostgreSQLRepository) Enqueue(ctx context.Context, job Job) (Job, bool,
 	if r.DB == nil {
 		return Job{}, false, errors.New("database is required")
 	}
+	return enqueuePostgreSQLJob(ctx, r.DB, job)
+}
+
+func (r *PostgreSQLRepository) EnqueueInTx(ctx context.Context, tx *sql.Tx, job Job) (Job, bool, error) {
+	if r == nil || r.DB == nil || tx == nil {
+		return Job{}, false, errors.New("database transaction is required")
+	}
+	return enqueuePostgreSQLJob(ctx, tx, job)
+}
+
+type jobEnqueueExecutor interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func enqueuePostgreSQLJob(ctx context.Context, executor jobEnqueueExecutor, job Job) (Job, bool, error) {
 	const query = `
 INSERT INTO durable_jobs (
  id, job_type, deduplication_key, payload, status, priority, attempt_count,
  max_attempts, available_at, created_at, updated_at
 ) VALUES ($1,$2,$3,$4,'PENDING',$5,0,$6,$7,$8,$8)
 ON CONFLICT (deduplication_key) DO NOTHING`
-	result, err := r.DB.ExecContext(ctx, query, job.ID, job.Type, job.DedupKey, string(job.Payload), job.Priority, job.MaxAttempts, job.AvailableAt, job.CreatedAt)
+	result, err := executor.ExecContext(ctx, query, job.ID, job.Type, job.DedupKey, string(job.Payload), job.Priority, job.MaxAttempts, job.AvailableAt, job.CreatedAt)
 	if err != nil {
 		return Job{}, false, fmt.Errorf("insert durable job: %w", err)
 	}
@@ -35,7 +51,7 @@ ON CONFLICT (deduplication_key) DO NOTHING`
 	if rows == 1 {
 		return job, true, nil
 	}
-	existing, err := r.byDedup(ctx, job.DedupKey)
+	existing, err := scanJob(executor.QueryRowContext(ctx, `SELECT id,job_type,deduplication_key,payload,status,priority,attempt_count,max_attempts,available_at,lease_owner,lease_expires_at,lease_version,last_error_code,last_error_detail,created_at,updated_at,completed_at FROM durable_jobs WHERE deduplication_key=$1`, job.DedupKey))
 	if err != nil {
 		return Job{}, false, err
 	}

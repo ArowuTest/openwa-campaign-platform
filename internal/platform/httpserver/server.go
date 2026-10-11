@@ -22,6 +22,7 @@ import (
 	"campaign-platform/internal/audience/importer"
 	"campaign-platform/internal/audience/materialisation"
 	"campaign-platform/internal/campaign"
+	"campaign-platform/internal/campaignpreparation"
 	"campaign-platform/internal/campaignworkspace"
 	"campaign-platform/internal/commercial"
 	"campaign-platform/internal/consent"
@@ -60,9 +61,11 @@ type Dependencies struct {
 	FilterDefinitions              *audiencefilter.AdministrationService
 	Compiler                       *cohort.Compiler
 	Cohorts                        *cohort.ExecutionService
+	CohortEstimates                *cohort.EstimateService
 	Organisations                  *organisation.Service
 	OrganisationPolicies           *organisation.PolicyAdministration
 	ConsentReviews                 *consent.Service
+	ConsentPurposes                *consent.PurposeService
 	ConsentLedger                  *consent.LedgerService
 	OptOutProcessor                *consent.OptOutProcessor
 	OptOutPolicies                 *consent.OptOutPolicyAdministration
@@ -70,6 +73,7 @@ type Dependencies struct {
 	InboundRetentionPolicies       *inbound.RetentionPolicyAdministration
 	InboundRotation                *inbound.RotationService
 	Campaigns                      *campaign.Service
+	CampaignPreparation            *campaignpreparation.Service
 	CampaignWorkspace              *campaignworkspace.Service
 	Commercial                     *commercial.Service
 	Geography                      *geography.Catalogue
@@ -77,6 +81,8 @@ type Dependencies struct {
 	Identity                       *identity.Service
 	IdentityAdministration         *identity.AdministrationService
 	SecureCookies                  bool
+	Environment                    string
+	Classification                 string
 	MSISDNProtector                *sharedcrypto.MSISDNProtector
 	Messages                       *message.Service
 	TestMessages                   *testmessage.Service
@@ -113,6 +119,7 @@ type Dependencies struct {
 	AudienceReconciliation         *importer.ReconciliationService
 	AudienceSourceTrust            *importer.SourceTrustService
 	AudienceImportIntake           *importer.IntakeService
+	AudienceUploadSessions         *importer.UploadSessionService
 	MaxImportFileBytes             int64
 	DeliveryEvents                 *delivery.Service
 	UnmatchedDeliveryEvents        delivery.UnmatchedEventStore
@@ -197,6 +204,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/cohorts/validate", s.require("audience.read", s.validateCohort))
 	mux.Handle("POST /api/v1/cohorts/compile", s.require("audience.read", s.compileCohort))
 	mux.Handle("POST /api/v1/cohorts/estimate", s.require("audience.read", s.estimateCohort))
+	mux.Handle("POST /api/v1/cohort-estimates", s.require("audience.read", s.scheduleCohortEstimate))
+	mux.Handle("GET /api/v1/cohort-estimates", s.require("audience.read", s.listCohortEstimates))
+	mux.Handle("GET /api/v1/cohort-estimates/{id}", s.require("audience.read", s.getCohortEstimate))
 	mux.Handle("GET /api/v1/segments", s.require("audience.read", s.listSegments))
 	mux.Handle("POST /api/v1/segments", s.require("audience.write", s.createSegment))
 	mux.Handle("GET /api/v1/segments/{id}", s.require("audience.read", s.getSegment))
@@ -218,6 +228,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/organisation-policies/{id}/submit", s.require("organisation.write", s.submitOrganisationPolicy))
 	mux.Handle("POST /api/v1/organisation-policies/{id}/decision", s.require("organisation.approve", s.decideOrganisationPolicy))
 	mux.Handle("GET /api/v1/consent-reviews", s.require("consent.read", s.listConsentReviews))
+	mux.Handle("GET /api/v1/consent-purposes", s.require("consent.read", s.listConsentPurposes))
 	mux.Handle("POST /api/v1/consent-reviews", s.require("consent.write", s.createConsentReview))
 	mux.Handle("GET /api/v1/consent-reviews/{id}", s.require("consent.read", s.getConsentReview))
 	mux.Handle("POST /api/v1/consent-reviews/{id}/submit", s.require("consent.write", s.submitConsentReview))
@@ -241,7 +252,15 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/inbound-replies/{id}/review", s.require("inbound.review", s.reviewInboundReply))
 	mux.Handle("POST /api/v1/inbound-replies/{id}/legal-hold", s.require("privacy.admin", s.setInboundReplyLegalHold))
 	mux.Handle("GET /api/v1/consent-events", s.require("consent.read", s.listConsentEvents))
+	mux.Handle("POST /api/v1/audience-import-upload-sessions", s.require("audience.write", s.createAudienceUploadSession))
+	mux.Handle("GET /api/v1/audience-import-upload-sessions/{id}", s.require("audience.read", s.getAudienceUploadSession))
+	mux.Handle("POST /api/v1/audience-import-upload-sessions/{id}/parts/{part}/target", s.require("audience.write", s.createAudienceUploadPartTarget))
+	mux.Handle("PUT /api/v1/audience-import-upload-sessions/{id}/parts/{part}", s.require("audience.write", s.putAudienceUploadPart))
+	mux.Handle("POST /api/v1/audience-import-upload-sessions/{id}/parts/{part}/confirm", s.require("audience.write", s.confirmAudienceUploadPart))
+	mux.Handle("POST /api/v1/audience-import-upload-sessions/{id}/complete", s.require("audience.write", s.completeAudienceUploadSession))
+	mux.Handle("POST /api/v1/audience-import-upload-sessions/{id}/abort", s.require("audience.write", s.abortAudienceUploadSession))
 	mux.Handle("POST /api/v1/audience-imports/preview", s.require("audience.write", s.previewAudienceImport))
+	mux.Handle("GET /api/v1/audience-imports", s.require("audience.read", s.listAudienceImports))
 	mux.Handle("POST /api/v1/audience-imports", s.require("audience.write", s.intakeAudienceImport))
 	mux.Handle("GET /api/v1/audience-imports/{id}", s.require("audience.read", s.getAudienceImport))
 	mux.Handle("POST /api/v1/audience-imports/{id}/approve", s.require("audience.approve", s.approveAudienceImport))
@@ -273,6 +292,9 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/commercial-records/{id}/decision", s.require("finance.approve", s.decideCommercialRecord))
 	mux.Handle("POST /api/v1/commercial-records/{id}/revoke", s.require("finance.approve", s.revokeCommercialRecord))
 	mux.Handle("GET /api/v1/campaigns", s.require("campaign.read", s.listCampaigns))
+	mux.Handle("GET /api/v1/campaigns/{id}", s.require("campaign.read", s.getCampaign))
+	mux.Handle("GET /api/v1/campaigns/{id}/readiness", s.require("campaign.read", s.getCampaignReadiness))
+	mux.Handle("PUT /api/v1/campaigns/{id}/draft", s.require("campaign.write", s.saveCampaignDraft))
 	mux.Handle("POST /api/v1/campaigns", s.require("campaign.write", s.createCampaign))
 	mux.Handle("POST /api/v1/campaigns/{id}/transition", s.require("campaign.write", s.transitionCampaign))
 	mux.Handle("POST /api/v1/campaigns/{id}/clone", s.require("campaign.write", s.cloneCampaign))
@@ -1451,13 +1473,27 @@ func (s *Server) listCampaigns(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_REQUEST", "The campaign page request is invalid.", map[string]any{"detail": err.Error()})
 		return
 	}
-	page, err := s.deps.Campaigns.List(r.Context(), pageRequest.Limit, pageRequest.Cursor)
+	organisationID := strings.TrimSpace(r.URL.Query().Get("organisationId"))
+	if organisationID != "" && !audienceImportOrganisationIDPattern.MatchString(organisationID) {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_ORGANISATION_ID", "organisationId must be a canonical UUID.", nil)
+		return
+	}
+	status := campaign.Status(strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("status"))))
+	var page campaign.Page
+	if organisationID != "" || status != "" {
+		page, err = s.deps.Campaigns.ListFiltered(r.Context(), campaign.ListFilter{OrganisationID: organisationID, Status: status}, pageRequest.Limit, pageRequest.Cursor)
+	} else {
+		page, err = s.deps.Campaigns.List(r.Context(), pageRequest.Limit, pageRequest.Cursor)
+	}
 	if err != nil {
-		if strings.Contains(err.Error(), "page cursor") {
+		switch {
+		case strings.Contains(err.Error(), "page cursor"):
 			httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_CURSOR", "The campaign page cursor is invalid.", nil)
-			return
+		case strings.Contains(err.Error(), "status filter"):
+			httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_CAMPAIGN_STATUS", "The campaign status filter is invalid.", nil)
+		default:
+			s.internalError(w, r, err)
 		}
-		s.internalError(w, r, err)
 		return
 	}
 	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
@@ -1669,7 +1705,16 @@ func (s *Server) transitionCampaign(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "CAMPAIGN_EVIDENCE_INVALID", "Authoritative campaign evidence did not satisfy the requested transition.", map[string]any{"detail": err.Error()})
 		return
 	}
-	entity, err := s.deps.Campaigns.Transition(r.Context(), r.PathValue("id"), input)
+	var entity campaign.Campaign
+	if input.Action == campaign.ActionApproveFinal {
+		if s.deps.Execution == nil {
+			httpx.WriteError(w, r, http.StatusServiceUnavailable, "PILOT_ADMISSION_UNAVAILABLE", "Campaign pilot admission is unavailable.", nil)
+			return
+		}
+		entity, err = s.deps.Execution.ApproveFinal(r.Context(), r.PathValue("id"), input)
+	} else {
+		entity, err = s.deps.Campaigns.Transition(r.Context(), r.PathValue("id"), input)
+	}
 	if errors.Is(err, campaign.ErrNotFound) {
 		httpx.WriteError(w, r, http.StatusNotFound, "CAMPAIGN_NOT_FOUND", "The campaign was not found.", nil)
 		return
@@ -2653,6 +2698,14 @@ func (s *Server) createAudienceSnapshot(w http.ResponseWriter, r *http.Request) 
 	principal, _ := identity.PrincipalFromContext(r.Context())
 	input.CampaignID = campaignEntity.ID
 	input.CreatedBy = principal.User.ID
+	asOf := time.Now().UTC()
+	consentPolicyVersion, configurationVersion, evidenceErr := s.resolveAudienceSnapshotEvidence(r.Context(), campaignEntity, asOf)
+	if evidenceErr != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "SNAPSHOT_GOVERNANCE_EVIDENCE_UNAVAILABLE", "Authoritative consent and configuration evidence could not be frozen.", map[string]any{"detail": evidenceErr.Error()})
+		return
+	}
+	input.ConsentPolicyVersion = consentPolicyVersion
+	input.ConfigurationVersion = configurationVersion
 	if err := input.Definition.ValidateForPermissions(s.deps.Registry, principal.User.HasPermission); err != nil {
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "SEGMENT_INVALID", "The snapshot definition is invalid.", map[string]any{"detail": err.Error()})
 		return
@@ -2662,7 +2715,7 @@ func (s *Server) createAudienceSnapshot(w http.ResponseWriter, r *http.Request) 
 		limit = 100_000
 	}
 	members, err := s.deps.Cohorts.Materialise(r.Context(), input.Definition, cohort.EligibilityContext{
-		OrganisationID: campaignEntity.OrganisationID, PurposeID: campaignEntity.PurposeID, Channel: "WHATSAPP", AsOf: time.Now().UTC(),
+		OrganisationID: campaignEntity.OrganisationID, PurposeID: campaignEntity.PurposeID, Channel: "WHATSAPP", AsOf: asOf,
 	}, principal.User.HasPermission, limit)
 	if errors.Is(err, cohort.ErrCohortTooLarge) {
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "COHORT_TOO_LARGE", "The eligible cohort exceeds the synchronous snapshot limit.", nil)
@@ -2676,6 +2729,10 @@ func (s *Server) createAudienceSnapshot(w http.ResponseWriter, r *http.Request) 
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "COHORT_EMPTY", "The governed cohort contains no eligible contacts.", nil)
 		return
 	}
+	if evidenceErr := s.revalidateAudienceSnapshotEvidence(r.Context(), campaignEntity, asOf, consentPolicyVersion, configurationVersion); evidenceErr != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "SNAPSHOT_GOVERNANCE_EVIDENCE_CHANGED", "Consent or configuration evidence changed or is unavailable. Re-estimate the audience before creating a snapshot.", map[string]any{"detail": evidenceErr.Error()})
+		return
+	}
 	input.Members = members
 	created, err := s.deps.Snapshots.Create(r.Context(), input)
 	if err != nil {
@@ -2686,13 +2743,11 @@ func (s *Server) createAudienceSnapshot(w http.ResponseWriter, r *http.Request) 
 }
 
 type materialiseAudienceSnapshotRequest struct {
-	Definition           audiencefilter.Group `json:"definition"`
-	SegmentID            string               `json:"segmentId,omitempty"`
-	DefinitionVersion    int64                `json:"definitionVersion"`
-	ConsentPolicyVersion string               `json:"consentPolicyVersion"`
-	ConfigurationVersion string               `json:"configurationVersion"`
-	AsOf                 *time.Time           `json:"asOf,omitempty"`
-	Limit                int                  `json:"limit,omitempty"`
+	Definition        audiencefilter.Group `json:"definition"`
+	SegmentID         string               `json:"segmentId,omitempty"`
+	DefinitionVersion int64                `json:"definitionVersion"`
+	AsOf              *time.Time           `json:"asOf,omitempty"`
+	Limit             int                  `json:"limit,omitempty"`
 }
 
 func (s *Server) materialiseAudienceSnapshot(w http.ResponseWriter, r *http.Request) {
@@ -2722,6 +2777,11 @@ func (s *Server) materialiseAudienceSnapshot(w http.ResponseWriter, r *http.Requ
 	if input.AsOf != nil {
 		asOf = input.AsOf.UTC()
 	}
+	consentPolicyVersion, configurationVersion, evidenceErr := s.resolveAudienceSnapshotEvidence(r.Context(), campaignEntity, asOf)
+	if evidenceErr != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "SNAPSHOT_GOVERNANCE_EVIDENCE_UNAVAILABLE", "Authoritative consent and configuration evidence could not be frozen.", map[string]any{"detail": evidenceErr.Error()})
+		return
+	}
 	principal, _ := identity.PrincipalFromContext(r.Context())
 	members, err := s.deps.Cohorts.Materialise(r.Context(), input.Definition, cohort.EligibilityContext{OrganisationID: campaignEntity.OrganisationID, PurposeID: campaignEntity.PurposeID, Channel: "WHATSAPP", AsOf: asOf}, principal.User.HasPermission, input.Limit)
 	if errors.Is(err, cohort.ErrCohortTooLarge) {
@@ -2736,7 +2796,16 @@ func (s *Server) materialiseAudienceSnapshot(w http.ResponseWriter, r *http.Requ
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "COHORT_EXCEEDS_ENTITLEMENT", "The eligible cohort exceeds the campaign recipient entitlement.", map[string]any{"eligibleCount": len(members), "maximumUniqueRecipients": campaignEntity.MaximumUniqueRecipients})
 		return
 	}
-	created, err := s.deps.Snapshots.Create(r.Context(), segment.CreateInput{CampaignID: campaignEntity.ID, SegmentID: strings.TrimSpace(input.SegmentID), Definition: input.Definition, DefinitionVersion: input.DefinitionVersion, ConsentPolicyVersion: input.ConsentPolicyVersion, ConfigurationVersion: input.ConfigurationVersion, CreatedBy: principal.User.ID, Members: members})
+	if evidenceErr := s.revalidateAudienceSnapshotEvidence(r.Context(), campaignEntity, asOf, consentPolicyVersion, configurationVersion); evidenceErr != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "SNAPSHOT_GOVERNANCE_EVIDENCE_CHANGED", "Consent or configuration evidence changed or is unavailable. Re-estimate the audience before creating a snapshot.", map[string]any{"detail": evidenceErr.Error()})
+		return
+	}
+	created, err := s.deps.Snapshots.Create(r.Context(), segment.CreateInput{
+		CampaignID: campaignEntity.ID, SegmentID: strings.TrimSpace(input.SegmentID),
+		Definition: input.Definition, DefinitionVersion: input.DefinitionVersion,
+		ConsentPolicyVersion: consentPolicyVersion, ConfigurationVersion: configurationVersion,
+		CreatedBy: principal.User.ID, Members: members,
+	})
 	if err != nil {
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "SNAPSHOT_FAILED", "The audience snapshot could not be materialised.", map[string]any{"detail": err.Error()})
 		return
@@ -2745,16 +2814,14 @@ func (s *Server) materialiseAudienceSnapshot(w http.ResponseWriter, r *http.Requ
 }
 
 type scheduleAudienceMaterialisationRequest struct {
-	Definition           audiencefilter.Group `json:"definition"`
-	SegmentID            string               `json:"segmentId,omitempty"`
-	DefinitionVersion    int64                `json:"definitionVersion"`
-	ConsentPolicyVersion string               `json:"consentPolicyVersion"`
-	ConfigurationVersion string               `json:"configurationVersion"`
-	AsOf                 *time.Time           `json:"asOf,omitempty"`
+	Definition        audiencefilter.Group `json:"definition"`
+	SegmentID         string               `json:"segmentId,omitempty"`
+	DefinitionVersion int64                `json:"definitionVersion"`
+	EstimateID        string               `json:"estimateId"`
 }
 
 func (s *Server) scheduleAudienceMaterialisation(w http.ResponseWriter, r *http.Request) {
-	if s.deps.AudienceMaterialisations == nil || s.deps.Cohorts == nil {
+	if s.deps.AudienceMaterialisations == nil || s.deps.CohortEstimates == nil {
 		httpx.WriteError(w, r, http.StatusServiceUnavailable, "AUDIENCE_MATERIALISATION_UNAVAILABLE", "Asynchronous audience materialisation is unavailable.", nil)
 		return
 	}
@@ -2776,7 +2843,11 @@ func (s *Server) scheduleAudienceMaterialisation(w http.ResponseWriter, r *http.
 		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The materialisation request is invalid.", map[string]any{"detail": err.Error()})
 		return
 	}
-	principal, _ := identity.PrincipalFromContext(r.Context())
+	principal, ok := identity.PrincipalFromContext(r.Context())
+	if !ok || strings.TrimSpace(principal.User.ID) == "" {
+		httpx.WriteError(w, r, http.StatusUnauthorized, "AUTH_REQUIRED", "Authentication is required.", nil)
+		return
+	}
 	segmentID := strings.TrimSpace(input.SegmentID)
 	definition := input.Definition
 	definitionVersion := input.DefinitionVersion
@@ -2804,25 +2875,40 @@ func (s *Server) scheduleAudienceMaterialisation(w http.ResponseWriter, r *http.
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "DEFINITION_VERSION_REQUIRED", "An inline definition version is required.", nil)
 		return
 	}
-	asOf := time.Now().UTC()
-	if input.AsOf != nil {
-		asOf = input.AsOf.UTC()
+	if s.deps.FilterDefinitions != nil {
+		if err := s.deps.FilterDefinitions.Refresh(r.Context()); err != nil {
+			s.internalError(w, r, err)
+			return
+		}
 	}
-	eligibility := cohort.EligibilityContext{OrganisationID: entity.OrganisationID, PurposeID: entity.PurposeID, Channel: "WHATSAPP", AsOf: asOf}
-	estimate, err := s.deps.Cohorts.Estimate(r.Context(), definition, eligibility, principal.User.HasPermission)
-	if err != nil {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "COHORT_ESTIMATE_FAILED", "The eligible audience could not be estimated.", map[string]any{"detail": err.Error()})
+	if err := definition.ValidateForPermissions(s.deps.Registry, principal.User.HasPermission); err != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "COHORT_VALIDATION_FAILED", "The cohort definition failed validation.", map[string]any{"detail": err.Error()})
 		return
 	}
-	if estimate.EligibleCount <= 0 {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "EMPTY_COHORT", "The cohort contains no eligible recipients.", nil)
+	estimateID := strings.TrimSpace(input.EstimateID)
+	if estimateID == "" {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "COHORT_ESTIMATE_REQUIRED", "A completed durable cohort estimate is required before audience materialisation can be scheduled.", nil)
 		return
 	}
-	if estimate.EligibleCount > entity.MaximumUniqueRecipients {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "COHORT_EXCEEDS_ENTITLEMENT", "The eligible cohort exceeds the campaign recipient entitlement.", map[string]any{"eligibleCount": estimate.EligibleCount, "maximumUniqueRecipients": entity.MaximumUniqueRecipients})
+	estimateRecord, estimateErr := s.deps.CohortEstimates.Get(r.Context(), estimateID)
+	if errors.Is(estimateErr, cohort.ErrEstimateNotFound) {
+		httpx.WriteError(w, r, http.StatusNotFound, "COHORT_ESTIMATE_NOT_FOUND", "The durable cohort estimate was not found.", nil)
 		return
 	}
-	job, err := s.deps.AudienceMaterialisations.Schedule(r.Context(), materialisation.ScheduleMaterialisation{CampaignID: entity.ID, SegmentID: segmentID, Definition: definition, DefinitionVersion: definitionVersion, Eligibility: eligibility, ConsentPolicyVersion: input.ConsentPolicyVersion, ConfigurationVersion: input.ConfigurationVersion, RequestedBy: principal.User.ID, ExpectedCount: estimate.EligibleCount})
+	if estimateErr != nil {
+		s.internalError(w, r, estimateErr)
+		return
+	}
+	eligibility, consentPolicyVersion, configurationVersion, expectedCount, evidenceErr := resolveMaterialisationEstimateEvidence(estimateRecord, entity, definition)
+	if evidenceErr != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "COHORT_ESTIMATE_NOT_ELIGIBLE_FOR_MATERIALISATION", "The durable cohort estimate cannot authorise this audience materialisation.", map[string]any{"detail": evidenceErr.Error()})
+		return
+	}
+	job, err := s.deps.AudienceMaterialisations.Schedule(r.Context(), materialisation.ScheduleMaterialisation{
+		CampaignID: entity.ID, SegmentID: segmentID, Definition: definition, DefinitionVersion: definitionVersion,
+		Eligibility: eligibility, ConsentPolicyVersion: consentPolicyVersion, ConfigurationVersion: configurationVersion,
+		RequestedBy: principal.User.ID, ExpectedCount: expectedCount,
+	})
 	if err != nil {
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "MATERIALISATION_SCHEDULE_FAILED", "The audience materialisation could not be scheduled.", map[string]any{"detail": err.Error()})
 		return
@@ -2954,6 +3040,10 @@ func (s *Server) getCampaignMetrics(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, value)
 }
 
+type releaseCampaignRequest struct {
+	ExpectedVersion int64
+}
+
 func (s *Server) releaseCampaignAudience(w http.ResponseWriter, r *http.Request) {
 	if s.deps.Releases == nil {
 		httpx.WriteError(w, r, http.StatusServiceUnavailable, "RELEASE_SERVICE_UNAVAILABLE", "Campaign audience release is unavailable.", nil)
@@ -2965,7 +3055,15 @@ func (s *Server) releaseCampaignAudience(w http.ResponseWriter, r *http.Request)
 		httpx.WriteError(w, r, http.StatusForbidden, "STEP_UP_REQUIRED", "Recent multi-factor verification is required to release campaign recipients.", nil)
 		return
 	}
-	result, err := s.deps.Releases.Release(r.Context(), r.PathValue("id"))
+	var input releaseCampaignRequest
+	if !decodeStrictJSON(w, r, &input) {
+		return
+	}
+	if input.ExpectedVersion <= 0 {
+		httpx.WriteError(w, r, http.StatusBadRequest, "EXPECTED_VERSION_REQUIRED", "Expected campaign version is required.", nil)
+		return
+	}
+	result, err := s.deps.Releases.ReleaseGuarded(r.Context(), r.PathValue("id"), input.ExpectedVersion)
 	if errors.Is(err, campaign.ErrNotFound) {
 		httpx.WriteError(w, r, http.StatusNotFound, "CAMPAIGN_NOT_FOUND", "The campaign was not found.", nil)
 		return

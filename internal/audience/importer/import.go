@@ -64,6 +64,7 @@ type ImportBatch struct {
 	SourceSystem          string          `json:"sourceSystem,omitempty"`
 	DefaultCountryISO2    string          `json:"defaultCountryIso2,omitempty"`
 	ObjectKey             string          `json:"objectKey"`
+	UploadSessionID       string          `json:"uploadSessionId,omitempty"`
 	OriginalFilename      string          `json:"originalFilename"`
 	DetectedMediaType     string          `json:"detectedMediaType"`
 	FileSHA256            string          `json:"fileSha256"`
@@ -107,6 +108,7 @@ type CreateImportInput struct {
 	SourceSystem          string
 	DefaultCountryISO2    string
 	ObjectKey             string
+	UploadSessionID       string
 	OriginalFilename      string
 	DetectedMediaType     string
 	FileSHA256            string
@@ -181,7 +183,7 @@ func NewImportBatch(input CreateImportInput, now time.Time) (ImportBatch, error)
 		ID: identifier, OrganisationID: strings.TrimSpace(input.OrganisationID), ConsentReviewID: strings.TrimSpace(input.ConsentReviewID),
 		PurposeID: strings.TrimSpace(input.PurposeID), Channel: "WHATSAPP", WordingVersion: strings.TrimSpace(input.WordingVersion),
 		SourceName: strings.TrimSpace(input.SourceName), SourceSystem: strings.TrimSpace(input.SourceSystem), DefaultCountryISO2: strings.ToUpper(strings.TrimSpace(input.DefaultCountryISO2)),
-		ObjectKey: strings.TrimSpace(input.ObjectKey), OriginalFilename: strings.TrimSpace(input.OriginalFilename), DetectedMediaType: strings.TrimSpace(input.DetectedMediaType),
+		ObjectKey: strings.TrimSpace(input.ObjectKey), UploadSessionID: strings.TrimSpace(input.UploadSessionID), OriginalFilename: strings.TrimSpace(input.OriginalFilename), DetectedMediaType: strings.TrimSpace(input.DetectedMediaType),
 		FileSHA256: checksum, ByteSize: input.ByteSize, TemplateVersion: strings.TrimSpace(input.TemplateVersion), MappingDefinitionID: strings.TrimSpace(input.MappingDefinitionID), Mapping: mapping, SourceExpiresAt: input.SourceExpiresAt,
 		UpdatePolicy: input.UpdatePolicy, Status: ImportUploaded, MalwareStatus: MalwarePending, ContentSignatureValid: input.ContentSignatureValid,
 		ClientRequestID: strings.TrimSpace(input.ClientRequestID), UploadedBy: strings.TrimSpace(input.UploadedBy), Version: 1, CreatedAt: now, UpdatedAt: now,
@@ -300,14 +302,14 @@ func isExactApprovalReplay(current ImportBatch, actorID string, expectedVersion 
 func (b ImportBatch) RequestFingerprint() string {
 	mapping := canonicalImportJSON(b.Mapping)
 	payload, _ := json.Marshal(struct {
-		OrganisationID, ConsentReviewID, PurposeID, Channel, WordingVersion      string
-		SourceName, SourceSystem, ObjectKey, OriginalFilename, DetectedMediaType string
-		FileSHA256, TemplateVersion, MappingDefinitionID                         string
-		ByteSize                                                                 int64
-		Mapping                                                                  json.RawMessage
-		UpdatePolicy                                                             UpdatePolicy
-		UploadedBy                                                               string
-	}{b.OrganisationID, b.ConsentReviewID, b.PurposeID, b.Channel, b.WordingVersion, b.SourceName, b.SourceSystem, b.ObjectKey, b.OriginalFilename, b.DetectedMediaType, b.FileSHA256, b.TemplateVersion, b.MappingDefinitionID, b.ByteSize, mapping, b.UpdatePolicy, b.UploadedBy})
+		OrganisationID, ConsentReviewID, PurposeID, Channel, WordingVersion                       string
+		SourceName, SourceSystem, ObjectKey, UploadSessionID, OriginalFilename, DetectedMediaType string
+		FileSHA256, TemplateVersion, MappingDefinitionID                                          string
+		ByteSize                                                                                  int64
+		Mapping                                                                                   json.RawMessage
+		UpdatePolicy                                                                              UpdatePolicy
+		UploadedBy                                                                                string
+	}{b.OrganisationID, b.ConsentReviewID, b.PurposeID, b.Channel, b.WordingVersion, b.SourceName, b.SourceSystem, b.ObjectKey, b.UploadSessionID, b.OriginalFilename, b.DetectedMediaType, b.FileSHA256, b.TemplateVersion, b.MappingDefinitionID, b.ByteSize, mapping, b.UpdatePolicy, b.UploadedBy})
 	sum := sha256.Sum256(payload)
 	return hex.EncodeToString(sum[:])
 }

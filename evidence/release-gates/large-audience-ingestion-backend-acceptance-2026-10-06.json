@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "evidence_type": "large-audience-ingestion-backend-acceptance",
+  "observed_at": "2026-10-06T18:25:00+01:00",
+  "branch": "feat/large-audience-ingestion-20261006",
+  "base_commit": "a18cfcd2ec72ae305e5e90953d570435dd8dd489",
+  "status": "ACCEPTED_BACKEND_FOUNDATION_PENDING_UI_AND_PRODUCTION_ROLLOUT",
+  "scope": [
+    "resumable durable audience upload sessions and immutable parts",
+    "bounded relay upload",
+    "optional guarded direct S3 one-part upload targets",
+    "server-side direct-part confirmation",
+    "actual-byte SHA verification",
+    "fenced asynchronous upload finalisation",
+    "whole-file hash, file inspection and malware scan",
+    "upload-session to audience-import lineage",
+    "composite CSV validation and XLSX bounded worker-local spool",
+    "multi-object source retention cleanup",
+    "audience-worker/runtime/config/OpenAPI/deployment-contract integration",
+    "read-only governed consent-purpose inventory for organisation/review-scoped UI selection",
+    "large-ingestion performance/load evidence"
+  ],
+  "architecture_invariants": {
+    "browser_parses_multi_million_rows": false,
+    "control_api_buffers_complete_large_source": false,
+    "relay_maximum_scope": "one configured upload part",
+    "direct_s3_default_enabled": false,
+    "direct_s3_enablement_gate": "explicit bucket CORS restricted to approved admin-web origin(s), exact signed headers/methods, and proof that presigned URLs are never durably logged",
+    "finaliser_rehashes_actual_part_bytes": true,
+    "raw_e164_crosses_protected_consumer_boundary": false,
+    "validation_requires_terminal_upload_import_link": true,
+    "legacy_bounded_multipart_retained": true
+  },
+  "database": {
+    "postgresql_version": "17.5",
+    "fresh_migrations": "0001-0095 PASS",
+    "migration_validator": {
+      "files": 95,
+      "tables": 144,
+      "indexes": 493,
+      "constraints": 2273
+    },
+    "composed_resumable_flow": "PASS: upload -> durable parts -> complete -> fenced finalise -> hash/scan -> import link -> validation claim -> composite CSV -> protected staging -> PREVIEW_READY"
+  },
+  "performance": {
+    "parser_two_million": {
+      "rows": 2000000,
+      "bytes": 30000015,
+      "elapsed_seconds": 3.5516843,
+      "rows_per_second": 563113,
+      "peak_go_heap_delta_bytes": 4104624,
+      "accounting": "PASS"
+    },
+    "staging_tuning": [
+      {"rows":100000,"batch":1000,"rows_per_second":4257,"peak_go_heap_delta_bytes":4317032},
+      {"rows":100000,"batch":5000,"rows_per_second":7978,"peak_go_heap_delta_bytes":22132032},
+      {"rows":100000,"batch":10000,"rows_per_second":7010,"peak_go_heap_delta_bytes":44192480}
+    ],
+    "staging_two_million": {
+      "rows": 2000000,
+      "batch": 5000,
+      "bytes": 30000015,
+      "elapsed_seconds": 314.75856744,
+      "rows_per_second": 6354,
+      "peak_go_heap_delta_bytes": 22311528,
+      "database_growth_bytes": 951787520,
+      "accounting": "PASS"
+    },
+    "promoted_runtime_default_batch": 5000,
+    "hard_max_batch": 10000
+  },
+  "verification": {
+    "linux_go_1_23_2_full_repository": "PASS",
+    "linux_go_vet_full_repository": "PASS",
+    "race_storage": "PASS",
+    "race_audience_importer": "PASS",
+    "race_httpserver": "PASS",
+    "python_governance_linux": "208/208 PASS",
+    "openapi_routes": "302/302 implemented method/path pairs",
+    "production_compose": "PASS: 7 services / 25 secret classes",
+    "railway_variable_plan": "PASS",
+    "railway_service_runtime_config": "PASS",
+    "committed_secret_scan": "PASS",
+    "git_diff_check": "PASS"
+  },
+  "review": {
+    "direct_source_adversarial_review": "NO BLOCKING DEFECT FOUND",
+    "external_council": "UNAVAILABLE: reasoning provider returned authorization_denied",
+    "council_failure_is_candidate_rejection": false
+  },
+  "non_claims": [
+    "No Railway production source or variables were changed by this feature tranche.",
+    "Direct S3 upload remains disabled in production until its explicit CORS/security rollout gate is completed.",
+    "The 2M database profile is local disposable PostgreSQL evidence, not a Railway production load test.",
+    "The 2M evidence does not claim 10M ingestion acceptance.",
+    "The Day-1 audience import operator UI is not yet accepted by this backend tranche.",
+    "Final product/release certification remains open."
+  ]
+}

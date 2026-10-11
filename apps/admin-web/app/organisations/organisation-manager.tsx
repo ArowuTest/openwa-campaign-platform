@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from 'react';
 import { StatusBadge } from '../../components/status-badge';
+import { apiRequest } from '../../lib/api';
 
 type Organisation = {
   id: string;
@@ -32,9 +33,7 @@ export function OrganisationManager() {
   async function load() {
     setState('loading');
     try {
-      const response = await fetch('/api/v1/organisations', { cache: 'no-store' });
-      if (!response.ok) throw new Error('Unable to load organisations');
-      const payload = await response.json();
+      const payload = await apiRequest<{ items: Organisation[] }>('/v1/organisations');
       setItems(payload.items ?? []);
       setState('idle');
     } catch (error) {
@@ -43,25 +42,37 @@ export function OrganisationManager() {
     }
   }
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    let cancelled = false;
+    void apiRequest<{ items: Organisation[] }>('/v1/organisations')
+      .then((payload) => {
+        if (cancelled) return;
+        setItems(payload.items ?? []);
+        setState('idle');
+      })
+      .catch((cause) => {
+        if (cancelled) return;
+        setMessage(cause instanceof Error ? cause.message : 'Unable to load organisations');
+        setState('error');
+      });
+    return () => { cancelled = true; };
+  }, []);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
     setState('saving');
     setMessage('');
-    const response = await fetch('/api/v1/organisations', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(form)
-    });
-    if (!response.ok) {
-      const payload = await response.json().catch(() => ({}));
-      setMessage(payload.message ?? 'Unable to create organisation');
+    try {
+      await apiRequest<Organisation>('/v1/organisations', {
+        method: 'POST',
+        body: JSON.stringify(form)
+      });
+      setForm(emptyForm);
+      await load();
+    } catch (cause) {
+      setMessage(cause instanceof Error ? cause.message : 'Unable to create organisation');
       setState('error');
-      return;
     }
-    setForm(emptyForm);
-    await load();
   }
 
   return (

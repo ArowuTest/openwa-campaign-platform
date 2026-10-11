@@ -15,10 +15,12 @@ import (
 )
 
 type SourceDeletionWork struct {
-	ImportID     string `json:"importId"`
-	ObjectKey    string `json:"objectKey"`
-	LeaseOwner   string `json:"leaseOwner"`
-	LeaseVersion int64  `json:"leaseVersion"`
+	ImportID        string   `json:"importId"`
+	ObjectKey       string   `json:"objectKey"`
+	UploadSessionID string   `json:"uploadSessionId,omitempty"`
+	ObjectKeys      []string `json:"-"`
+	LeaseOwner      string   `json:"leaseOwner"`
+	LeaseVersion    int64    `json:"leaseVersion"`
 }
 
 type SourceRetentionRepository interface {
@@ -90,8 +92,18 @@ func (w *SourceRetentionWorker) Process(ctx context.Context) (int, error) {
 	processed := 0
 	var failures []error
 	for _, item := range items {
+		keys := append([]string(nil), item.ObjectKeys...)
+		if len(keys) == 0 {
+			keys = []string{item.ObjectKey}
+		}
 		w.active.Add(1)
-		deleteErr := w.Objects.Delete(ctx, item.ObjectKey)
+		var deleteErr error
+		for _, key := range keys {
+			if err := w.Objects.Delete(ctx, key); err != nil {
+				deleteErr = fmt.Errorf("delete source object %s: %w", hashObjectKey(key), err)
+				break
+			}
+		}
 		w.active.Add(-1)
 		if deleteErr != nil {
 			failureErr := w.Repository.FailSourceDeletion(ctx, item, truncate(deleteErr.Error(), 1000), time.Now().UTC())
@@ -120,14 +132,14 @@ func (r *PostgreSQLSourceRetentionRepository) ClaimSourcesForDeletion(ctx contex
 		return nil, err
 	}
 	defer tx.Rollback()
-	rows, err := tx.QueryContext(ctx, `SELECT id::text,object_key,coalesce(source_deletion_lease_owner,''),version FROM audience_imports WHERE source_deleted_at IS NULL AND source_expires_at<=$1 AND status IN ('COMPLETED','COMPLETED_WITH_EXCEPTIONS','ROLLED_BACK','REJECTED','FAILED','CANCELLED') AND (source_deletion_lease_expires_at IS NULL OR source_deletion_lease_expires_at<$1) ORDER BY source_expires_at,id FOR UPDATE SKIP LOCKED LIMIT $2`, now, limit)
+	rows, err := tx.QueryContext(ctx, `SELECT id::text,object_key,coalesce(upload_session_id::text,''),coalesce(source_deletion_lease_owner,''),version FROM audience_imports WHERE source_deleted_at IS NULL AND source_expires_at<=$1 AND status IN ('COMPLETED','COMPLETED_WITH_EXCEPTIONS','ROLLED_BACK','REJECTED','FAILED','CANCELLED') AND (source_deletion_lease_expires_at IS NULL OR source_deletion_lease_expires_at<$1) ORDER BY source_expires_at,id FOR UPDATE SKIP LOCKED LIMIT $2`, now, limit)
 	if err != nil {
 		return nil, err
 	}
 	items := []SourceDeletionWork{}
 	for rows.Next() {
 		var v SourceDeletionWork
-		if err := rows.Scan(&v.ImportID, &v.ObjectKey, &v.LeaseOwner, &v.LeaseVersion); err != nil {
+		if err := rows.Scan(&v.ImportID, &v.ObjectKey, &v.UploadSessionID, &v.LeaseOwner, &v.LeaseVersion); err != nil {
 			rows.Close()
 			return nil, err
 		}
@@ -140,6 +152,31 @@ func (r *PostgreSQLSourceRetentionRepository) ClaimSourcesForDeletion(ctx contex
 		return nil, err
 	}
 	for i := range items {
+		if strings.TrimSpace(items[i].UploadSessionID) != "" {
+			partRows, partErr := tx.QueryContext(ctx, `SELECT object_key FROM audience_import_upload_parts WHERE session_id=$1::uuid AND state='UPLOADED' ORDER BY part_number`, items[i].UploadSessionID)
+			if partErr != nil {
+				return nil, partErr
+			}
+			for partRows.Next() {
+				var key string
+				if err := partRows.Scan(&key); err != nil {
+					partRows.Close()
+					return nil, err
+				}
+				items[i].ObjectKeys = append(items[i].ObjectKeys, key)
+			}
+			if err := partRows.Close(); err != nil {
+				return nil, err
+			}
+			if err := partRows.Err(); err != nil {
+				return nil, err
+			}
+			if len(items[i].ObjectKeys) == 0 {
+				return nil, fmt.Errorf("resumable import %s has no uploaded source parts", items[i].ImportID)
+			}
+		} else {
+			items[i].ObjectKeys = []string{items[i].ObjectKey}
+		}
 		res, execErr := tx.ExecContext(ctx, `UPDATE audience_imports SET source_deletion_lease_owner=$2,source_deletion_lease_expires_at=$3,source_deletion_attempts=source_deletion_attempts+1,source_deletion_last_error=NULL,version=version+1,updated_at=$1 WHERE id=$4::uuid AND version=$5`, now, worker, now.Add(lease), items[i].ImportID, items[i].LeaseVersion)
 		if execErr != nil {
 			return nil, execErr

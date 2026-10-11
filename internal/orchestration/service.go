@@ -32,6 +32,9 @@ type ReleaseService struct {
 	Organisations interface {
 		Get(context.Context, string) (organisation.Organisation, error)
 	}
+	CommercialApprovals interface {
+		ValidateCampaignApproval(context.Context, string, string, int64) (string, error)
+	}
 	Snapshots      SnapshotReader
 	Store          AtomicStore
 	Eligibility    EligibilityChecker
@@ -56,8 +59,26 @@ type ReleaseSummary struct {
 	CompletedAt      time.Time      `json:"completedAt"`
 }
 
+// Release is retained as a compatibility entry point for callers that do not
+// yet carry an expected campaign version. It resolves the current version and
+// delegates to the guarded path so no caller can bypass pilot, commercial,
+// and store-level compare-and-swap validation.
 func (s *ReleaseService) Release(ctx context.Context, campaignID string) (ReleaseSummary, error) {
-	return s.release(ctx, campaignID, 0, false)
+	if s == nil || s.Campaigns == nil {
+		return ReleaseSummary{}, errors.New("guarded release requires campaign reader")
+	}
+	campaignID = strings.TrimSpace(campaignID)
+	if campaignID == "" {
+		return ReleaseSummary{}, errors.New("campaign ID is required")
+	}
+	entity, err := s.Campaigns.Get(ctx, campaignID)
+	if err != nil {
+		return ReleaseSummary{}, fmt.Errorf("load campaign for guarded release: %w", err)
+	}
+	if entity.Version <= 0 {
+		return ReleaseSummary{}, ErrReleaseConflict
+	}
+	return s.ReleaseGuarded(ctx, entity.ID, entity.Version)
 }
 
 func (s *ReleaseService) ReleaseGuarded(ctx context.Context, campaignID string, expectedVersion int64) (ReleaseSummary, error) {
@@ -90,6 +111,18 @@ func (s *ReleaseService) release(ctx context.Context, campaignID string, expecte
 			if err := s.PilotAdmission(ctx, entity); err != nil {
 				return ReleaseSummary{}, err
 			}
+		}
+		if s.CommercialApprovals == nil {
+			return ReleaseSummary{}, errors.New("current commercial approval is required")
+		}
+		approvalID, approvalErr := s.CommercialApprovals.ValidateCampaignApproval(
+			ctx, entity.ID, entity.OrganisationID, entity.MaximumUniqueRecipients,
+		)
+		if approvalErr != nil {
+			return ReleaseSummary{}, approvalErr
+		}
+		if strings.TrimSpace(entity.CommercialApprovalID) == "" || entity.CommercialApprovalID != approvalID {
+			return ReleaseSummary{}, errors.New("campaign commercial approval is no longer current")
 		}
 	}
 	if s.Organisations != nil {
@@ -153,7 +186,7 @@ func (s *ReleaseService) release(ctx context.Context, campaignID string, expecte
 		}
 		result, err := s.Store.Authorise(ctx, Command{
 			CampaignID: entity.ID, ExpectedCampaignVersion: expectedVersion,
-			SnapshotID: snapshot.ID, MessageVersionID: entity.MessageVersionID,
+			SnapshotID: snapshot.ID, MessageVersionID: entity.MessageVersionID, CommercialApprovalID: entity.CommercialApprovalID,
 			OrganisationID: entity.OrganisationID, PurposeID: entity.PurposeID, Channel: "WHATSAPP",
 			MaximumUniqueRecipients: entity.MaximumUniqueRecipients, Members: commandMembers,
 			ShardSize: shardCount, AsOf: now,

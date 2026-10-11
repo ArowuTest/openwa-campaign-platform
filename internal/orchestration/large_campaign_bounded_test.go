@@ -70,6 +70,7 @@ func TestFiveMillionRecipientReleaseRemainsBounded(t *testing.T) {
 		Status: campaign.StatusScheduled, MaximumUniqueRecipients: total,
 		AudienceSnapshotID: "snapshot-five-million", AudienceSnapshotHash: "hash-five-million",
 		EligibleAudienceCount: total, MessageVersionID: "message", MessageContentHash: "message-hash", Version: 1,
+		CommercialApprovalID: "commercial-current",
 	}
 	if err := campaigns.Create(context.Background(), entity); err != nil {
 		t.Fatal(err)
@@ -81,7 +82,8 @@ func TestFiveMillionRecipientReleaseRemainsBounded(t *testing.T) {
 		Eligibility: EligibilityFunc(func(context.Context, string, string, string, string, time.Time) (EligibilityDecision, error) {
 			return EligibilityDecision{Eligible: true}, nil
 		}),
-		BatchSize: 5_000, ShardCount: 10_000, Clock: func() time.Time { return now },
+		CommercialApprovals: commercialApprovalStub{id: "commercial-current"},
+		BatchSize:           5_000, ShardCount: 10_000, Clock: func() time.Time { return now },
 	}
 	summary, err := service.Release(context.Background(), entity.ID)
 	if err != nil {

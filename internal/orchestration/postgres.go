@@ -145,17 +145,17 @@ func (s *PostgreSQLStore) authoriseOnce(ctx context.Context, cmd Command, checke
 	defer tx.Rollback()
 
 	var maximum, campaignVersion int64
-	var status, snapshotID, messageVersionID, organisationID, purposeID, organisationStatus, reviewStatus, reviewChannel string
+	var status, snapshotID, messageVersionID, commercialApprovalID, organisationID, purposeID, organisationStatus, reviewStatus, reviewChannel string
 	var reviewExpiresAt time.Time
 	const campaignQuery = `
 SELECT c.maximum_unique_recipients, c.version, c.status, coalesce(c.audience_snapshot_id::text,''),
-       coalesce(c.approved_message_version_id::text,''), c.organisation_id::text, c.purpose_id::text,
-       o.status, cr.status, cr.channel, cr.expires_at
+       coalesce(c.approved_message_version_id::text,''), coalesce(c.commercial_approval_id::text,''),
+       c.organisation_id::text, c.purpose_id::text, o.status, cr.status, cr.channel, cr.expires_at
 FROM campaigns c
 JOIN organisations o ON o.id = c.organisation_id
 JOIN consent_reviews cr ON cr.id = c.consent_review_id
 WHERE c.id=$1::uuid FOR UPDATE OF c`
-	if err := tx.QueryRowContext(ctx, campaignQuery, cmd.CampaignID).Scan(&maximum, &campaignVersion, &status, &snapshotID, &messageVersionID, &organisationID, &purposeID, &organisationStatus, &reviewStatus, &reviewChannel, &reviewExpiresAt); err != nil {
+	if err := tx.QueryRowContext(ctx, campaignQuery, cmd.CampaignID).Scan(&maximum, &campaignVersion, &status, &snapshotID, &messageVersionID, &commercialApprovalID, &organisationID, &purposeID, &organisationStatus, &reviewStatus, &reviewChannel, &reviewExpiresAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return Result{}, errors.New("campaign not found")
 		}
@@ -178,6 +178,35 @@ WHERE c.id=$1::uuid FOR UPDATE OF c`
 	}
 	if cmd.MaximumUniqueRecipients != maximum {
 		return Result{}, errors.New("release entitlement does not match authoritative campaign entitlement")
+	}
+	if strings.TrimSpace(cmd.CommercialApprovalID) == "" {
+		if commercialApprovalID != "" {
+			return Result{}, ErrReleaseConflict
+		}
+	} else {
+		if commercialApprovalID != cmd.CommercialApprovalID {
+			return Result{}, ErrReleaseConflict
+		}
+		var lockedCommercialID string
+		if err := tx.QueryRowContext(ctx, `
+SELECT id::text
+FROM campaign_commercial_approvals
+WHERE id=$1::uuid
+  AND campaign_id=$2::uuid
+  AND organisation_id=$3::uuid
+  AND status='APPROVED'
+  AND approved_recipients >= $4
+  AND NULLIF(btrim(payment_reference), '') IS NOT NULL
+  AND payment_received_at IS NOT NULL
+  AND payment_received_at <= $5
+FOR SHARE`,
+			cmd.CommercialApprovalID, cmd.CampaignID, cmd.OrganisationID, cmd.MaximumUniqueRecipients, cmd.AsOf.UTC(),
+		).Scan(&lockedCommercialID); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return Result{}, errors.New("campaign commercial approval is no longer valid for release")
+			}
+			return Result{}, fmt.Errorf("lock commercial approval: %w", err)
+		}
 	}
 
 	members := append([]Member(nil), cmd.Members...)
@@ -285,11 +314,19 @@ ON CONFLICT (campaign_id,contact_id,message_version_id) DO NOTHING`, item.Recipi
 		if err != nil {
 			return Result{}, err
 		}
-		_, err = tx.ExecContext(ctx, `
+		var insertedOutboxID string
+		err = tx.QueryRowContext(ctx, `
 INSERT INTO transactional_outbox(
  id,deduplication_key,aggregate_type,aggregate_id,event_type,payload,status,available_at,created_at
 ) VALUES($1::uuid,$2,'CAMPAIGN_RECIPIENT',$3::uuid,'CAMPAIGN_RECIPIENT_AUTHORISED',$4::jsonb,'PENDING',$5,$5)
-ON CONFLICT (deduplication_key) DO NOTHING`, outboxID, "dispatch:"+item.Key, item.RecipientID, string(payload), now)
+ON CONFLICT (deduplication_key) DO NOTHING
+RETURNING id::text`, outboxID, "dispatch:"+item.Key, item.RecipientID, string(payload), now).Scan(&insertedOutboxID)
+		if errors.Is(err, sql.ErrNoRows) {
+			// A newly inserted recipient must always have its matching outbox row.
+			// Treat an occupied deduplication key as a release conflict instead of
+			// silently leaving an orphaned recipient obligation.
+			return Result{}, fmt.Errorf("%w: transactional outbox deduplication key already exists", ErrReleaseConflict)
+		}
 		if err != nil {
 			return Result{}, fmt.Errorf("insert transactional outbox: %w", err)
 		}

@@ -110,7 +110,7 @@ func (s *Server) require(permission string, next http.HandlerFunc) http.Handler 
 			httpx.WriteError(w, r, http.StatusUnauthorized, "SESSION_INVALID", "The session is invalid or expired.", nil)
 			return
 		}
-		if permission != "" && !user.HasPermission(permission) {
+		if permission != "" && !hasAnyPermission(user, permission) {
 			s.deps.Identity.RecordPermissionDenied(r.Context(), user.ID, permission, authenticationAttempt(r, user.Email))
 			httpx.WriteError(w, r, http.StatusForbidden, "PERMISSION_DENIED", "The user is not authorised for this action.", nil)
 			return
@@ -124,6 +124,15 @@ func (s *Server) require(permission string, next http.HandlerFunc) http.Handler 
 		ctx := identity.WithPrincipal(r.Context(), identity.Principal{User: user, Session: session, SessionID: session.ID, CSRFToken: r.Header.Get("X-CSRF-Token")})
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+func hasAnyPermission(user identity.User, expression string) bool {
+	for _, permission := range strings.Split(expression, "|") {
+		if candidate := strings.TrimSpace(permission); candidate != "" && user.HasPermission(candidate) {
+			return true
+		}
+	}
+	return false
 }
 
 func bearerOrCookie(r *http.Request) string {

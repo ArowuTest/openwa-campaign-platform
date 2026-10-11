@@ -299,6 +299,15 @@ func TestDraftSaveGovernanceAndRetirement(t *testing.T) {
 		})
 	}
 }
+func TestDraftSaveRejectsSenderPoolFromAnotherOrganisation(t *testing.T) {
+	svc, repo, _, _, pools, _, c := draftService(t)
+	pools.values[draftPool] = sender.Pool{ID: draftPool, OrganisationID: "90000000-0000-4000-8000-000000000001", Status: "ACTIVE"}
+	if _, err := svc.SaveDraft(context.Background(), c.ID, draftInput(c)); !errors.Is(err, ErrDraftInvalid) {
+		t.Fatalf("cross-organisation sender pool accepted: %v", err)
+	}
+	assertDraftUnchanged(t, repo, c)
+}
+
 func TestDraftSavePurposeReviewBinding(t *testing.T) {
 	for _, name := range []string{"purpose review", "wording", "review ID", "organisation", "channel", "campaign scope", "policy"} {
 		t.Run(name, func(t *testing.T) {

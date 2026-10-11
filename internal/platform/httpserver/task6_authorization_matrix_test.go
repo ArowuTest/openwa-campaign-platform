@@ -31,6 +31,7 @@ type task6RoutePermission struct {
 var task6HighRiskRoutePermissions = []task6RoutePermission{
 	{http.MethodGet, "/api/v1/campaigns/campaign-1/test-message-options", "campaign.write"},
 	{http.MethodPost, "/api/v1/campaigns/campaign-1/commercial-record", "finance.write"},
+	{http.MethodPut, "/api/v1/commercial-records/record-1/draft", "finance.write"},
 	{http.MethodPost, "/api/v1/commercial-records/record-1/submit", "finance.write"},
 	{http.MethodPost, "/api/v1/commercial-records/record-1/decision", "finance.approve"},
 	{http.MethodPost, "/api/v1/commercial-records/record-1/revoke", "finance.approve"},

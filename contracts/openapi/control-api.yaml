@@ -3276,8 +3276,9 @@ paths:
   /commercial-records:
     get:
       operationId: listCommercialRecords
-      summary: List governed commercial records
+      summary: List governed commercial records for finance operators
       parameters:
+        - { name: organisationId, in: query, required: false, schema: { type: string, format: uuid } }
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
         - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
@@ -3289,42 +3290,161 @@ paths:
                 type: object
                 required: [items, count, hasMore]
                 properties:
-                  items: { type: array, items: { type: object } }
+                  items: { type: array, items: { $ref: '#/components/schemas/CommercialRecord' } }
                   count: { type: integer, minimum: 0 }
                   nextCursor: { type: string }
                   hasMore: { type: boolean }
   /campaigns/{id}/commercial-record:
-    post:
-      operationId: createCommercialRecord
-      summary: Create a campaign commercial record draft
+    get:
+      operationId: getCampaignCommercialRecord
+      summary: Get the finance-governed commercial record bound to one campaign
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
-        '201': { description: Commercial record created }
+        '200':
+          description: Commercial record
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CommercialRecord' }
+        '404': { description: Campaign or commercial record not found }
+    post:
+      operationId: createCommercialRecord
+      summary: Create a campaign commercial record draft from offline quote, invoice and payment evidence
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CommercialDraftRequest' }
+      responses:
+        '201':
+          description: Commercial record created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CommercialRecord' }
+        '400': { description: Invalid or authority-bearing fields supplied by the client }
+        '422': { description: Commercial evidence is invalid }
+  /commercial-records/{id}/draft:
+    put:
+      operationId: updateCommercialRecordDraft
+      summary: Correct a DRAFT or REJECTED commercial record using optimistic versioning
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CommercialDraftUpdateRequest' }
+      responses:
+        '200':
+          description: Corrected commercial draft
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CommercialRecord' }
+        '404': { description: Commercial record not found }
+        '409': { description: Commercial record version conflict }
+        '422': { description: Commercial correction invalid or record no longer editable }
+  /commercial-records/{id}/events:
+    get:
+      operationId: listCommercialRecordEvents
+      summary: List immutable commercial evidence events in record-version order
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string } }
+      responses:
+        '200':
+          description: Immutable commercial event history
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/CommercialEvent' } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
+        '404': { description: Commercial record not found }
   /commercial-records/{id}/submit:
     post:
       operationId: submitCommercialRecord
-      summary: Submit a commercial record for maker-checker approval
+      summary: Submit a commercial record for independent finance approval
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedVersion, reason]
+              properties:
+                expectedVersion: { type: integer, format: int64, minimum: 1 }
+                reason: { type: string, minLength: 5, maxLength: 1000 }
       responses:
-        '200': { description: Commercial record submitted }
+        '200':
+          description: Commercial record submitted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CommercialRecord' }
+        '409': { description: Commercial record version conflict }
+        '422': { description: Commercial submission invalid }
   /commercial-records/{id}/decision:
     post:
       operationId: decideCommercialRecord
-      summary: Approve or reject a commercial record
+      summary: Independently approve or reject a commercial record
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedVersion, approve, reason]
+              properties:
+                expectedVersion: { type: integer, format: int64, minimum: 1 }
+                approve: { type: boolean }
+                reason: { type: string, minLength: 5, maxLength: 1000 }
       responses:
-        '200': { description: Commercial decision recorded }
+        '200':
+          description: Commercial decision recorded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CommercialRecord' }
+        '403': { description: Recent MFA step-up required }
+        '409': { description: Commercial record version conflict }
+        '422': { description: Maker/checker, payment or lifecycle rule rejected the decision }
   /commercial-records/{id}/revoke:
     post:
       operationId: revokeCommercialRecord
-      summary: Revoke an approved commercial record
+      summary: Revoke an approved commercial record and retain immutable revocation evidence
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedVersion, reason]
+              properties:
+                expectedVersion: { type: integer, format: int64, minimum: 1 }
+                reason: { type: string, minLength: 5, maxLength: 1000 }
       responses:
-        '200': { description: Commercial record revoked }
+        '200':
+          description: Commercial record revoked
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CommercialRecord' }
+        '403': { description: Recent MFA step-up required }
+        '409': { description: Commercial record version conflict }
+        '422': { description: Commercial record cannot be revoked }
 
   /exports/{id}:
     get:
@@ -4601,6 +4721,76 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
   schemas:
+    CommercialDraftRequest:
+      type: object
+      additionalProperties: false
+      required: [quotationReference, invoiceReference, currency, approvedRecipients, unitPriceMinor, managementFeeMinor, reason]
+      properties:
+        quotationReference: { type: string, minLength: 1 }
+        invoiceReference: { type: string, minLength: 1 }
+        currency: { type: string, minLength: 3, maxLength: 3, pattern: '^[A-Z]{3}$' }
+        approvedRecipients: { type: integer, format: int64, minimum: 1 }
+        unitPriceMinor: { type: integer, format: int64, minimum: 0 }
+        managementFeeMinor: { type: integer, format: int64, minimum: 0 }
+        paymentReference: { type: string }
+        paymentReceivedAt: { type: string, format: date-time }
+        reason: { type: string, minLength: 5, maxLength: 1000 }
+    CommercialDraftUpdateRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, quotationReference, invoiceReference, currency, approvedRecipients, unitPriceMinor, managementFeeMinor, reason]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 1 }
+        quotationReference: { type: string, minLength: 1 }
+        invoiceReference: { type: string, minLength: 1 }
+        currency: { type: string, minLength: 3, maxLength: 3, pattern: '^[A-Z]{3}$' }
+        approvedRecipients: { type: integer, format: int64, minimum: 1 }
+        unitPriceMinor: { type: integer, format: int64, minimum: 0 }
+        managementFeeMinor: { type: integer, format: int64, minimum: 0 }
+        paymentReference: { type: string }
+        paymentReceivedAt: { type: string, format: date-time }
+        reason: { type: string, minLength: 5, maxLength: 1000 }
+    CommercialRecord:
+      type: object
+      additionalProperties: false
+      required: [id, campaignId, organisationId, quotationReference, invoiceReference, currency, approvedRecipients, unitPriceMinor, managementFeeMinor, totalAmountMinor, status, version, createdBy, reason, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        campaignId: { type: string, format: uuid }
+        organisationId: { type: string, format: uuid }
+        quotationReference: { type: string }
+        invoiceReference: { type: string }
+        currency: { type: string, minLength: 3, maxLength: 3, pattern: '^[A-Z]{3}$' }
+        approvedRecipients: { type: integer, format: int64, minimum: 1 }
+        unitPriceMinor: { type: integer, format: int64, minimum: 0 }
+        managementFeeMinor: { type: integer, format: int64, minimum: 0 }
+        totalAmountMinor: { type: integer, format: int64, minimum: 0 }
+        paymentReference: { type: string }
+        paymentReceivedAt: { type: string, format: date-time }
+        status: { type: string, enum: [DRAFT, PENDING_APPROVAL, APPROVED, REJECTED, REVOKED] }
+        version: { type: integer, format: int64, minimum: 1 }
+        createdBy: { type: string, format: uuid }
+        submittedBy: { type: string, format: uuid }
+        approvedBy: { type: string, format: uuid }
+        reason: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    CommercialEvent:
+      type: object
+      additionalProperties: false
+      required: [id, commercialRecordId, eventType, actorId, reason, recordVersion, evidence, occurredAt]
+      properties:
+        id: { type: string, format: uuid }
+        commercialRecordId: { type: string, format: uuid }
+        eventType: { type: string, enum: [CREATED, UPDATED, SUBMITTED, APPROVED, REJECTED, REVOKED] }
+        actorId: { type: string, format: uuid }
+        reason: { type: string, minLength: 5, maxLength: 1000 }
+        recordVersion: { type: integer, format: int64, minimum: 1 }
+        evidence:
+          type: object
+          additionalProperties: true
+          description: Immutable commercial record snapshot for this record version.
+        occurredAt: { type: string, format: date-time }
     MessageVariable:
       type: object
       additionalProperties: false

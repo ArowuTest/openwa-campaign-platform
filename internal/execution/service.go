@@ -184,6 +184,41 @@ func (c *Coordinator) commitLifecycle(
 	return c.Committer.Commit(ctx, value)
 }
 
+func (c *Coordinator) ApproveCommercial(ctx context.Context, id string, input campaign.TransitionInput) (campaign.Campaign, error) {
+	if c == nil || c.Committer == nil {
+		return campaign.Campaign{}, ErrLifecycleCommitterRequired
+	}
+	if input.Action != campaign.ActionApproveCommercial {
+		return campaign.Campaign{}, errors.New("commercial approval requires APPROVE_COMMERCIAL action")
+	}
+	entity, err := c.Campaigns.Get(ctx, strings.TrimSpace(id))
+	if err != nil {
+		return campaign.Campaign{}, err
+	}
+	if input.ExpectedVersion != entity.Version {
+		return campaign.Campaign{}, campaign.ErrConflict
+	}
+	pilot, err := c.ValidateDayOnePilot(ctx, entity)
+	if err != nil {
+		return campaign.Campaign{}, err
+	}
+	planID := ""
+	reservationOperation := ReservationNone
+	details := map[string]any{}
+	if entity.Transport.Provider == campaign.ProviderOpenWA {
+		planID = pilot.RoutingPlanID
+		reservationOperation = ReservationValidateHeld
+		details["acceptedTestMessageId"] = pilot.AcceptedTestMessageID
+		details["routingPlanId"] = pilot.RoutingPlanID
+		details["routingPlanVersion"] = pilot.RoutingPlanVersion
+		details["reservationId"] = pilot.ReservationID
+	}
+	return c.commitLifecycle(
+		ctx, id, input, "CAMPAIGN_COMMERCIAL_APPROVED", details,
+		planID, reservationOperation, nil,
+	)
+}
+
 func (c *Coordinator) ApproveFinal(ctx context.Context, id string, input campaign.TransitionInput) (campaign.Campaign, error) {
 	if c == nil || c.Committer == nil {
 		return campaign.Campaign{}, ErrLifecycleCommitterRequired

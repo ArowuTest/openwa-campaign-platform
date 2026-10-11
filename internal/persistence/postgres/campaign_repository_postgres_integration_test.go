@@ -4,6 +4,7 @@ import (
 	"campaign-platform/internal/campaign"
 	"context"
 	"database/sql"
+	"errors"
 	"os"
 	"testing"
 	"time"
@@ -421,5 +422,76 @@ func TestPostgreSQLCampaignRepositoryCreatesUnfrozenTransportAsSQLNull(t *testin
 	}
 	if !routingPolicyNull || !capacityNull {
 		t.Fatal("CAS converted unfrozen nullable route evidence into empty text")
+	}
+}
+
+func TestPostgreSQLCampaignRepositorySerializesCommercialApprovalCAS(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_PAGINATION_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("POSTGRES_PAGINATION_DATABASE_URL is not set")
+	}
+	db, err := sql.Open("postgres", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := db.PingContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var orgID, purposeID, campaignID, approvalID string
+	if err := db.QueryRowContext(ctx, `SELECT gen_random_uuid()::text,gen_random_uuid()::text,gen_random_uuid()::text,gen_random_uuid()::text`).Scan(&orgID, &purposeID, &campaignID, &approvalID); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	must := func(query string, args ...any) {
+		t.Helper()
+		if _, err := db.ExecContext(ctx, query, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(`INSERT INTO organisations(id,legal_name,status) VALUES($1::uuid,$2,'ACTIVE')`, orgID, "Commercial CAS "+orgID[:8])
+	must(`INSERT INTO consent_purposes(id,organisation_id,code,name,channel,wording_version) VALUES($1::uuid,$2::uuid,$3,'Commercial CAS','WHATSAPP','v1')`, purposeID, orgID, "COMMERCIAL_CAS_"+purposeID[:8])
+	must(`INSERT INTO campaigns(id,organisation_id,name,purpose_id,status,maximum_unique_recipients,maximum_messages_per_recipient,version,created_at,updated_at) VALUES($1::uuid,$2::uuid,'Commercial CAS',$3::uuid,'MESSAGE_APPROVED',1,1,1,$4,$4)`, campaignID, orgID, purposeID, now)
+	must(`INSERT INTO campaign_commercial_approvals(id,campaign_id,organisation_id,quotation_reference,invoice_reference,currency,approved_recipients,unit_price_minor,management_fee_minor,total_amount_minor,payment_reference,payment_received_at,status,version,reason,created_at,updated_at) VALUES($1::uuid,$2::uuid,$3::uuid,'quote','invoice','NGN',1,100,0,100,'payment',$4,'APPROVED',1,'approval recorded',$4,$4)`, approvalID, campaignID, orgID, now)
+	must(`UPDATE campaigns SET commercial_approval_id=$2::uuid WHERE id=$1::uuid`, campaignID, approvalID)
+	defer func() {
+		cleanup, cc := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cc()
+		_, _ = db.ExecContext(cleanup, `DELETE FROM campaign_commercial_approvals WHERE id=$1::uuid`, approvalID)
+		_, _ = db.ExecContext(cleanup, `DELETE FROM campaigns WHERE id=$1::uuid`, campaignID)
+		_, _ = db.ExecContext(cleanup, `DELETE FROM consent_purposes WHERE id=$1::uuid`, purposeID)
+		_, _ = db.ExecContext(cleanup, `DELETE FROM organisations WHERE id=$1::uuid`, orgID)
+	}()
+
+	repo := &CampaignRepository{DB: db}
+	candidate := campaign.Campaign{
+		ID: campaignID, Status: campaign.StatusFinalApprovalPending, CommercialApprovalID: approvalID,
+		Version: 2, UpdatedAt: now.Add(time.Minute),
+	}
+	must(`UPDATE campaign_commercial_approvals SET status='REVOKED',version=2,updated_at=$2 WHERE id=$1::uuid`, approvalID, now.Add(time.Minute))
+	if err := repo.CompareAndSwap(ctx, candidate, 1); !errors.Is(err, campaign.ErrConflict) {
+		t.Fatalf("CAS with revoked commercial approval error=%v, want campaign.ErrConflict", err)
+	}
+	unchanged, err := repo.Get(ctx, campaignID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if unchanged.Status != campaign.Status("MESSAGE_APPROVED") || unchanged.Version != 1 {
+		t.Fatalf("campaign changed after revoked approval CAS: status=%s version=%d", unchanged.Status, unchanged.Version)
+	}
+
+	must(`UPDATE campaign_commercial_approvals SET status='APPROVED',version=1,updated_at=$2 WHERE id=$1::uuid`, approvalID, now.Add(2*time.Minute))
+	if err := repo.CompareAndSwap(ctx, candidate, 1); err != nil {
+		t.Fatalf("CAS with approved commercial approval: %v", err)
+	}
+	must(`UPDATE campaign_commercial_approvals SET status='REVOKED',version=2,updated_at=$2 WHERE id=$1::uuid`, approvalID, now.Add(3*time.Minute))
+	advanced, err := repo.Get(ctx, campaignID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if advanced.Status != campaign.StatusFinalApprovalPending || advanced.Version != 2 {
+		t.Fatalf("campaign CAS did not persist before later revocation: status=%s version=%d", advanced.Status, advanced.Version)
 	}
 }

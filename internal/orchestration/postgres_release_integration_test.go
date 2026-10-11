@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"campaign-platform/internal/delivery"
 	_ "campaign-platform/internal/persistence/database"
 )
 
@@ -101,6 +102,45 @@ func releaseCommand(f postgresReleaseFixture, maximum int64) Command {
 	}
 	return Command{CampaignID: f.CampaignID, SnapshotID: f.SnapshotID, MessageVersionID: f.MessageID, OrganisationID: f.OrganisationID, PurposeID: f.PurposeID, Channel: "WHATSAPP", MaximumUniqueRecipients: maximum, Members: members, ShardSize: 10_000, AsOf: f.AsOf}
 }
+func TestPostgreSQLReleaseRejectsCommercialApprovalWithoutPaymentEvidence(t *testing.T) {
+	db, ctx, cancel := openPostgresReleaseDB(t)
+	defer cancel()
+	defer db.Close()
+
+	fixture := seedPostgresReleaseFixture(t, ctx, db, 1, 1)
+	var approvalID string
+	if err := db.QueryRowContext(ctx, `SELECT gen_random_uuid()::text`).Scan(&approvalID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO campaign_commercial_approvals(
+	id,campaign_id,organisation_id,quotation_reference,invoice_reference,currency,
+	approved_recipients,unit_price_minor,management_fee_minor,total_amount_minor,
+	status,version,reason,created_at,updated_at
+) VALUES($1::uuid,$2::uuid,$3::uuid,'Q-MISSING-PAYMENT','I-MISSING-PAYMENT','NGN',
+	$4,0,0,0,'APPROVED',1,'payment evidence missing',$5,$5)`,
+		approvalID, fixture.CampaignID, fixture.OrganisationID, 1, fixture.AsOf,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `UPDATE campaigns SET commercial_approval_id=$2::uuid WHERE id=$1::uuid`, fixture.CampaignID, approvalID); err != nil {
+		t.Fatal(err)
+	}
+
+	command := releaseCommand(fixture, 1)
+	command.CommercialApprovalID = approvalID
+	if _, err := (&PostgreSQLStore{DB: db}).Authorise(ctx, command, SQLFinalEligibilityChecker{}); err == nil {
+		t.Fatal("release accepted approved commercial evidence without payment reference/time")
+	}
+	var recipients int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM campaign_recipients WHERE campaign_id=$1::uuid`, fixture.CampaignID).Scan(&recipients); err != nil {
+		t.Fatal(err)
+	}
+	if recipients != 0 {
+		t.Fatalf("invalid commercial evidence created %d recipient obligations", recipients)
+	}
+}
+
 func TestPostgreSQLReleaseReplayKeepsOneRecipientAndOneOutbox(t *testing.T) {
 	db, ctx, cancel := openPostgresReleaseDB(t)
 	defer cancel()
@@ -131,6 +171,47 @@ func TestPostgreSQLReleaseReplayKeepsOneRecipientAndOneOutbox(t *testing.T) {
 	}
 	if recipients != 1 || outboxRows != 1 {
 		t.Fatalf("recipient rows=%d outbox rows=%d", recipients, outboxRows)
+	}
+}
+
+func TestPostgreSQLReleaseFailsClosedOnOccupiedOutboxDeduplicationKey(t *testing.T) {
+	db, ctx, cancel := openPostgresReleaseDB(t)
+	defer cancel()
+	defer db.Close()
+
+	fixture := seedPostgresReleaseFixture(t, ctx, db, 1, 1)
+	command := releaseCommand(fixture, 1)
+	deduplicationKey, err := delivery.NewIdempotencyKey(command.CampaignID, fixture.Contacts[0], command.MessageVersionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var conflictingOutboxID, conflictingAggregateID string
+	if err := db.QueryRowContext(ctx, `SELECT gen_random_uuid()::text,gen_random_uuid()::text`).Scan(&conflictingOutboxID, &conflictingAggregateID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `
+INSERT INTO transactional_outbox(
+ id,deduplication_key,aggregate_type,aggregate_id,event_type,payload,status,available_at,created_at
+) VALUES($1::uuid,$2,'CAMPAIGN_RECIPIENT',$3::uuid,'CAMPAIGN_RECIPIENT_AUTHORISED','{}'::jsonb,'PENDING',$4,$4)`,
+		conflictingOutboxID, "dispatch:"+deduplicationKey, conflictingAggregateID, fixture.AsOf,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = (&PostgreSQLStore{DB: db}).Authorise(ctx, command, SQLFinalEligibilityChecker{})
+	if !errors.Is(err, ErrReleaseConflict) {
+		t.Fatalf("occupied outbox deduplication key error=%v want=%v", err, ErrReleaseConflict)
+	}
+
+	var recipients, matchingOutbox int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM campaign_recipients WHERE campaign_id=$1::uuid`, fixture.CampaignID).Scan(&recipients); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM transactional_outbox WHERE deduplication_key=$1`, "dispatch:"+deduplicationKey).Scan(&matchingOutbox); err != nil {
+		t.Fatal(err)
+	}
+	if recipients != 0 || matchingOutbox != 1 {
+		t.Fatalf("occupied outbox conflict leaked recipients=%d outbox=%d", recipients, matchingOutbox)
 	}
 }
 

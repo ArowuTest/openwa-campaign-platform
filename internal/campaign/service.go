@@ -297,6 +297,19 @@ func (s *Service) PrepareTransition(ctx context.Context, identifier string, inpu
 		}
 		input.CommercialApprovalID = approvalID
 	}
+	switch input.Action {
+	case ActionRequestFinalApproval, ActionApproveFinal, ActionStartDispatch, ActionResume:
+		if s.commercial == nil {
+			return Campaign{}, errors.New("commercial approval service is required")
+		}
+		approvalID, validationErr := s.commercial.ValidateCampaignApproval(ctx, entity.ID, entity.OrganisationID, entity.MaximumUniqueRecipients)
+		if validationErr != nil {
+			return Campaign{}, validationErr
+		}
+		if strings.TrimSpace(entity.CommercialApprovalID) == "" || entity.CommercialApprovalID != approvalID {
+			return Campaign{}, errors.New("campaign commercial approval is no longer current")
+		}
+	}
 	entity, err = entity.Transition(input, s.clock())
 	if err != nil {
 		return Campaign{}, err

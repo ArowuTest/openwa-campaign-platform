@@ -521,3 +521,23 @@ func TestRoutingPlanApprovalEvidenceMigrationStrengthensEvidenceWithoutFabricate
 		t.Fatal("migration must not fabricate approval evidence for historical routing plans")
 	}
 }
+
+func TestCommercialEventHistoryMigrationIsVersionedAndAppendOnly(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(migrationDirectory(t), "0099_commercial_event_history.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(content)
+	for _, required := range []string{
+		"CREATE TABLE campaign_commercial_events",
+		"UNIQUE(commercial_record_id,record_version)",
+		"campaign_commercial_events_append_only",
+		"BEFORE UPDATE OR DELETE ON campaign_commercial_events",
+		"campaign_commercial_events_no_truncate",
+		"BEFORE TRUNCATE ON campaign_commercial_events",
+	} {
+		if !strings.Contains(source, required) {
+			t.Fatalf("commercial event-history migration missing %q", required)
+		}
+	}
+}

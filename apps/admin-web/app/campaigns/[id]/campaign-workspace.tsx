@@ -7,6 +7,7 @@ import { useRouter } from 'next/navigation';
 import { StatusBadge } from '../../../components/status-badge';
 import { CampaignDraftEditor } from './campaign-draft-editor';
 import { CampaignReadinessPanel } from './campaign-readiness-panel';
+import { CommercialGovernance } from './commercial-governance';
 import { MessageComposer } from './message-composer';
 import { useAuth } from '../../../components/auth-provider';
 import { APIError, apiRequest, collectBoundedPages, type ListEnvelope } from '../../../lib/api';
@@ -581,6 +582,12 @@ function CampaignWorkspaceGeneration({ campaignId }: { campaignId: string }) {
           )}
         </article>
       </section>
+
+      <CommercialGovernance
+        campaign={campaign}
+        pilotEvidenceReady={Boolean(acceptedExactTest && (heldReservation || activeReservation))}
+        onChanged={load}
+      />
 
       <section className="card">
         <div className="section-heading">

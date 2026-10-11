@@ -287,7 +287,10 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/organisations/{id}/audience-source-trust", s.require("audience.read", s.listAudienceSourceTrust))
 	mux.Handle("PUT /api/v1/organisations/{id}/audience-source-trust/{source}", s.require("audience.write", s.upsertAudienceSourceTrust))
 	mux.Handle("GET /api/v1/commercial-records", s.require("finance.read", s.listCommercialRecords))
+	mux.Handle("GET /api/v1/campaigns/{id}/commercial-record", s.require("finance.read|campaign.approve", s.getCampaignCommercialRecord))
 	mux.Handle("POST /api/v1/campaigns/{id}/commercial-record", s.require("finance.write", s.createCommercialRecord))
+	mux.Handle("PUT /api/v1/commercial-records/{id}/draft", s.require("finance.write", s.updateCommercialRecordDraft))
+	mux.Handle("GET /api/v1/commercial-records/{id}/events", s.require("finance.read", s.listCommercialRecordEvents))
 	mux.Handle("POST /api/v1/commercial-records/{id}/submit", s.require("finance.write", s.submitCommercialRecord))
 	mux.Handle("POST /api/v1/commercial-records/{id}/decision", s.require("finance.approve", s.decideCommercialRecord))
 	mux.Handle("POST /api/v1/commercial-records/{id}/revoke", s.require("finance.approve", s.revokeCommercialRecord))
@@ -298,7 +301,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/campaigns/{id}/capacity-hold", s.require("campaign.approve", s.createCampaignCapacityHold))
 	mux.Handle("PUT /api/v1/campaigns/{id}/draft", s.require("campaign.write", s.saveCampaignDraft))
 	mux.Handle("POST /api/v1/campaigns", s.require("campaign.write", s.createCampaign))
-	mux.Handle("POST /api/v1/campaigns/{id}/transition", s.require("campaign.write", s.transitionCampaign))
+	mux.Handle("POST /api/v1/campaigns/{id}/transition", s.require("campaign.write|campaign.approve|campaign.operate", s.transitionCampaign))
 	mux.Handle("POST /api/v1/campaigns/{id}/clone", s.require("campaign.write", s.cloneCampaign))
 	mux.Handle("GET /api/v1/campaigns/{id}/workspace", s.require("campaign.read", s.getCampaignWorkspace))
 	mux.Handle("PUT /api/v1/campaigns/{id}/tags", s.require("campaign.write", s.setCampaignTags))
@@ -1319,9 +1322,9 @@ func (s *Server) createCommercialRecord(w http.ResponseWriter, r *http.Request) 
 		httpx.WriteError(w, r, http.StatusServiceUnavailable, "COMMERCIAL_UNAVAILABLE", "Commercial governance is not configured.", nil)
 		return
 	}
-	var input commercial.Record
+	var input commercialDraftRequest
 	if err := httpx.DecodeJSON(w, r, 1<<20, &input); err != nil {
-		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The commercial record request is invalid.", map[string]any{"detail": err.Error()})
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_JSON", "The commercial record request is invalid.", nil)
 		return
 	}
 	campaignValue, err := s.deps.Campaigns.Get(r.Context(), r.PathValue("id"))
@@ -1329,17 +1332,30 @@ func (s *Server) createCommercialRecord(w http.ResponseWriter, r *http.Request) 
 		httpx.WriteError(w, r, http.StatusNotFound, "CAMPAIGN_NOT_FOUND", "The campaign was not found.", nil)
 		return
 	}
+	if campaignValue.Status != campaign.StatusMessageApproved {
+		httpx.WriteError(w, r, http.StatusConflict, "COMMERCIAL_STAGE_INVALID", "Commercial evidence can be created only after campaign message approval.", nil)
+		return
+	}
+	record, recordErr := input.record()
+	if recordErr != nil {
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "COMMERCIAL_INVALID", "The commercial record contains invalid derived values.", nil)
+		return
+	}
 	principal, _ := identity.PrincipalFromContext(r.Context())
-	input.CampaignID = campaignValue.ID
-	input.OrganisationID = campaignValue.OrganisationID
-	value, err := s.deps.Commercial.CreateDraft(r.Context(), input, principal.User.ID, input.Reason)
+	record.CampaignID = campaignValue.ID
+	record.OrganisationID = campaignValue.OrganisationID
+	value, err := s.deps.Commercial.CreateDraft(r.Context(), record, principal.User.ID, input.Reason)
 	if err != nil {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "COMMERCIAL_INVALID", "The commercial record could not be created.", map[string]any{"detail": err.Error()})
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "COMMERCIAL_INVALID", "The commercial record could not be created.", nil)
 		return
 	}
 	httpx.WriteJSON(w, http.StatusCreated, value)
 }
 func (s *Server) submitCommercialRecord(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Commercial == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "COMMERCIAL_UNAVAILABLE", "Commercial governance is not configured.", nil)
+		return
+	}
 	var input struct {
 		ExpectedVersion int64  `json:"expectedVersion"`
 		Reason          string `json:"reason"`
@@ -1355,12 +1371,16 @@ func (s *Server) submitCommercialRecord(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err != nil {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "COMMERCIAL_INVALID", "The commercial submission was rejected.", map[string]any{"detail": err.Error()})
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "COMMERCIAL_INVALID", "The commercial submission was rejected.", nil)
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, value)
 }
 func (s *Server) decideCommercialRecord(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Commercial == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "COMMERCIAL_UNAVAILABLE", "Commercial governance is not configured.", nil)
+		return
+	}
 	var input struct {
 		ExpectedVersion int64  `json:"expectedVersion"`
 		Approve         bool   `json:"approve"`
@@ -1381,12 +1401,16 @@ func (s *Server) decideCommercialRecord(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err != nil {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "COMMERCIAL_INVALID", "The commercial decision was rejected.", map[string]any{"detail": err.Error()})
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "COMMERCIAL_INVALID", "The commercial decision was rejected.", nil)
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, value)
 }
 func (s *Server) revokeCommercialRecord(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Commercial == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "COMMERCIAL_UNAVAILABLE", "Commercial governance is not configured.", nil)
+		return
+	}
 	var input struct {
 		ExpectedVersion int64  `json:"expectedVersion"`
 		Reason          string `json:"reason"`
@@ -1406,7 +1430,7 @@ func (s *Server) revokeCommercialRecord(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err != nil {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "COMMERCIAL_INVALID", "The commercial revocation was rejected.", map[string]any{"detail": err.Error()})
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "COMMERCIAL_INVALID", "The commercial revocation was rejected.", nil)
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, value)
@@ -1702,6 +1726,27 @@ func (s *Server) transitionCampaign(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		s.internalError(w, r, err)
+		return
+	}
+	if input.Action == campaign.ActionApproveCommercial {
+		if s.deps.Execution == nil {
+			httpx.WriteError(w, r, http.StatusServiceUnavailable, "PILOT_ADMISSION_UNAVAILABLE", "Campaign pilot admission is unavailable.", nil)
+			return
+		}
+		entity, pilotErr := s.deps.Execution.ApproveCommercial(r.Context(), r.PathValue("id"), input)
+		if errors.Is(pilotErr, campaign.ErrNotFound) {
+			httpx.WriteError(w, r, http.StatusNotFound, "CAMPAIGN_NOT_FOUND", "The campaign was not found.", nil)
+			return
+		}
+		if errors.Is(pilotErr, campaign.ErrConflict) {
+			httpx.WriteError(w, r, http.StatusConflict, "CAMPAIGN_VERSION_CONFLICT", "The campaign changed; reload before retrying.", nil)
+			return
+		}
+		if pilotErr != nil {
+			httpx.WriteError(w, r, http.StatusUnprocessableEntity, "PILOT_EVIDENCE_INCOMPLETE", "An accepted exact-route controlled test and authoritative capacity hold are required before commercial campaign approval.", nil)
+			return
+		}
+		httpx.WriteJSON(w, http.StatusOK, entity)
 		return
 	}
 	if err := s.resolveCampaignEvidence(r.Context(), current, &input); err != nil {

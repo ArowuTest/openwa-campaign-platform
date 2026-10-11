@@ -398,7 +398,7 @@ func buildPostgreSQLRuntime(ctx context.Context, cfg config.Config, protector *s
 		SessionTTL:  24 * time.Hour,
 	}
 	releases := &orchestration.ReleaseService{
-		Campaigns: campaigns, Organisations: orgs, Snapshots: snapshots,
+		Campaigns: campaigns, Organisations: orgs, CommercialApprovals: commercialService, Snapshots: snapshots,
 		Store: &orchestration.PostgreSQLStore{DB: db}, Eligibility: orchestration.SQLFinalEligibilityChecker{},
 		PilotAdmission: func(ctx context.Context, entity campaign.Campaign) error {
 			_, err := executionCoordinator.ValidateDayOnePilot(ctx, entity)

@@ -3799,8 +3799,10 @@ paths:
   /privacy/legal-holds:
     get:
       operationId: listPrivacyLegalHolds
-      summary: List active and released privacy legal holds
+      summary: List privacy legal holds for an exact subject lookup
       parameters:
+        - { name: msisdn, in: query, required: true, schema: { type: string }, description: Exact E.164 subject identifier used only for protected lookup; responses remain masked. }
+        - { name: activeOnly, in: query, required: false, schema: { type: boolean, default: false }, description: When true, return only non-expired active holds; when false, include the full lifecycle for the exact subject. }
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
         - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:

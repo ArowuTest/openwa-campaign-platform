@@ -17,6 +17,7 @@ import (
 	"campaign-platform/internal/observability"
 	"campaign-platform/internal/operations"
 	"campaign-platform/internal/persistence/database"
+	postgresrepo "campaign-platform/internal/persistence/postgres"
 	"campaign-platform/internal/privacy"
 	sharedcrypto "campaign-platform/internal/shared/crypto"
 	"campaign-platform/internal/shared/envfile"
@@ -100,10 +101,11 @@ func main() {
 		os.Exit(2)
 	}
 	privacyResolver := &privacy.Service{Evidence: privacyKeyring}
+	authenticationEvents := &postgresrepo.AuthenticationEventRecorder{DB: db}
 	worker := &operations.ExportWorker{
 		Repository: repo, AuditRepository: &audit.PostgreSQLRepository{DB: db},
-		PrivacyPackages: privacyResolver, Objects: objects, WorkerID: workerID,
-		LeaseDuration: 2 * time.Minute, ReadyTTL: readyTTL,
+		AuthenticationEvents: authenticationEvents, PrivacyPackages: privacyResolver,
+		Objects: objects, WorkerID: workerID, LeaseDuration: 2 * time.Minute, ReadyTTL: readyTTL,
 	}
 
 	var active atomic.Int64

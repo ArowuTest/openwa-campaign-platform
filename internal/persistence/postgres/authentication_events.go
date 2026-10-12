@@ -2,7 +2,6 @@ package postgres
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -10,7 +9,10 @@ import (
 	"campaign-platform/internal/identity"
 )
 
-const authenticationEventSelect = `SELECT id::text,coalesce(user_id::text,''),coalesce(encode(email_hash,'hex'),''),event_type,coalesce(host(source_ip),''),coalesce(user_agent,''),correlation_id,occurred_at,metadata FROM authentication_events`
+// The audit-reader/export query deliberately selects only the fields that may
+// cross the authentication-event read boundary. Sensitive email hashes, source
+// IPs, user agents and metadata remain unavailable to the export worker role.
+const authenticationEventSelect = `SELECT id::text,coalesce(user_id::text,''),event_type,correlation_id,occurred_at FROM authentication_events`
 
 func (r *AuthenticationEventRecorder) SearchAuthenticationEvents(ctx context.Context, query identity.AuthenticationEventQuery) (identity.AuthenticationEventPage, error) {
 	if r == nil || r.DB == nil {
@@ -64,16 +66,10 @@ func (r *AuthenticationEventRecorder) SearchAuthenticationEvents(ctx context.Con
 	for rows.Next() {
 		var event identity.AuthenticationEvent
 		var eventType string
-		var metadata []byte
-		if err := rows.Scan(&event.ID, &event.UserID, &event.EmailHash, &eventType, &event.SourceIP, &event.UserAgent, &event.CorrelationID, &event.OccurredAt, &metadata); err != nil {
+		if err := rows.Scan(&event.ID, &event.UserID, &eventType, &event.CorrelationID, &event.OccurredAt); err != nil {
 			return identity.AuthenticationEventPage{}, err
 		}
 		event.Type = identity.AuthenticationEventType(eventType)
-		if len(metadata) > 0 {
-			if err := json.Unmarshal(metadata, &event.Metadata); err != nil {
-				return identity.AuthenticationEventPage{}, fmt.Errorf("decode authentication metadata: %w", err)
-			}
-		}
 		event.OccurredAt = event.OccurredAt.UTC()
 		items = append(items, event)
 	}

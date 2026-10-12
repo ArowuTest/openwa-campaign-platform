@@ -520,6 +520,9 @@ const controlSchemaReadinessQuery = `SELECT
   AND to_regclass('public.campaign_execution_leases') IS NOT NULL
   AND to_regclass('public.operations_incidents') IS NOT NULL
   AND to_regclass('public.export_requests') IS NOT NULL
+  AND to_regclass('public.authentication_events') IS NOT NULL
+  AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='export_requests' AND column_name='authentication_event_as_of')
+  AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='export_requests' AND column_name='authentication_event_head_id')
   AND to_regclass('public.export_download_grants') IS NOT NULL
   AND to_regclass('public.privacy_cases') IS NOT NULL
   AND to_regclass('public.privacy_legal_holds') IS NOT NULL

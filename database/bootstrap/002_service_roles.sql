@@ -182,6 +182,14 @@ SELECT pg_temp.grant_existing_tables('campaign_export_worker', 'SELECT, UPDATE',
 SELECT pg_temp.grant_existing_tables('campaign_export_worker', 'SELECT', ARRAY[
   'audit_chain_head','audit_events'
 ]);
+-- Authentication export reads only the redacted projection. Column-level
+-- privilege prevents the worker credential from reading hashes, network
+-- addresses, user agents or metadata even if its query is altered.
+SELECT pg_temp.grant_existing_tables(
+  'campaign_export_worker',
+  'SELECT (id,user_id,event_type,correlation_id,occurred_at)',
+  ARRAY['authentication_events']
+);
 
 -- Inbound governance worker: encrypted-content rotation and governed retention.
 SELECT pg_temp.grant_existing_tables('campaign_inbound_governance_worker', 'SELECT, INSERT, UPDATE, DELETE', ARRAY[

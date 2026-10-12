@@ -23,6 +23,18 @@ func TestControlSchemaReadinessUsesCanonicalRelations(t *testing.T) {
 		}
 	}
 }
+func TestControlSchemaReadinessRequiresAuthenticationExportSchema(t *testing.T) {
+	for _, required := range []string{
+		"public.authentication_events",
+		"table_name='export_requests' AND column_name='authentication_event_as_of'",
+		"table_name='export_requests' AND column_name='authentication_event_head_id'",
+	} {
+		if !strings.Contains(controlSchemaReadinessQuery, required) {
+			t.Fatalf("schema readiness query does not require authentication export component %s", required)
+		}
+	}
+}
+
 func TestControlSchemaReadinessRequiresSenderOperationalMetadataColumns(t *testing.T) {
 	for _, column := range []string{"owner_reference", "registration_country_iso2", "profile_display_name", "recovery_reference"} {
 		needle := "table_name='sender_sessions' AND column_name='" + column + "'"

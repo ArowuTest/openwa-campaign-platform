@@ -354,6 +354,29 @@ type ExportOptions struct {
 	FrozenPayload   json.RawMessage
 }
 
+func (s *Service) freezeAuthenticationEventWatermark(ctx context.Context, asOf time.Time) (*time.Time, string, error) {
+	if s.AuthenticationEvents == nil {
+		return nil, "", errors.New("authentication event repository unavailable")
+	}
+	boundary := asOf.UTC().Truncate(time.Microsecond)
+	to := boundary.Add(time.Microsecond)
+	page, err := s.AuthenticationEvents.SearchAuthenticationEvents(ctx, identity.AuthenticationEventQuery{
+		To:    &to,
+		Limit: 1,
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	headID := ""
+	if len(page.Items) > 0 {
+		headID = strings.TrimSpace(page.Items[0].ID)
+		if headID == "" {
+			return nil, "", errors.New("authentication event watermark head is invalid")
+		}
+	}
+	return &boundary, headID, nil
+}
+
 func (s *Service) RequestExport(ctx context.Context, kind, objectID, format, reason, actor, correlation string) (ExportRequest, error) {
 	return s.RequestExportWithOptions(ctx, kind, objectID, format, reason, actor, correlation, ExportOptions{})
 }
@@ -383,6 +406,12 @@ func (s *Service) RequestExportWithOptions(ctx context.Context, kind, objectID, 
 	if len(criteria) > 64<<10 {
 		return ExportRequest{}, ErrInvalid
 	}
+	if kind == "AUDIT_LOG" {
+		decodedCriteria, criteriaErr := decodeAuditExportCriteria(criteria)
+		if criteriaErr != nil || validateAuditExportCriteria(decodedCriteria) != nil {
+			return ExportRequest{}, ErrInvalid
+		}
+	}
 	identifier, err := id.New()
 	if err != nil {
 		return ExportRequest{}, err
@@ -390,6 +419,9 @@ func (s *Service) RequestExportWithOptions(ctx context.Context, kind, objectID, 
 	templateVersion := strings.TrimSpace(options.TemplateVersion)
 	if templateVersion == "" {
 		templateVersion = "EXPORT-V1"
+		if kind == "AUDIT_LOG" {
+			templateVersion = "AUDIT-EXPORT-V2"
+		}
 	}
 	now := s.now()
 	frozenPayload := append(json.RawMessage(nil), options.FrozenPayload...)
@@ -453,6 +485,10 @@ func (s *Service) DecideExport(ctx context.Context, identifier string, expected 
 			}
 			current.FrozenPayload = payload
 		case "AUDIT_LOG":
+			criteria, criteriaErr := decodeAuditExportCriteria(current.Criteria)
+			if criteriaErr != nil || validateAuditExportCriteria(criteria) != nil {
+				return ExportRequest{}, ErrInvalid
+			}
 			if s.AuditRepository == nil {
 				return ExportRequest{}, errors.New("audit repository unavailable")
 			}
@@ -462,6 +498,12 @@ func (s *Service) DecideExport(ctx context.Context, identifier string, expected 
 			}
 			current.AuditHeadSequence = sequence
 			current.AuditHeadHash = hash
+			authAsOf, authHeadID, authErr := s.freezeAuthenticationEventWatermark(ctx, now)
+			if authErr != nil {
+				return ExportRequest{}, authErr
+			}
+			current.AuthenticationEventAsOf = authAsOf
+			current.AuthenticationEventHeadID = authHeadID
 		case "PRIVACY_PACKAGE":
 			// The privacy service injects an encrypted, immutable package into
 			// FrozenPayload before approval. Empty payloads fail closed.
@@ -480,7 +522,10 @@ func (s *Service) DecideExport(ctx context.Context, identifier string, expected 
 	if approve {
 		action = "EXPORT_APPROVED"
 	}
-	auditInput := audit.Input{ActorType: "USER", ActorID: actor, Action: action, ObjectType: "EXPORT_REQUEST", ObjectID: identifier, Outcome: "SUCCESS", Sensitivity: "HIGH", After: map[string]any{"status": current.Status, "asOf": current.AsOf, "auditHeadSequence": current.AuditHeadSequence}, Reason: reason, CorrelationID: correlation, OccurredAt: now}
+	auditInput := audit.Input{ActorType: "USER", ActorID: actor, Action: action, ObjectType: "EXPORT_REQUEST", ObjectID: identifier, Outcome: "SUCCESS", Sensitivity: "HIGH", After: map[string]any{
+		"status": current.Status, "asOf": current.AsOf, "auditHeadSequence": current.AuditHeadSequence,
+		"authenticationEventAsOf": current.AuthenticationEventAsOf, "authenticationEventHeadId": current.AuthenticationEventHeadID,
+	}, Reason: reason, CorrelationID: correlation, OccurredAt: now}
 	var out ExportRequest
 	atomicAudit := false
 	if atomicRepo, ok := s.Repo.(ExportAtomicAuditRepository); ok {

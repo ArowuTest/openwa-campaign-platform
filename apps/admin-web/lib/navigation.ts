@@ -16,6 +16,7 @@ export const navigation: readonly NavigationItem[] = [
   { label: 'Audience builder', href: '/audiences/builder', permission: 'audience.read', group: 'Operate', description: 'Build governed cohorts and immutable snapshots' },
   { label: 'Campaigns', href: '/campaigns', permission: 'campaign.read', group: 'Operate', description: 'Prepare, test, approve and execute campaigns' },
   { label: 'Senders', href: '/senders', permission: 'sender.read', group: 'Operate', description: 'Pools, sessions, gateway nodes and capacity' },
+  { label: 'Audit', href: '/audit', permission: 'audit.read', group: 'Observe', description: 'Search immutable governance evidence' },
   { label: 'Operations', href: '/operations', permission: 'operations.read', group: 'Observe', description: 'Incidents, UNKNOWN reconciliation and durable jobs' },
   { label: 'Reports', href: '/reports', permission: 'report.read', group: 'Observe', description: 'Privacy-aware campaign and operational reporting' }
 ] as const;

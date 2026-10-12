@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState } from 'react';
 
+import { ControlledExportManager } from '../../components/controlled-export-manager';
 import { StatusBadge } from '../../components/status-badge';
 import { apiRequest, collectBoundedPages, type ListEnvelope } from '../../lib/api';
 
@@ -204,6 +205,8 @@ export function ReportsConsole() {
           {financialReport.warnings.length ? <ul className="process-list">{financialReport.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : null}
         </section>
       ) : null}
+
+      {selectedCampaign ? <ControlledExportManager campaignId={selectedCampaign.id} campaignName={selectedCampaign.name} /> : null}
 
       {organisationReport ? (
         <section className="workspace-stack">

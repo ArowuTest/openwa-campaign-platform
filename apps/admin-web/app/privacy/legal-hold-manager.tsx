@@ -4,7 +4,7 @@ import { FormEvent, useCallback, useState } from 'react';
 
 import { useAuth } from '../../components/auth-provider';
 import { StatusBadge } from '../../components/status-badge';
-import { apiRequest, collectBoundedPages, type ListEnvelope } from '../../lib/api';
+import { APIError, apiRequest, collectBoundedPages, type ListEnvelope } from '../../lib/api';
 import { hasPermission } from '../../lib/session';
 
 type Hold = {
@@ -50,6 +50,14 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : 'Legal-hold action could not be completed.';
 }
 
+function requiresStepUp(error: unknown) {
+  return error instanceof APIError && (error.code === 'STEP_UP_REQUIRED' || error.code === 'MFA_STEP_UP_REQUIRED');
+}
+
+function goToStepUp() {
+  window.location.assign('/step-up?returnTo=' + encodeURIComponent('/privacy'));
+}
+
 export function LegalHoldManager() {
   const { session } = useAuth();
   const [items, setItems] = useState<Hold[]>([]);
@@ -78,6 +86,10 @@ export function LegalHoldManager() {
       );
       setEvents(page.items ?? []);
     } catch (error) {
+      if (requiresStepUp(error)) {
+        goToStepUp();
+        return;
+      }
       setMessage(errorMessage(error));
     }
   }, []);
@@ -104,6 +116,10 @@ export function LegalHoldManager() {
       if (clearSelection) {
         setSelected(undefined);
         setEvents([]);
+      }
+      if (requiresStepUp(error)) {
+        goToStepUp();
+        return;
       }
       setMessage(errorMessage(error));
     }
@@ -163,6 +179,10 @@ export function LegalHoldManager() {
       await load(lookup, false);
       await loadEvents(created.id);
     } catch (error) {
+      if (requiresStepUp(error)) {
+        goToStepUp();
+        return;
+      }
       setMessage(errorMessage(error));
     } finally {
       setBusy('');
@@ -184,6 +204,10 @@ export function LegalHoldManager() {
       await load(activeLookup, false);
       await loadEvents(updated.id);
     } catch (error) {
+      if (requiresStepUp(error)) {
+        goToStepUp();
+        return;
+      }
       setMessage(errorMessage(error));
     } finally {
       setBusy('');

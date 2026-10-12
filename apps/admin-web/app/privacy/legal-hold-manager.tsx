@@ -1,6 +1,6 @@
 'use client';
 
-import { FormEvent, useCallback, useState } from 'react';
+import { FormEvent, useCallback, useRef, useState } from 'react';
 
 import { useAuth } from '../../components/auth-provider';
 import { StatusBadge } from '../../components/status-badge';
@@ -75,16 +75,22 @@ export function LegalHoldManager() {
   const [releaseReason, setReleaseReason] = useState('');
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
+  const selectionRequest = useRef(0);
+  const lookupRequest = useRef(0);
 
   const canHold = hasPermission(session?.permissions, 'privacy.hold');
   const canApprove = hasPermission(session?.permissions, 'privacy.approve');
 
-  const loadEvents = useCallback(async (holdId: string) => {
+  const loadEvents = useCallback(async (holdId: string, request: number) => {
     try {
-      const page = await apiRequest<ListEnvelope<HoldEvent>>(
-        '/v1/privacy/legal-holds/' + encodeURIComponent(holdId) + '/events?limit=100'
+      const all = await collectBoundedPages(
+        (cursor) => apiRequest<ListEnvelope<HoldEvent>>(
+          '/v1/privacy/legal-holds/' + encodeURIComponent(holdId) + '/events?limit=100' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '')
+        ),
+        20
       );
-      setEvents(page.items ?? []);
+      if (request !== selectionRequest.current) return;
+      setEvents(all);
     } catch (error) {
       if (requiresStepUp(error)) {
         goToStepUp();
@@ -95,9 +101,11 @@ export function LegalHoldManager() {
   }, []);
 
   const load = useCallback(async (query: string, clearSelection = true) => {
+    const request = ++lookupRequest.current;
     const lookup = query.trim();
     setItems([]);
     if (clearSelection) {
+      selectionRequest.current += 1;
       setSelected(undefined);
       setEvents([]);
     }
@@ -110,10 +118,10 @@ export function LegalHoldManager() {
         ),
         20
       );
-      setItems(holds.map((item) => ({ ...item, subjectMasked: item.subjectMasked ?? maskMsisdn(lookup) })));
+      if (request === lookupRequest.current) setItems(holds.map((item) => ({ ...item, subjectMasked: item.subjectMasked ?? maskMsisdn(lookup) })));
     } catch (error) {
-      setItems([]);
-      if (clearSelection) {
+      if (request === lookupRequest.current) setItems([]);
+      if (clearSelection && request === lookupRequest.current) {
         setSelected(undefined);
         setEvents([]);
       }
@@ -130,6 +138,7 @@ export function LegalHoldManager() {
     if (!canHold || !searchMsisdn.trim()) return;
     setBusy('search');
     setMessage('');
+    selectionRequest.current += 1;
     setSelected(undefined);
     setEvents([]);
     const lookup = searchMsisdn.trim();
@@ -142,12 +151,13 @@ export function LegalHoldManager() {
   }
 
   async function selectHold(item: Hold) {
+    const request = ++selectionRequest.current;
     setSelected(item);
     setEvents([]);
     setSubmissionReason('');
     setDecisionReason('');
     setReleaseReason('');
-    await loadEvents(item.id);
+    await loadEvents(item.id, request);
   }
 
   async function createHold(event: FormEvent) {
@@ -168,6 +178,7 @@ export function LegalHoldManager() {
         })
       });
       const selectedHold = { ...created, subjectMasked: created.subjectMasked ?? maskMsisdn(lookup) };
+      const request = ++selectionRequest.current;
       setSearchMsisdn(lookup);
       setActiveLookup(lookup);
       setSelected(selectedHold);
@@ -177,7 +188,7 @@ export function LegalHoldManager() {
       setExpiresAt('');
       setMessage('Legal hold created as a draft.');
       await load(lookup, false);
-      await loadEvents(created.id);
+      await loadEvents(created.id, request);
     } catch (error) {
       if (requiresStepUp(error)) {
         goToStepUp();
@@ -191,26 +202,30 @@ export function LegalHoldManager() {
 
   async function mutate(path: string, body: Record<string, unknown>, success: string) {
     if (!selected) return;
-    setBusy(selected.id);
+    const request = selectionRequest.current;
+    const selectedId = selected.id;
+    setBusy(selectedId);
     setMessage('');
     try {
       const updated = await apiRequest<Hold>(
-        '/v1/privacy/legal-holds/' + encodeURIComponent(selected.id) + path,
+        '/v1/privacy/legal-holds/' + encodeURIComponent(selectedId) + path,
         { method: 'POST', body: JSON.stringify(body) }
       );
+      if (request !== selectionRequest.current) return;
       const updatedHold = { ...updated, subjectMasked: updated.subjectMasked ?? selected.subjectMasked };
       setSelected(updatedHold);
       setMessage(success);
       await load(activeLookup, false);
-      await loadEvents(updated.id);
+      await loadEvents(updated.id, request);
     } catch (error) {
+      if (request !== selectionRequest.current) return;
       if (requiresStepUp(error)) {
         goToStepUp();
         return;
       }
       setMessage(errorMessage(error));
     } finally {
-      setBusy('');
+      if (request === selectionRequest.current) setBusy('');
     }
   }
 
@@ -234,6 +249,7 @@ export function LegalHoldManager() {
               const value = event.target.value;
               setSearchMsisdn(value);
               if (value.trim() !== activeLookup) {
+                selectionRequest.current += 1;
                 setItems([]);
                 setSelected(undefined);
                 setEvents([]);

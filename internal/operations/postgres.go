@@ -753,6 +753,9 @@ func (r *PostgreSQLRepository) ListExports(ctx context.Context, query ExportQuer
 	if value := strings.ToUpper(strings.TrimSpace(query.Kind)); value != "" {
 		add("kind=$%d", value)
 	}
+	if value := strings.TrimSpace(query.ObjectID); value != "" {
+		add("object_id=NULLIF($%d,'')::uuid", value)
+	}
 	if value := strings.TrimSpace(query.RequestedBy); value != "" {
 		add("requested_by=NULLIF($%d,'')::uuid", value)
 	}

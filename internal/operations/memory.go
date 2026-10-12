@@ -146,6 +146,9 @@ func (r *MemoryRepository) ListExports(_ context.Context, query ExportQuery) (Ex
 		if value := strings.TrimSpace(query.Kind); value != "" && item.Kind != strings.ToUpper(value) {
 			continue
 		}
+		if value := strings.TrimSpace(query.ObjectID); value != "" && item.ObjectID != value {
+			continue
+		}
 		if value := strings.TrimSpace(query.RequestedBy); value != "" && item.RequestedBy != value {
 			continue
 		}

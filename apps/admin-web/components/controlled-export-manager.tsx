@@ -1,10 +1,10 @@
 'use client';
 
-import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { useAuth } from './auth-provider';
 import { StatusBadge } from './status-badge';
-import { apiRequest, type ListEnvelope } from '../lib/api';
+import { APIError, apiRequest, collectBoundedPages, type ListEnvelope } from '../lib/api';
 import { browserAPIBase } from '../lib/api';
 import { hasPermission } from '../lib/session';
 
@@ -40,6 +40,7 @@ type ControlledExportManagerProps = {
   campaignId?: string;
   campaignName?: string;
   kind?: ExportKind;
+  objectId?: string;
   title?: string;
 };
 
@@ -59,6 +60,7 @@ export function ControlledExportManager({
   campaignId,
   campaignName,
   kind = 'CAMPAIGN_REPORT',
+  objectId,
   title = 'Controlled exports'
 }: ControlledExportManagerProps) {
   const { session } = useAuth();
@@ -69,16 +71,35 @@ export function ControlledExportManager({
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
   const [downloadLinks, setDownloadLinks] = useState<Record<string, { href: string; expiresAt: string }>>({});
+  const requestSequence = useRef(0);
 
-  const canRequest = hasPermission(session?.permissions, 'export.request');
+  const canRequest = kind === 'PRIVACY_PACKAGE'
+    ? hasPermission(session?.permissions, 'privacy.read')
+    : hasPermission(session?.permissions, 'export.request');
   const canApprove = hasPermission(session?.permissions, 'export.approve');
-  const query = useMemo(() => '/v1/exports?kind=' + encodeURIComponent(kind) + '&limit=50', [kind]);
+  const query = useMemo(() => '/v1/exports?kind=' + encodeURIComponent(kind) + '&limit=100' + (objectId ? '&objectId=' + encodeURIComponent(objectId) : ''), [kind, objectId]);
+
+  function requiresStepUp(error: unknown) {
+    return error instanceof APIError && (error.code === 'STEP_UP_REQUIRED' || error.code === 'MFA_STEP_UP_REQUIRED');
+  }
+
+  function goToStepUp() {
+    window.location.assign('/step-up?returnTo=' + encodeURIComponent('/privacy'));
+  }
 
   const load = useCallback(async () => {
+    const request = ++requestSequence.current;
     try {
-      const page = await apiRequest<ListEnvelope<ControlledExport>>(query);
-      setItems(Array.isArray(page.items) ? page.items : []);
+      const values = await collectBoundedPages(
+        (cursor) => apiRequest<ListEnvelope<ControlledExport>>(query + (cursor ? '&after=' + encodeURIComponent(cursor) : '')),
+        20
+      );
+      if (request === requestSequence.current) setItems(values);
     } catch (cause) {
+      if (requiresStepUp(cause)) {
+        goToStepUp();
+        return;
+      }
       setMessage(cause instanceof Error ? cause.message : 'Controlled exports could not be loaded.');
     }
   }, [query]);
@@ -95,11 +116,16 @@ export function ControlledExportManager({
     setBusy('request');
     setMessage('');
     try {
-      await apiRequest<ControlledExport>('/v1/exports', {
+      const requestPath = kind === 'PRIVACY_PACKAGE'
+        ? '/v1/privacy/cases/' + encodeURIComponent(objectId ?? '') + '/exports'
+        : '/v1/exports';
+      await apiRequest<ControlledExport>(requestPath, {
         method: 'POST',
         body: JSON.stringify({
-          kind,
-          objectId: kind === 'CAMPAIGN_REPORT' ? campaignId ?? '' : '',
+          ...(kind === 'PRIVACY_PACKAGE' ? {} : {
+            kind,
+            objectId: kind === 'CAMPAIGN_REPORT' ? objectId ?? campaignId ?? '' : ''
+          }),
           format,
           reason: reason.trim(),
           criteria: kind === 'AUDIT_LOG' ? {} : undefined
@@ -108,6 +134,10 @@ export function ControlledExportManager({
       setReason('');
       await load();
     } catch (cause) {
+      if (requiresStepUp(cause)) {
+        goToStepUp();
+        return;
+      }
       setMessage(cause instanceof Error ? cause.message : 'The controlled export request failed.');
     } finally {
       setBusy('');
@@ -130,6 +160,10 @@ export function ControlledExportManager({
       setDecisionReason('');
       await load();
     } catch (cause) {
+      if (requiresStepUp(cause)) {
+        goToStepUp();
+        return;
+      }
       setMessage(cause instanceof Error ? cause.message : 'The export decision failed.');
     } finally {
       setBusy('');
@@ -152,6 +186,10 @@ export function ControlledExportManager({
         }
       }));
     } catch (cause) {
+      if (requiresStepUp(cause)) {
+        goToStepUp();
+        return;
+      }
       setMessage(cause instanceof Error ? cause.message : 'A download authorisation could not be created.');
     } finally {
       setBusy('');
@@ -172,6 +210,10 @@ export function ControlledExportManager({
       });
       await load();
     } catch (cause) {
+      if (requiresStepUp(cause)) {
+        goToStepUp();
+        return;
+      }
       setMessage(cause instanceof Error ? cause.message : 'The export could not be revoked.');
     } finally {
       setBusy('');
@@ -196,7 +238,7 @@ export function ControlledExportManager({
           <button className="primary" type="submit" disabled={busy !== '' || !reason.trim()}>{busy === 'request' ? 'Requesting…' : 'Request controlled export'}</button>
         </form>
       ) : (
-        <p className="muted">You need export.request permission to request a controlled export.</p>
+        <p className="muted">{kind === 'PRIVACY_PACKAGE' ? 'You need privacy.read permission to request a controlled package.' : 'You need export.request permission to request a controlled export.'}</p>
       )}
 
       {canApprove ? (
@@ -208,7 +250,7 @@ export function ControlledExportManager({
           const download = downloadLinks[item.id];
           const pending = item.status === 'PENDING_APPROVAL';
           const isRequester = item.requestedBy === session?.id;
-          const downloadable = item.status === 'READY' || item.status === 'EXPIRING';
+          const downloadable = item.status === 'READY';
           return (
             <article className="card card-subtle" key={item.id}>
               <div className="section-heading">

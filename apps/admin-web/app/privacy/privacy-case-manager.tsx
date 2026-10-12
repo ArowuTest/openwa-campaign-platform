@@ -1,10 +1,11 @@
 'use client';
 
-import { FormEvent, useCallback, useEffect, useState } from 'react';
+import { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 
 import { useAuth } from '../../components/auth-provider';
+import { ControlledExportManager } from '../../components/controlled-export-manager';
 import { StatusBadge } from '../../components/status-badge';
-import { apiRequest, type ListEnvelope } from '../../lib/api';
+import { APIError, apiRequest, collectBoundedPages, type ListEnvelope } from '../../lib/api';
 import { hasPermission } from '../../lib/session';
 
 type CaseType = 'ACCESS' | 'RECTIFICATION' | 'ERASURE' | 'PORTABILITY' | 'OBJECTION' | 'RESTRICTION';
@@ -72,20 +73,38 @@ export function PrivacyCaseManager() {
   const [executionReason, setExecutionReason] = useState('');
   const [assignment, setAssignment] = useState('');
   const [assignmentReason, setAssignmentReason] = useState('');
-  const [exportReason, setExportReason] = useState('');
-  const [exportFormat, setExportFormat] = useState('JSON');
+  const [rectificationField, setRectificationField] = useState('');
+  const [rectificationValue, setRectificationValue] = useState('');
   const [busy, setBusy] = useState('');
   const [message, setMessage] = useState('');
+  const selectionRequest = useRef(0);
+  const loadRequest = useRef(0);
 
   const canWrite = hasPermission(session?.permissions, 'privacy.write');
   const canApprove = hasPermission(session?.permissions, 'privacy.approve');
   const canExecute = hasPermission(session?.permissions, 'privacy.execute');
 
+  function requiresStepUp(error: unknown) {
+    return error instanceof APIError && (error.code === 'STEP_UP_REQUIRED' || error.code === 'MFA_STEP_UP_REQUIRED');
+  }
+
+  function goToStepUp() {
+    window.location.assign('/step-up?returnTo=' + encodeURIComponent('/privacy'));
+  }
+
   const load = useCallback(async () => {
+    const request = ++loadRequest.current;
     try {
-      const page = await apiRequest<ListEnvelope<PrivacyCase>>('/v1/privacy/cases?limit=100');
-      setItems(Array.isArray(page.items) ? page.items : []);
+      const values = await collectBoundedPages(
+        (cursor) => apiRequest<ListEnvelope<PrivacyCase>>('/v1/privacy/cases?limit=100' + (cursor ? '&after=' + encodeURIComponent(cursor) : '')),
+        20
+      );
+      if (request === loadRequest.current) setItems(values);
     } catch (error) {
+      if (requiresStepUp(error)) {
+        goToStepUp();
+        return;
+      }
       setMessage(errorMessage(error, 'Privacy cases could not be loaded.'));
     }
   }, []);
@@ -97,19 +116,31 @@ export function PrivacyCaseManager() {
   }, [load]);
 
   async function selectCase(item: PrivacyCase) {
+    const request = ++selectionRequest.current;
     setBusy(item.id);
+    setSelected(undefined);
+    setEvents([]);
     setMessage('');
     try {
       const [detail, history] = await Promise.all([
         apiRequest<PrivacyCase>('/v1/privacy/cases/' + encodeURIComponent(item.id)),
-        apiRequest<ListEnvelope<PrivacyEvent>>('/v1/privacy/cases/' + encodeURIComponent(item.id) + '/events?limit=100')
+        collectBoundedPages(
+          (cursor) => apiRequest<ListEnvelope<PrivacyEvent>>('/v1/privacy/cases/' + encodeURIComponent(item.id) + '/events?limit=100' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '')),
+          20
+        )
       ]);
+      if (request !== selectionRequest.current) return;
       setSelected(detail);
-      setEvents(history.items ?? []);
+      setEvents(history);
     } catch (error) {
+      if (request !== selectionRequest.current) return;
+      if (requiresStepUp(error)) {
+        goToStepUp();
+        return;
+      }
       setMessage(errorMessage(error, 'Privacy case detail could not be loaded.'));
     } finally {
-      setBusy('');
+      if (request === selectionRequest.current) setBusy('');
     }
   }
 
@@ -119,6 +150,7 @@ export function PrivacyCaseManager() {
     setBusy('create');
     setMessage('');
     try {
+      const requestedChanges = type === 'RECTIFICATION' ? { [rectificationField.trim()]: rectificationValue.trim() } : undefined;
       const created = await apiRequest<PrivacyCase>('/v1/privacy/cases', {
         method: 'POST',
         body: JSON.stringify({
@@ -126,18 +158,26 @@ export function PrivacyCaseManager() {
           msisdn: msisdn.trim(),
           organisationId: organisationId.trim() || undefined,
           reason: reason.trim(),
+          requestedChanges,
           dueAt: dueAt ? new Date(dueAt).toISOString() : undefined
         })
       });
       setMsisdn('');
       setOrganisationId('');
       setReason('');
+      setRectificationField('');
+      setRectificationValue('');
       setDueAt('');
+      selectionRequest.current += 1;
       setSelected(created);
       setEvents([]);
       setMessage('Privacy case created. The subject identifier remains masked in the register.');
       await load();
     } catch (error) {
+      if (requiresStepUp(error)) {
+        goToStepUp();
+        return;
+      }
       setMessage(errorMessage(error, 'Privacy case could not be created.'));
     } finally {
       setBusy('');
@@ -146,39 +186,33 @@ export function PrivacyCaseManager() {
 
   async function mutate(path: string, body: Record<string, unknown>, success: string) {
     if (!selected) return;
-    setBusy(selected.id);
+    const request = selectionRequest.current;
+    const selectedId = selected.id;
+    setBusy(selectedId);
     setMessage('');
     try {
-      const value = await apiRequest<PrivacyCase>('/v1/privacy/cases/' + encodeURIComponent(selected.id) + path, {
+      const value = await apiRequest<PrivacyCase>('/v1/privacy/cases/' + encodeURIComponent(selectedId) + path, {
         method: 'POST',
         body: JSON.stringify(body)
       });
+      if (request !== selectionRequest.current) return;
       setSelected(value);
       setMessage(success);
+      const history = await collectBoundedPages(
+        (cursor) => apiRequest<ListEnvelope<PrivacyEvent>>('/v1/privacy/cases/' + encodeURIComponent(selectedId) + '/events?limit=100' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : '')),
+        20
+      );
+      if (request === selectionRequest.current) setEvents(history);
       await load();
     } catch (error) {
+      if (request !== selectionRequest.current) return;
+      if (requiresStepUp(error)) {
+        goToStepUp();
+        return;
+      }
       setMessage(errorMessage(error, 'Privacy case action could not be completed.'));
     } finally {
-      setBusy('');
-    }
-  }
-
-  async function requestExport(event: FormEvent) {
-    event.preventDefault();
-    if (!selected || exportReason.trim().length < 8) return;
-    setBusy(selected.id);
-    setMessage('');
-    try {
-      await apiRequest('/v1/privacy/cases/' + encodeURIComponent(selected.id) + '/exports', {
-        method: 'POST',
-        body: JSON.stringify({ format: exportFormat, reason: exportReason.trim() })
-      });
-      setExportReason('');
-      setMessage('Privacy package requested for independent approval.');
-    } catch (error) {
-      setMessage(errorMessage(error, 'Privacy package could not be requested.'));
-    } finally {
-      setBusy('');
+      if (request === selectionRequest.current) setBusy('');
     }
   }
 
@@ -216,8 +250,9 @@ export function PrivacyCaseManager() {
           <label>Subject MSISDN<input value={msisdn} onChange={(event) => setMsisdn(event.target.value)} inputMode="tel" autoComplete="off" required disabled={!canWrite} /></label>
           <label>Organisation ID<input value={organisationId} onChange={(event) => setOrganisationId(event.target.value)} disabled={!canWrite} /></label>
           <label>Request reason<textarea value={reason} onChange={(event) => setReason(event.target.value)} minLength={8} maxLength={1000} required disabled={!canWrite} /></label>
+          {type === 'RECTIFICATION' ? <><label>Field to correct<input value={rectificationField} onChange={(event) => setRectificationField(event.target.value)} required disabled={!canWrite} placeholder="e.g. preferredLanguage" /></label><label>Corrected value<input value={rectificationValue} onChange={(event) => setRectificationValue(event.target.value)} required disabled={!canWrite} /></label></> : null}
           <label>Due date<input type="datetime-local" value={dueAt} onChange={(event) => setDueAt(event.target.value)} disabled={!canWrite} /></label>
-          <button className="primary" type="submit" disabled={!canWrite || busy !== '' || reason.trim().length < 8}>{busy === 'create' ? 'Creating…' : 'Create privacy case'}</button>
+          <button className="primary" type="submit" disabled={!canWrite || busy !== '' || reason.trim().length < 8 || (type === 'RECTIFICATION' && (!rectificationField.trim() || !rectificationValue.trim()))}>{busy === 'create' ? 'Creating…' : 'Create privacy case'}</button>
         </form>
 
         <article className="card form-stack">
@@ -241,22 +276,22 @@ export function PrivacyCaseManager() {
                   <div className="button-row">
                     <button type="button" onClick={() => void mutate('/assign', { assignee: assignment.trim(), reason: assignmentReason.trim(), expectedVersion: selected.version }, 'Privacy case assigned.')} disabled={!canWrite || busy !== '' || !assignment.trim()}>Assign case</button>
                     <label>Submission reason<textarea aria-label="Submission reason" value={submissionReason} onChange={(event) => setSubmissionReason(event.target.value)} disabled={!canWrite} /></label>
-                    <button type="button" className="primary" onClick={() => void mutate('/submit', { reason: submissionReason.trim(), expectedVersion: selected.version }, 'Privacy case submitted for independent approval.')} disabled={!canWrite || busy !== '' || submissionReason.trim().length < 5}>Submit for approval</button>
+                    <button type="button" className="primary" onClick={() => void mutate('/submit', { reason: submissionReason.trim(), expectedVersion: selected.version }, 'Privacy case submitted for independent approval.')} disabled={!canWrite || busy !== '' || submissionReason.trim().length < 8}>Submit for approval</button>
                   </div>
                 </fieldset>
               ) : null}
 
-              {selected.status === 'PENDING_APPROVAL' && selected.createdBy !== session?.id ? (
+              {selected.status === 'PENDING_APPROVAL' && selected.createdBy !== session?.id && selected.submittedBy !== session?.id ? (
                 <fieldset><legend>Independent checker decision</legend>
                   <label>Decision reason<textarea value={decisionReason} onChange={(event) => setDecisionReason(event.target.value)} disabled={!canApprove} /></label>
-                  <div className="button-row"><button type="button" className="primary" onClick={() => void mutate('/decision', { approve: true, reason: decisionReason.trim(), expectedVersion: selected.version }, 'Privacy case approved.')} disabled={!canApprove || busy !== '' || decisionReason.trim().length < 5}>Approve case</button><button type="button" onClick={() => void mutate('/decision', { approve: false, reason: decisionReason.trim(), expectedVersion: selected.version }, 'Privacy case rejected.')} disabled={!canApprove || busy !== '' || decisionReason.trim().length < 5}>Reject case</button></div>
+                  <div className="button-row"><button type="button" className="primary" onClick={() => void mutate('/decision', { approve: true, reason: decisionReason.trim(), expectedVersion: selected.version }, 'Privacy case approved.')} disabled={!canApprove || busy !== '' || decisionReason.trim().length < 8}>Approve case</button><button type="button" onClick={() => void mutate('/decision', { approve: false, reason: decisionReason.trim(), expectedVersion: selected.version }, 'Privacy case rejected.')} disabled={!canApprove || busy !== '' || decisionReason.trim().length < 5}>Reject case</button></div>
                 </fieldset>
               ) : null}
-              {selected.status === 'PENDING_APPROVAL' && selected.createdBy === session?.id ? <p className="muted">Awaiting independent checker approval. The creator cannot approve this case.</p> : null}
+              {selected.status === 'PENDING_APPROVAL' && (selected.createdBy === session?.id || selected.submittedBy === session?.id) ? <p className="muted">Awaiting independent checker approval. The creator or submitter cannot approve this case.</p> : null}
 
-              {selected.status === 'APPROVED' ? <fieldset><legend>Execute approved case</legend><label>Execution reason<textarea value={executionReason} onChange={(event) => setExecutionReason(event.target.value)} disabled={!canExecute} /></label><button type="button" className="primary" onClick={() => void mutate('/execute', { reason: executionReason.trim(), expectedVersion: selected.version }, 'Privacy case execution requested.')} disabled={!canExecute || busy !== '' || executionReason.trim().length < 5}>Execute case</button></fieldset> : null}
+              {selected.status === 'APPROVED' ? <fieldset><legend>Execute approved case</legend><label>Execution reason<textarea value={executionReason} onChange={(event) => setExecutionReason(event.target.value)} disabled={!canExecute} /></label><button type="button" className="primary" onClick={() => void mutate('/execute', { reason: executionReason.trim(), expectedVersion: selected.version }, 'Privacy case execution requested.')} disabled={!canExecute || busy !== '' || executionReason.trim().length < 8}>Execute case</button></fieldset> : null}
 
-              {selected.status === 'APPROVED' || selected.status === 'COMPLETED' ? <form className="form-stack" onSubmit={requestExport}><fieldset><legend>Controlled privacy package</legend><label>Format<select value={exportFormat} onChange={(event) => setExportFormat(event.target.value)}><option value="JSON">JSON</option><option value="PDF">PDF</option><option value="CSV">CSV</option><option value="XLSX">XLSX</option></select></label><label>Export reason<textarea value={exportReason} onChange={(event) => setExportReason(event.target.value)} minLength={8} required /></label><button type="submit" disabled={busy !== '' || exportReason.trim().length < 8}>Request privacy package</button></fieldset></form> : null}
+              {selected.status === 'COMPLETED' && (selected.type === 'ACCESS' || selected.type === 'PORTABILITY') ? <ControlledExportManager kind="PRIVACY_PACKAGE" objectId={selected.id} title="Controlled privacy package" /> : null}
 
               <section><h3>Immutable case history</h3>{events.length ? <ol className="process-list">{events.map((event) => <li key={event.id}><strong>{event.type}</strong><span>{event.actorId} · v{event.caseVersion} · {displayDate(event.occurredAt)}</span>{event.reason ? <small>{event.reason}</small> : null}</li>)}</ol> : <p className="muted">No history loaded.</p>}</section>
             </>

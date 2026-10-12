@@ -253,6 +253,7 @@ type ExportQuery struct {
 	AfterID        string
 	Status         ExportStatus
 	Kind           string
+	ObjectID       string
 	RequestedBy    string
 	Limit          int
 }

@@ -15,27 +15,27 @@ type messageMediaResponse struct {
 }
 
 type messageVersionResponse struct {
-	ID          string                 `json:"id"`
-	CampaignID  string                 `json:"campaignId"`
-	Version     int                    `json:"version"`
-	Type        message.Type           `json:"type"`
-	Body        string                 `json:"body,omitempty"`
-	Media       *messageMediaResponse  `json:"media,omitempty"`
-	Links       []message.Link         `json:"links"`
-	Variables   []message.Variable     `json:"variables"`
-	ContentHash string                 `json:"contentHash"`
-	Status      message.Status         `json:"status"`
-	CreatedBy   string                 `json:"createdBy"`
-	ApprovedBy  string                 `json:"approvedBy,omitempty"`
-	CreatedAt   time.Time              `json:"createdAt"`
-	ApprovedAt  *time.Time             `json:"approvedAt,omitempty"`
+	ID          string                `json:"id"`
+	CampaignID  string                `json:"campaignId"`
+	Version     int                   `json:"version"`
+	Type        message.Type          `json:"type"`
+	Body        string                `json:"body,omitempty"`
+	Media       *messageMediaResponse `json:"media,omitempty"`
+	Links       []message.Link        `json:"links"`
+	Variables   []message.Variable    `json:"variables"`
+	ContentHash string                `json:"contentHash"`
+	Status      message.Status        `json:"status"`
+	CreatedBy   string                `json:"createdBy"`
+	ApprovedBy  string                `json:"approvedBy,omitempty"`
+	CreatedAt   time.Time             `json:"createdAt"`
+	ApprovedAt  *time.Time            `json:"approvedAt,omitempty"`
 }
 
 func publicMessageVersion(value message.Version) messageVersionResponse {
 	response := messageVersionResponse{
 		ID: value.ID, CampaignID: value.CampaignID, Version: value.Version, Type: value.Type,
 		Body: value.Body, Links: append([]message.Link(nil), value.Links...),
-		Variables: append([]message.Variable(nil), value.Variables...),
+		Variables:   append([]message.Variable(nil), value.Variables...),
 		ContentHash: value.ContentHash, Status: value.Status, CreatedBy: value.CreatedBy,
 		ApprovedBy: value.ApprovedBy, CreatedAt: value.CreatedAt, ApprovedAt: value.ApprovedAt,
 	}

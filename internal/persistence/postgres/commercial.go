@@ -194,7 +194,6 @@ func (r *CommercialRepository) ListEvents(ctx context.Context, identifier string
 	return out, nil
 }
 
-
 func (r *CommercialRepository) EventPage(ctx context.Context, identifier string, limit int, afterVersion int64, afterID string) ([]commercial.Event, error) {
 	if r == nil || r.DB == nil {
 		return nil, errors.New("database is required")

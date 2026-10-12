@@ -157,7 +157,7 @@ func (s *Server) listExports(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	principal, _ := identity.PrincipalFromContext(r.Context())
-	query := operations.ExportQuery{Status: operations.ExportStatus(strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("status")))), Kind: strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("kind")))}
+	query := operations.ExportQuery{Status: operations.ExportStatus(strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("status")))), Kind: strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("kind"))), ObjectID: strings.TrimSpace(r.URL.Query().Get("objectId"))}
 	var err error
 	query.Limit, err = optionalPositiveIntQuery(r, "limit", 500)
 	if err != nil {

@@ -1971,7 +1971,10 @@ paths:
       operationId: listControlledExports
       summary: List controlled exports using bounded cursor pagination
       parameters:
-        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: kind, in: query, required: false, schema: { type: string, enum: [CAMPAIGN_REPORT, AUDIT_LOG, PRIVACY_PACKAGE] } }
+        - { name: objectId, in: query, required: false, schema: { type: string, format: uuid }, description: Restrict results to one governed object. }
+        - { name: status, in: query, required: false, schema: { type: string } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 50 } }
         - { name: after, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
         '200':

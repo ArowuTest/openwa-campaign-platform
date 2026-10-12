@@ -102,7 +102,8 @@ func buildMemoryRuntime(cfg config.Config, protector *sharedcrypto.MSISDNProtect
 		return nil, fmt.Errorf("bootstrap administrator: %w", err)
 	}
 	memorySessions := identity.NewMemorySessionRepository()
-	identityService := identity.NewPersistentServiceWithEvents(adminStore, memorySessions, identity.NewMemoryChallengeRepository(), identity.NewMemoryEventRecorder(), cfg.SessionIdleTimeout, cfg.SessionAbsoluteTimeout)
+	authenticationEvents := identity.NewMemoryEventRecorder()
+	identityService := identity.NewPersistentServiceWithEvents(adminStore, memorySessions, identity.NewMemoryChallengeRepository(), authenticationEvents, cfg.SessionIdleTimeout, cfg.SessionAbsoluteTimeout)
 	identityAdministration := identity.NewAdministrationService(adminStore, memorySessions)
 	orgs := organisation.NewService(organisation.NewMemoryRepository())
 	organisationPolicies := &organisation.PolicyAdministration{Store: organisation.NewMemoryPolicyStore(), Organisations: orgs}
@@ -183,7 +184,7 @@ func buildMemoryRuntime(cfg config.Config, protector *sharedcrypto.MSISDNProtect
 	alertStore := operations.NewMemoryAlertStore()
 	alertStore.IncidentRepo = operationsRepo
 	alertPolicies := &operations.AlertAdministration{Store: alertStore}
-	operationsService := &operations.Service{Repo: operationsRepo, Audit: auditRecorder, AuditRepository: auditRepository, Deliveries: deliveryEvents, ReportingPrivacy: reportingPrivacy, Alerting: alertStore}
+	operationsService := &operations.Service{Repo: operationsRepo, Audit: auditRecorder, AuditRepository: auditRepository, AuthenticationEvents: authenticationEvents, Deliveries: deliveryEvents, ReportingPrivacy: reportingPrivacy, Alerting: alertStore}
 	alertEvaluator := &operations.AlertEvaluator{Store: alertStore, Dashboard: operationsService}
 	platformRetentionStore := retention.NewMemoryStore()
 	platformRetention := &retention.Administration{Store: platformRetentionStore}
@@ -255,7 +256,8 @@ func buildPostgreSQLRuntime(ctx context.Context, cfg config.Config, protector *s
 		logger.Warn("bootstrap super-administrator created; rotate bootstrap deployment secrets immediately", "email", cfg.BootstrapAdminEmail)
 	}
 	sessionRepo := &postgresrepo.IdentitySessionRepository{DB: db}
-	identityService := identity.NewPersistentServiceWithEvents(identityRepo, sessionRepo, &postgresrepo.IdentityChallengeRepository{DB: db}, &postgresrepo.AuthenticationEventRecorder{DB: db}, cfg.SessionIdleTimeout, cfg.SessionAbsoluteTimeout)
+	authenticationEvents := &postgresrepo.AuthenticationEventRecorder{DB: db}
+	identityService := identity.NewPersistentServiceWithEvents(identityRepo, sessionRepo, &postgresrepo.IdentityChallengeRepository{DB: db}, authenticationEvents, cfg.SessionIdleTimeout, cfg.SessionAbsoluteTimeout)
 	identityAdministration := identity.NewAdministrationService(&postgresrepo.IdentityAdministrationRepository{DB: db, Secrets: secretBox}, sessionRepo)
 	filterStore := &postgresrepo.FilterDefinitionStore{DB: db}
 	filters, err := buildFilterRuntime(ctx, filterStore)
@@ -356,7 +358,7 @@ func buildPostgreSQLRuntime(ctx context.Context, cfg config.Config, protector *s
 	alertStore := &operations.PostgreSQLAlertStore{DB: db}
 	alertPolicies := &operations.AlertAdministration{Store: alertStore}
 	operationsRepo := &operations.PostgreSQLRepository{DB: db, RuntimeHealth: &operations.PlatformGatewayRuntimeHealthResolver{Configurations: configurations, FallbackStaleAfter: cfg.GatewayStaleAfter}, FallbackGatewayStaleAfter: cfg.GatewayStaleAfter}
-	operationsService := &operations.Service{Repo: operationsRepo, Audit: auditRecorder, AuditRepository: auditRepository, Deliveries: deliveryEvents, ReportingPrivacy: reportingPrivacy, Alerting: alertStore}
+	operationsService := &operations.Service{Repo: operationsRepo, Audit: auditRecorder, AuditRepository: auditRepository, AuthenticationEvents: authenticationEvents, Deliveries: deliveryEvents, ReportingPrivacy: reportingPrivacy, Alerting: alertStore}
 	alertEvaluator := &operations.AlertEvaluator{Store: alertStore, Dashboard: operationsService}
 	platformRetentionStore := &retention.PostgreSQLStore{DB: db}
 	platformRetention := &retention.Administration{Store: platformRetentionStore}

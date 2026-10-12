@@ -367,6 +367,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("GET /api/v1/operations/dashboard", s.require("operations.read", s.operationsDashboard))
 	mux.Handle("GET /api/v1/operations/incidents", s.require("operations.read", s.listOperationsIncidents))
 	mux.Handle("GET /api/v1/operations/audit-events", s.require("audit.read", s.searchAuditEvents))
+	mux.Handle("GET /api/v1/operations/authentication-events", s.require("audit.read", s.searchAuthenticationEvents))
 	mux.Handle("GET /api/v1/operations/delivery-exceptions", s.require("operations.read", s.listDeliveryExceptions))
 	mux.Handle("POST /api/v1/operations/delivery-exceptions/{id}/resolve", s.require("operations.write", s.resolveDeliveryException))
 	mux.Handle("GET /api/v1/operations/jobs", s.require("operations.read", s.listOperationalJobs))

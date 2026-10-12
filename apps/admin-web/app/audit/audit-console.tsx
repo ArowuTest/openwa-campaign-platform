@@ -34,6 +34,22 @@ type AuditPage = {
   nextCursor?: string | number;
 };
 
+type AuthenticationEvent = {
+  source: 'authentication';
+  id: string;
+  actorId?: string;
+  eventType: string;
+  correlationId: string;
+  occurredAt: string;
+};
+
+type AuthenticationPage = {
+  items: AuthenticationEvent[];
+  count: number;
+  hasMore: boolean;
+  nextCursor?: string;
+};
+
 type AuditFilters = {
   actorId: string;
   action: string;
@@ -79,6 +95,32 @@ function readPage(value: AuditPage): AuditPage {
   return value;
 }
 
+function readAuthenticationPage(value: AuthenticationPage): AuthenticationPage {
+  if (!value || !Array.isArray(value.items) || !Number.isInteger(value.count) || value.count < 0 || typeof value.hasMore !== 'boolean') {
+    throw new Error('The authentication-event response was malformed.');
+  }
+  const items = value.items.filter((item) => item && item.source === 'authentication' && typeof item.id === 'string' && typeof item.eventType === 'string' && typeof item.correlationId === 'string' && typeof item.occurredAt === 'string');
+  if (items.length !== value.items.length) throw new Error('The authentication-event response contained an invalid event.');
+  if (value.hasMore && !value.nextCursor) throw new Error('The authentication-event response omitted its continuation cursor.');
+  return value;
+}
+
+function makeAuthenticationQuery(filters: AuditFilters, cursor?: string): string {
+  const query = new URLSearchParams({ limit: '100' });
+  const actor = filters.actorId.trim();
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(actor)) query.set('userId', actor);
+  if (filters.correlationId.trim()) query.set('correlationId', filters.correlationId.trim());
+  for (const [key, value] of [['from', filters.from], ['to', filters.to]] as const) {
+    if (value) {
+      const parsed = new Date(value);
+      if (Number.isNaN(parsed.valueOf())) throw new Error('Audit date filters are invalid.');
+      query.set(key, parsed.toISOString());
+    }
+  }
+  if (cursor) query.set('cursor', cursor);
+  return '?' + query.toString();
+}
+
 function makeQuery(filters: AuditFilters, afterSequence?: string): string {
   const query = new URLSearchParams({ limit: '100' });
   const values: Record<string, string> = {
@@ -111,8 +153,12 @@ export function AuditConsole() {
   const [items, setItems] = useState<AuditEvent[]>([]);
   const [nextCursor, setNextCursor] = useState('');
   const [hasMore, setHasMore] = useState(false);
+  const [authenticationItems, setAuthenticationItems] = useState<AuthenticationEvent[]>([]);
+  const [authenticationNextCursor, setAuthenticationNextCursor] = useState('');
+  const [authenticationHasMore, setAuthenticationHasMore] = useState(false);
   const [selected, setSelected] = useState<AuditEvent>();
   const [loading, setLoading] = useState(false);
+  const [authenticationLoading, setAuthenticationLoading] = useState(false);
   const [error, setError] = useState('');
 
   const load = useCallback(async (queryFilters: AuditFilters, append = false, cursor = '') => {
@@ -131,16 +177,33 @@ export function AuditConsole() {
     }
   }, []);
 
+  const loadAuthentication = useCallback(async (queryFilters: AuditFilters, append = false, cursor = '') => {
+    setAuthenticationLoading(true);
+    setError('');
+    try {
+      const page = readAuthenticationPage(await apiRequest<AuthenticationPage>('/v1/operations/authentication-events' + makeAuthenticationQuery(queryFilters, cursor)));
+      setAuthenticationItems((current) => append ? [...current, ...page.items.filter((item) => !current.some((existing) => existing.id === item.id))] : page.items);
+      setAuthenticationNextCursor(page.nextCursor || '');
+      setAuthenticationHasMore(page.hasMore);
+    } catch (cause) {
+      setError(cause instanceof APIError && cause.status === 403 ? 'Audit access is restricted to compliance and audit readers.' : cause instanceof Error ? cause.message : 'Authentication evidence could not be loaded.');
+    } finally {
+      setAuthenticationLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
-    // The initial load synchronizes the authoritative audit inventory into local state.
+    // The initial load synchronizes both authoritative evidence inventories into local state.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void load(emptyFilters);
-  }, [load]);
+    void loadAuthentication(emptyFilters);
+  }, [load, loadAuthentication]);
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setApplied({ ...filters });
     void load(filters);
+    void loadAuthentication(filters);
   }
 
   return (
@@ -149,7 +212,7 @@ export function AuditConsole() {
         <div className="section-heading">
           <div>
             <h2>Immutable audit log</h2>
-            <p className="muted">Searches are recorded as high-sensitivity audit events. This read-only view shows the business audit ledger; authentication-event integration is tracked as the next IAM-011 backend step.</p>
+            <p className="muted">Searches are recorded as high-sensitivity audit events. Business evidence is hash-chained; authentication evidence is shown in a separate redacted stream with its own keyset cursor.</p>
           </div>
           <span className="pill">{items.length} loaded</span>
         </div>
@@ -164,10 +227,10 @@ export function AuditConsole() {
           <label>Sensitivity<input value={filters.sensitivity} onChange={(event) => setFilters({ ...filters, sensitivity: event.target.value })} /></label>
           <label>From<input type="datetime-local" value={filters.from} onChange={(event) => setFilters({ ...filters, from: event.target.value })} /></label>
           <label>To<input type="datetime-local" value={filters.to} onChange={(event) => setFilters({ ...filters, to: event.target.value })} /></label>
-          <button className="primary" type="submit" disabled={loading}>Search audit</button>
+          <button className="primary" type="submit" disabled={loading || authenticationLoading}>Search audit</button>
         </form>
         {error ? <div className="alert alert-danger" role="alert">{error}</div> : null}
-        {loading ? <div className="alert alert-information" role="status">Loading immutable audit evidence…</div> : null}
+        {loading || authenticationLoading ? <div className="alert alert-information" role="status">Loading immutable audit evidence…</div> : null}
       </section>
 
       <section className="card">
@@ -192,6 +255,35 @@ export function AuditConsole() {
           </div>
         )}
         {hasMore ? <button className="secondary" type="button" disabled={loading || !nextCursor} onClick={() => void load(applied, true, nextCursor)}>Load more audit events</button> : null}
+      </section>
+
+      <section className="card">
+        <div className="section-heading">
+          <div>
+            <h2>Authentication events</h2>
+            <p className="muted">Redacted login, MFA, session, permission and network events. These records are searchable by actor, correlation and time; email hashes, network addresses, user agents and metadata stay server-side.</p>
+          </div>
+          <span className="pill">{authenticationItems.length} loaded</span>
+        </div>
+        {authenticationItems.length === 0 && !authenticationLoading ? <div className="empty-state"><strong>No authentication events</strong><p>No events match the applied filters.</p></div> : (
+          <div className="table-wrap">
+            <table>
+              <caption className="sr-only">Redacted authentication events</caption>
+              <thead><tr><th>Event</th><th>Actor</th><th>Correlation</th><th>Occurred</th></tr></thead>
+              <tbody>
+                {authenticationItems.map((item) => (
+                  <tr key={item.id}>
+                    <td>{item.eventType}<small>Authentication</small></td>
+                    <td>{item.actorId || 'Unknown subject'}</td>
+                    <td className="mono-small">{item.correlationId}</td>
+                    <td>{new Date(item.occurredAt).toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {authenticationHasMore ? <button className="secondary" type="button" disabled={authenticationLoading || !authenticationNextCursor} onClick={() => void loadAuthentication(applied, true, authenticationNextCursor)}>Load more authentication events</button> : null}
       </section>
 
       {selected ? <section className="card" aria-live="polite">

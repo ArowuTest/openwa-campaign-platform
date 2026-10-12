@@ -2547,7 +2547,7 @@
       "internal/persistence/postgres/identity_acceptance_integration_test.go",
       "internal/audit/postgres.go"
     ],
-    "notes": "Authentication success/failure, MFA, lockout, permission/step-up/network-denied events are persisted with actor/time/context, and privileged business actions use the audit ledger. Authentication events are not yet integrated into the controlled audit-search/export surface required by the acceptance wording."
+    "notes": "Authentication success/failure, MFA, lockout, permission/step-up/network-denied events are persisted with actor/time/context and are now exposed through the audit.read-gated, redacted authentication-event search endpoint and admin audit screen; privileged business actions use the hash-chained audit ledger. Authentication events remain separate from the business hash chain and are not yet included in controlled audit exports, so the full search/export acceptance remains partial."
   },
   "IAM-012": {
     "status": "IMPLEMENTED_TESTED",

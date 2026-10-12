@@ -1764,6 +1764,42 @@ paths:
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 1000 } }
       responses:
         '200': { description: Audit event page }
+  /operations/authentication-events:
+    get:
+      operationId: searchAuthenticationEvents
+      summary: Search persisted authentication events for compliance review
+      parameters:
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque keyset cursor returned by the previous page. }
+        - { name: userId, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: eventType, in: query, required: false, schema: { type: string, enum: [LOGIN_SUCCEEDED, LOGIN_FAILED, MFA_SUCCEEDED, MFA_FAILED, ACCOUNT_LOCKED, SESSION_REVOKED, ALL_SESSIONS_REVOKED, PERMISSION_DENIED, STEP_UP_REQUIRED, NETWORK_ACCESS_DENIED] } }
+        - { name: correlationId, in: query, required: false, schema: { type: string } }
+        - { name: from, in: query, required: false, schema: { type: string, format: date-time } }
+        - { name: to, in: query, required: false, schema: { type: string, format: date-time } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500 } }
+      responses:
+        '200':
+          description: Redacted authentication event page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [source, id, eventType, correlationId, occurredAt]
+                      properties:
+                        source: { type: string, enum: [authentication] }
+                        id: { type: string, format: uuid }
+                        actorId: { type: string, format: uuid }
+                        eventType: { type: string }
+                        correlationId: { type: string }
+                        occurredAt: { type: string, format: date-time }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
   /operations/delivery-exceptions:
     get:
       operationId: listDeliveryExceptions

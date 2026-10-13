@@ -63,7 +63,7 @@ jobs:
           go-version: '1.23.2'
           cache: true
       - name: Install native PostgreSQL client dependencies
-        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y libpq-dev pkg-config
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y libpq-dev pkg-config postgresql-client
       - name: Verify cgo PostgreSQL driver
         env:
           CGO_ENABLED: '1'
@@ -71,12 +71,66 @@ jobs:
           set -o pipefail
           go test -count=1 -v ./internal/persistence/database/libpqdriver | tee driver.log
           grep -F -- '--- PASS: TestDriverIsRegistered' driver.log
+      - name: Establish service roles and default privileges
+        env:
+          PGHOST: localhost
+          PGPORT: '5432'
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: campaign_platform
+        run: psql -v ON_ERROR_STOP=1 -f database/bootstrap/002_service_roles.sql
       - name: Replay ordered migrations
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/campaign_platform?sslmode=disable
         run: |
           set -o pipefail
           python3 scripts/validate-postgres-migrations.py | tee migration.log
+      - name: Reconcile service privileges after migrations
+        env:
+          PGHOST: localhost
+          PGPORT: '5432'
+          PGUSER: postgres
+          PGPASSWORD: postgres
+          PGDATABASE: campaign_platform
+        run: psql -v ON_ERROR_STOP=1 -f database/bootstrap/002_service_roles.sql
+      - name: Verify commercial schema readiness and append-only history
+        env:
+          CGO_ENABLED: '1'
+          POSTGRES_META_CLOUD_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/campaign_platform?sslmode=disable
+          POSTGRES_COMMERCIAL_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/campaign_platform?sslmode=disable
+        run: |
+          set -o pipefail
+          go test -count=1 -v ./cmd/control-api -run '^TestControlSchemaReadinessRejectsMissingCommercialEvidence$' | tee readiness.log
+          grep -F -- '--- PASS: TestControlSchemaReadinessRejectsMissingCommercialEvidence' readiness.log
+          go test -count=1 -v ./internal/persistence/postgres -run '^TestPostgreSQLCommercialEventsAreAtomicOrderedAndAppendOnly$' | tee commercial.log
+          grep -F -- '--- PASS: TestPostgreSQLCommercialEventsAreAtomicOrderedAndAppendOnly' commercial.log
+      - name: Verify approval-time authentication export snapshot
+        env:
+          CGO_ENABLED: '1'
+          POSTGRES_PAGINATION_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/campaign_platform?sslmode=disable
+        run: |
+          set -o pipefail
+          go test -count=1 -v ./internal/operations -run '^TestPostgreSQLAuthenticationExportSnapshotExcludesLateCommitsAndMutation$' | tee snapshot.log
+          grep -F -- '--- PASS: TestPostgreSQLAuthenticationExportSnapshotExcludesLateCommitsAndMutation' snapshot.log
+      - name: Verify privacy export payload persistence through approval
+        env:
+          CGO_ENABLED: '1'
+          POSTGRES_PAGINATION_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/campaign_platform?sslmode=disable
+        run: |
+          set -o pipefail
+          go test -count=1 -v ./internal/operations -run '^TestPostgreSQLPrivacyExportCreatePreservesEncryptedPayloadThroughApproval$' | tee privacy-persistence.log
+          grep -F -- '--- PASS: TestPostgreSQLPrivacyExportCreatePreservesEncryptedPayloadThroughApproval' privacy-persistence.log
+      - name: Verify export worker privileges and upgrade reconciliation
+        env:
+          CGO_ENABLED: '1'
+          POSTGRES_EXPORT_ROLE_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/campaign_platform?sslmode=disable
+        run: |
+          set -o pipefail
+          go test -count=1 -v ./internal/operations -run '^TestPostgreSQLExportWorker(ServiceRoleLifecycle|ServiceRoleLeastPrivilege|PrivilegeUpgrade|StatusTransitionGuard)$' | tee privileges.log
+          grep -F -- '--- PASS: TestPostgreSQLExportWorkerServiceRoleLifecycle' privileges.log
+          grep -F -- '--- PASS: TestPostgreSQLExportWorkerServiceRoleLeastPrivilege' privileges.log
+          grep -F -- '--- PASS: TestPostgreSQLExportWorkerPrivilegeUpgrade' privileges.log
+          grep -F -- '--- PASS: TestPostgreSQLExportWorkerStatusTransitionGuard' privileges.log
       - name: Run PostgreSQL adversarial smoke
         env:
           CGO_ENABLED: '1'

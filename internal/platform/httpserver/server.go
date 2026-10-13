@@ -3416,11 +3416,14 @@ func (s *Server) listInboundReplies(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
-	principal, _ := identity.PrincipalFromContext(r.Context())
-	if !principal.User.HasPermission("inbound.content.read") {
-		for index := range page.Items {
-			page.Items[index].MessageText = ""
-		}
+	// The list endpoint never transports plaintext or its guessable fingerprint,
+	// even for content readers. A digest of short replies such as "STOP" can
+	// otherwise reveal the message through offline dictionary matching.
+	// Both the content and fingerprint are confined to the separately audited
+	// and permission-gated /content operation.
+	for index := range page.Items {
+		page.Items[index].MessageText = ""
+		page.Items[index].MessageFingerprint = ""
 	}
 	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }

@@ -65,6 +65,34 @@ func TestInboundRepliesReturnCursorContinuationWithoutContentLeak(t *testing.T) 
 	}
 }
 
+func TestInboundRepliesNeverExposePlaintextThroughListEvenToContentReaders(t *testing.T) {
+	repo := &inboundPaginationRepository{
+		MemoryRepository: inbound.NewMemoryRepository(),
+		items: []inbound.Reply{{
+			ID: "reply-c", MessageText: "SENSITIVE_LIST_BODY_MUST_NEVER_LEAK",
+			MessageFingerprint: "SENSITIVE_GUESSABLE_CONTENT_FINGERPRINT",
+			Classification:     inbound.ClassificationUnreviewed, CreatedAt: time.Date(2026, 10, 13, 10, 0, 0, 0, time.UTC),
+		}},
+	}
+	server := &Server{deps: Dependencies{InboundReplies: &inbound.Service{Repository: repo}}}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/inbound-replies?limit=50", nil)
+	request = request.WithContext(identity.WithPrincipal(request.Context(), identity.Principal{User: identity.User{
+		ID: "audited-content-reader", Permissions: map[string]struct{}{
+			"inbound.read": {}, "inbound.content.read": {},
+		},
+	}}))
+	response := httptest.NewRecorder()
+	server.listInboundReplies(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("list status=%d response=%s", response.Code, response.Body.String())
+	}
+	if strings.Contains(response.Body.String(), "SENSITIVE_LIST_BODY_MUST_NEVER_LEAK") ||
+		strings.Contains(response.Body.String(), "SENSITIVE_GUESSABLE_CONTENT_FINGERPRINT") ||
+		strings.Contains(response.Body.String(), "messageText") {
+		t.Fatalf("metadata list leaked retained content or guessable fingerprint despite separate audited content endpoint: %s", response.Body.String())
+	}
+}
+
 func containsJSONText(body, value string) bool {
 	return len(value) > 0 && strings.Contains(body, value)
 }

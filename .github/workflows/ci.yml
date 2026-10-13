@@ -104,6 +104,14 @@ jobs:
           grep -F -- '--- PASS: TestControlSchemaReadinessRejectsMissingCommercialEvidence' readiness.log
           go test -count=1 -v ./internal/persistence/postgres -run '^TestPostgreSQLCommercialEventsAreAtomicOrderedAndAppendOnly$' | tee commercial.log
           grep -F -- '--- PASS: TestPostgreSQLCommercialEventsAreAtomicOrderedAndAppendOnly' commercial.log
+      - name: Verify identity administration role catalogue and lifecycle
+        env:
+          CGO_ENABLED: '1'
+          POSTGRES_IDENTITY_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/campaign_platform?sslmode=disable
+        run: |
+          set -o pipefail
+          go test -count=1 -v ./internal/persistence/postgres -run '^TestPostgreSQLIdentityMFAVisibleSessionsAndImmediateAdminRevocation$' | tee identity.log
+          grep -F -- '--- PASS: TestPostgreSQLIdentityMFAVisibleSessionsAndImmediateAdminRevocation' identity.log
       - name: Verify approval-time authentication export snapshot
         env:
           CGO_ENABLED: '1'

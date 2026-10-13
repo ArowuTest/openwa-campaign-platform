@@ -31,6 +31,19 @@ func (s *Server) listInternalUsers(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
 }
 
+func (s *Server) listInternalRoles(w http.ResponseWriter, r *http.Request) {
+	if s.deps.IdentityAdministration == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "IDENTITY_ADMINISTRATION_UNAVAILABLE", "Identity administration is unavailable.", nil)
+		return
+	}
+	roles, err := s.deps.IdentityAdministration.ListRoles(r.Context())
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, roles)
+}
+
 func (s *Server) createInternalUser(w http.ResponseWriter, r *http.Request) {
 	if !s.requireIdentityAdministrationStepUp(w, r, "identity.user.create") {
 		return

@@ -46,6 +46,20 @@ func TestPostgreSQLIdentityMFAVisibleSessionsAndImmediateAdminRevocation(t *test
 	sessions := &IdentitySessionRepository{DB: db}
 	adminRepo := &IdentityAdministrationRepository{DB: db, Secrets: box}
 	admin := identity.NewAdministrationService(adminRepo, sessions)
+	roles, err := admin.ListRoles(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rolePermissions := make(map[string]map[string]bool, len(roles))
+	for _, role := range roles {
+		rolePermissions[role.Code] = map[string]bool{}
+		for _, permission := range role.Permissions {
+			rolePermissions[role.Code][permission] = true
+		}
+	}
+	if !rolePermissions["FINANCE_USER"]["finance.write"] || !rolePermissions["FINANCE_APPROVER"]["finance.approve"] {
+		t.Fatalf("authoritative role catalogue missing finance permissions: %+v", roles)
+	}
 	temporaryCredential := "iam-test-credential-000001"
 	provisioned, err := admin.Create(ctx, identity.CreateAccountInput{
 		Email: "iam-user-" + actorID + "@example.test", DisplayName: "IAM Acceptance User",

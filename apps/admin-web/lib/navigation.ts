@@ -20,6 +20,7 @@ export const navigation: readonly NavigationItem[] = [
   { label: 'Senders', href: '/senders', permission: 'sender.read', group: 'Operate', description: 'Pools, sessions, gateway nodes and capacity' },
   { label: 'Audit', href: '/audit', permission: 'audit.read', group: 'Observe', description: 'Search immutable governance evidence' },
   { label: 'Operations', href: '/operations', permission: 'operations.read', group: 'Observe', description: 'Incidents, UNKNOWN reconciliation and durable jobs' },
+  { label: 'Inbound replies', href: '/operations/inbound', permission: 'inbound.read', group: 'Observe', description: 'Review incoming replies and contact opt-out evidence without revealing content by default' },
   { label: 'Reports', href: '/reports', permission: 'report.read', group: 'Observe', description: 'Privacy-aware campaign and operational reporting' }
 ] as const;
 

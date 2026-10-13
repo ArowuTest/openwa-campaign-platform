@@ -1503,14 +1503,16 @@ paths:
         - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
         '200':
-          description: Inbound reply work queue
+          description: Governed metadata-only inbound reply work queue, never message text, fingerprint, staff actor or private reasons
           content:
             application/json:
               schema:
                 type: object
                 required: [items, count, hasMore]
                 properties:
-                  items: { type: array, items: { type: object } }
+                  items:
+                    type: array
+                    items: { $ref: '#/components/schemas/InboundReplyMetadata' }
                   count: { type: integer, minimum: 0 }
                   nextCursor: { type: string }
                   hasMore: { type: boolean }
@@ -1536,7 +1538,10 @@ paths:
                 escalationReason: { type: string }
       responses:
         '200':
-          description: Updated inbound reply
+          description: Versioned, metadata-only review receipt; private reply content and case narratives are not returned
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InboundReplyMetadata' }
   /inbound-replies/{id}/legal-hold:
     post:
       summary: Apply or release a governed legal hold on retained inbound content
@@ -1557,7 +1562,11 @@ paths:
                 legalHold: { type: boolean }
                 reason: { type: string, minLength: 1 }
       responses:
-        '200': { description: Legal hold state updated and audited }
+        '200':
+          description: Versioned, metadata-only legal-hold receipt; retained content and case narratives are not returned
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/InboundReplyMetadata' }
         '404': { $ref: '#/components/responses/NotFound' }
         '409': { description: Optimistic concurrency conflict }
         '422': { $ref: '#/components/responses/ValidationError' }
@@ -4783,6 +4792,31 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
   schemas:
+    InboundReplyMetadata:
+      type: object
+      additionalProperties: false
+      description: |
+        Explicitly allowlisted metadata for inbound.read and governed mutation
+        receipts. Private message text, message fingerprints, legal case reasons,
+        staff actor IDs, recipient/provider identifiers and other nonessential
+        database fields are never included. The contactId is an internal contact
+        reference used only with a separately consent.write-gated suppression action.
+      required: [id, eventId, contactId, campaignId, sessionId, classification, escalated, occurredAt, createdAt, contentRetainUntil, legalHold, version]
+      properties:
+        id: { type: string }
+        eventId: { type: string }
+        contactId: { type: string }
+        campaignId: { type: string }
+        sessionId: { type: string }
+        classification: { type: string, enum: [UNREVIEWED, OPT_OUT, QUESTION, COMPLAINT, OTHER] }
+        escalated: { type: boolean }
+        occurredAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        contentRetainUntil: { type: string, format: date-time }
+        contentRedactedAt: { type: string, format: date-time }
+        legalHold: { type: boolean }
+        reviewedAt: { type: string, format: date-time }
+        version: { type: integer, format: int64 }
     CommercialDraftRequest:
       type: object
       additionalProperties: false

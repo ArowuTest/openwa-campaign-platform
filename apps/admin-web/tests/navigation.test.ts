@@ -26,6 +26,14 @@ test('user administration is visible only to identity administrators', () => {
   assert.equal(defaultLandingPath(['identity.admin']), '/admin/users');
 });
 
+test('inbound reply workbench requires dedicated inbound.read even beneath operations', () => {
+  assert.equal(permissionForPath('/operations/inbound'), 'inbound.read');
+  assert.equal(permissionForPath('/operations/inbound/example'), 'inbound.read');
+  assert.equal(availableNavigation(['operations.read']).some((item) => item.href === '/operations/inbound'), false);
+  assert.equal(availableNavigation(['inbound.read']).some((item) => item.href === '/operations/inbound'), true);
+  assert.equal(defaultLandingPath(['inbound.read']), '/operations/inbound');
+});
+
 test('wildcard receives the complete internal navigation', () => {
   const items = availableNavigation(['*']);
   assert.ok(items.length >= 9);

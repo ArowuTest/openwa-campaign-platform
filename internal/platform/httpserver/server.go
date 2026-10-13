@@ -3416,13 +3416,11 @@ func (s *Server) listInboundReplies(w http.ResponseWriter, r *http.Request) {
 		s.internalError(w, r, err)
 		return
 	}
-	principal, _ := identity.PrincipalFromContext(r.Context())
-	if !principal.User.HasPermission("inbound.content.read") {
-		for index := range page.Items {
-			page.Items[index].MessageText = ""
-		}
-	}
-	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), page.NextCursor)
+	// Use an explicit allowlist, not a partially redacted inbound.Reply:
+	// a future persistence/audit field must never accidentally become public
+	// through this broad inbound.read work-queue endpoint.
+	items := inboundReplyListViews(page.Items)
+	httpx.WriteList(w, http.StatusOK, items, len(items), page.NextCursor)
 }
 
 func (s *Server) getInboundReplyContent(w http.ResponseWriter, r *http.Request) {
@@ -3500,7 +3498,9 @@ func (s *Server) setInboundReplyLegalHold(w http.ResponseWriter, r *http.Request
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "INBOUND_LEGAL_HOLD_INVALID", err.Error(), nil)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, item)
+	// Mutation receipts preserve the new version without returning retained
+	// message content or unrelated private case notes.
+	httpx.WriteJSON(w, http.StatusOK, inboundReplyMetadataView(item))
 }
 
 func (s *Server) reviewInboundReply(w http.ResponseWriter, r *http.Request) {
@@ -3535,7 +3535,9 @@ func (s *Server) reviewInboundReply(w http.ResponseWriter, r *http.Request) {
 		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "INBOUND_REPLY_INVALID", err.Error(), nil)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, item)
+	// Even an inbound.review caller is not implicitly authorised to receive
+	// plaintext or privacy-admin legal-hold narratives in a mutation receipt.
+	httpx.WriteJSON(w, http.StatusOK, inboundReplyMetadataView(item))
 }
 
 func (s *Server) getCampaignInboundMetrics(w http.ResponseWriter, r *http.Request) {

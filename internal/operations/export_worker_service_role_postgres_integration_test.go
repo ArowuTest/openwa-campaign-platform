@@ -157,12 +157,15 @@ func TestPostgreSQLExportWorkerPrivilegeUpgrade(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := strings.TrimSpace(string(content))
-	body = strings.TrimSpace(strings.TrimPrefix(body, "BEGIN;"))
-	body = strings.TrimSpace(strings.TrimSuffix(body, "COMMIT;"))
+	statements, err := splitExportWorkerPrivilegeMigration(string(content))
+	if err != nil {
+		t.Fatal(err)
+	}
 	for i := 0; i < 2; i++ {
-		if _, err := tx.ExecContext(f.ctx, body); err != nil {
-			t.Fatalf("privilege upgrade pass %d: %v", i+1, err)
+		for index, statement := range statements {
+			if _, err := tx.ExecContext(f.ctx, statement); err != nil {
+				t.Fatalf("privilege upgrade pass %d statement %d: %v", i+1, index+1, err)
+			}
 		}
 	}
 	if _, err := tx.ExecContext(f.ctx, "SET LOCAL ROLE campaign_export_worker"); err != nil {
@@ -465,4 +468,65 @@ VALUES('AUDIT_LOG','JSON','APPROVED',$1::uuid,$2::uuid,'role fixture approved ex
 		t.Fatal(err)
 	}
 	return id
+}
+
+func TestExportWorkerPrivilegeMigrationUsesSingleStatements(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join("..", "..", "database", "migrations", "0102_export_worker_column_privileges.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	statements, err := splitExportWorkerPrivilegeMigration(string(content))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(statements) != 4 {
+		t.Fatalf("native driver needs four single top-level commands; got %d", len(statements))
+	}
+	for i, prefix := range []string{
+		"-- Upgrade-only migration runners",
+		"CREATE OR REPLACE FUNCTION guard_export_worker_status_transition()",
+		"DROP TRIGGER IF EXISTS export_requests_worker_status_transition_guard",
+		"CREATE TRIGGER export_requests_worker_status_transition_guard",
+	} {
+		if !strings.HasPrefix(statements[i], prefix) {
+			t.Errorf("statement %d lost its top-level boundary: %s", i+1, statements[i])
+		}
+	}
+	if !strings.Contains(statements[0], "DO $$") || !strings.Contains(statements[0], "END $$;") ||
+		!strings.HasSuffix(statements[1], "END $$;") {
+		t.Fatal("dollar-quoted DO/function bodies must remain complete")
+	}
+	body := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(string(content)), "BEGIN;"), "COMMIT;"))
+	if strings.Join(strings.Fields(strings.Join(statements, "\n")), " ") != strings.Join(strings.Fields(body), " ") {
+		t.Fatal("migration splitting discarded or changed SQL")
+	}
+}
+
+// 0102 is a frozen migration fixture with four top-level commands. Split at
+// those explicit boundaries instead of semicolons inside dollar-quoted PL/pgSQL.
+// The native driver prepares every ExecContext, so it cannot accept a SQL batch.
+func splitExportWorkerPrivilegeMigration(content string) ([]string, error) {
+	body := strings.TrimSpace(content)
+	if !strings.HasPrefix(body, "BEGIN;") || !strings.HasSuffix(body, "COMMIT;") {
+		return nil, errors.New("export privilege migration transaction envelope changed")
+	}
+	body = strings.TrimSpace(strings.TrimPrefix(body, "BEGIN;"))
+	body = strings.TrimSpace(strings.TrimSuffix(body, "COMMIT;"))
+	var statements []string
+	offset := 0
+	for _, boundary := range []string{
+		"\nCREATE OR REPLACE FUNCTION guard_export_worker_status_transition()",
+		"\nDROP TRIGGER IF EXISTS export_requests_worker_status_transition_guard",
+		"\nCREATE TRIGGER export_requests_worker_status_transition_guard",
+	} {
+		index := strings.Index(body[offset:], boundary)
+		if index < 0 {
+			return nil, errors.New("export privilege migration statement boundary changed")
+		}
+		index += offset
+		statements = append(statements, strings.TrimSpace(body[offset:index]))
+		offset = index
+	}
+	statements = append(statements, strings.TrimSpace(body[offset:]))
+	return statements, nil
 }

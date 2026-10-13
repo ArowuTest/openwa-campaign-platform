@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,8 +46,12 @@ func TestControlSchemaReadinessRejectsMissingCommercialEvidence(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer tx.Rollback()
-			if _, err := tx.ExecContext(ctx, tc.breakSQL); err != nil {
-				t.Fatal(err)
+			// These known DDL fixtures contain only simple semicolon-separated statements.
+			// The native libpq driver prepares one statement per execution.
+			for _, statement := range strings.Split(tc.breakSQL, ";") {
+				if _, err := tx.ExecContext(ctx, strings.TrimSpace(statement)); err != nil {
+					t.Fatal(err)
+				}
 			}
 			var ready bool
 			if err := tx.QueryRowContext(ctx, controlSchemaReadinessQuery).Scan(&ready); err != nil {

@@ -426,10 +426,7 @@ func newExportWorkerRoleFixture(t *testing.T) *exportWorkerRoleFixture {
 	t.Cleanup(func() { _ = owner.Close() })
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	t.Cleanup(cancel)
-	query := u.Query()
-	query.Set("options", strings.TrimSpace(query.Get("options")+" -c role=campaign_export_worker"))
-	u.RawQuery = query.Encode()
-	worker, err := sql.Open("postgres", u.String())
+	worker, err := sql.Open("postgres", exportWorkerRoleURL(u))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -529,4 +526,35 @@ func splitExportWorkerPrivilegeMigration(content string) ([]string, error) {
 	}
 	statements = append(statements, strings.TrimSpace(body[offset:]))
 	return statements, nil
+}
+
+func TestExportWorkerRoleURLUsesURIPercentEncodedSpaces(t *testing.T) {
+	u, err := url.Parse("postgres://owner@localhost/campaign?application_name=worker%2Bfixture&options=-c%20statement_timeout%3D30000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := exportWorkerRoleURL(u)
+	actual, err := url.Parse(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(actual.RawQuery, "+") {
+		t.Fatalf("libpq URI must encode spaces as %%20, not form '+': %s", actual.RawQuery)
+	}
+	if !strings.Contains(actual.RawQuery, "options=-c%20statement_timeout%3D30000%20-c%20role%3Dcampaign_export_worker") {
+		t.Fatalf("startup options were not preserved with URI space encoding: %s", actual.RawQuery)
+	}
+	if !strings.Contains(actual.RawQuery, "application_name=worker%2Bfixture") || actual.Query().Get("application_name") != "worker+fixture" {
+		t.Fatalf("literal plus value changed during role URL construction: %s", actual.RawQuery)
+	}
+}
+
+func exportWorkerRoleURL(u *url.URL) string {
+	query := u.Query()
+	query.Set("options", strings.TrimSpace(query.Get("options")+" -c role=campaign_export_worker"))
+	// libpq URI decoding does not apply form decoding to literal plus signs.
+	// Query.Encode has already escaped real plus values as %2B; replace only
+	// its space representation so startup options arrive with literal spaces.
+	u.RawQuery = strings.ReplaceAll(query.Encode(), "+", "%20")
+	return u.String()
 }

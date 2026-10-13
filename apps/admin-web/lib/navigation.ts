@@ -21,6 +21,7 @@ export const navigation: readonly NavigationItem[] = [
   { label: 'Audit', href: '/audit', permission: 'audit.read', group: 'Observe', description: 'Search immutable governance evidence' },
   { label: 'Operations', href: '/operations', permission: 'operations.read', group: 'Observe', description: 'Incidents, UNKNOWN reconciliation and durable jobs' },
   { label: 'Inbound replies', href: '/operations/inbound', permission: 'inbound.read', group: 'Observe', description: 'Review incoming replies and contact opt-out evidence without revealing content by default' },
+  { label: 'Alert Centre', href: '/operations/alerts', permission: 'operations.read', group: 'Observe', description: 'Triage persistent alerts, inspect history and acknowledge active conditions' },
   { label: 'Reports', href: '/reports', permission: 'report.read', group: 'Observe', description: 'Privacy-aware campaign and operational reporting' }
 ] as const;
 

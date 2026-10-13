@@ -11,29 +11,33 @@ import { hasPermission } from '../../../lib/session';
 type Classification = 'UNREVIEWED' | 'OPT_OUT' | 'QUESTION' | 'COMPLAINT' | 'OTHER';
 type ReviewClassification = Exclude<Classification, 'UNREVIEWED'>;
 
-type InboundReply = {
+type ReplyMetadata = {
   id: string;
   eventId: string;
-  recipientId: string;
   contactId: string;
   campaignId: string;
   sessionId: string;
   classification: Classification;
   escalated: boolean;
-  escalationReason?: string;
-  messageText?: string;
   occurredAt: string;
   createdAt: string;
   reviewedAt?: string | null;
-  reviewedBy?: string;
   contentRetainUntil?: string;
   contentRedactedAt?: string | null;
   legalHold: boolean;
-  legalHoldReason?: string;
   version: number;
 };
 
-type ReplyMetadata = Omit<InboundReply, 'messageText'>;
+// Review and legal-hold mutations can return additional server-owned details;
+// the workbench must project their responses back to the minimal list contract.
+type InboundReply = ReplyMetadata & {
+  escalationReason?: string;
+  messageText?: string;
+  messageFingerprint?: string;
+  legalHoldReason?: string;
+  legalHoldAppliedBy?: string;
+  legalHoldReleasedBy?: string;
+};
 
 type RetainedContent = {
   id: string;
@@ -65,9 +69,24 @@ const classifications: Array<{ value: ReviewClassification; name: string }> = [
 ];
 
 function metadata(reply: InboundReply): ReplyMetadata {
-  const safe = { ...reply };
-  delete safe.messageText;
-  return safe;
+  // Explicit projection prevents future mutation-response fields from entering
+  // the broad work-queue state, even if an API changes unexpectedly.
+  return {
+    id: reply.id,
+    eventId: reply.eventId,
+    contactId: reply.contactId,
+    campaignId: reply.campaignId,
+    sessionId: reply.sessionId,
+    classification: reply.classification,
+    escalated: reply.escalated,
+    occurredAt: reply.occurredAt,
+    createdAt: reply.createdAt,
+    reviewedAt: reply.reviewedAt,
+    contentRetainUntil: reply.contentRetainUntil,
+    contentRedactedAt: reply.contentRedactedAt,
+    legalHold: reply.legalHold,
+    version: reply.version
+  };
 }
 
 function maskReference(value?: string): string {
@@ -271,7 +290,9 @@ function InboundReviewGeneration() {
     setSelectedId(reply.id);
     setClassification(reply.classification === 'UNREVIEWED' ? '' : reply.classification);
     setEscalate(reply.escalated);
-    setEscalationReason(reply.escalationReason || '');
+    // Free-text case narratives are intentionally unavailable in the broad
+    // metadata list. An escalated case requires a fresh approved reason.
+    setEscalationReason('');
     setLegalHoldReason('');
     setReleaseConfirmed(false);
     setSuppressionReason('');
@@ -540,7 +561,7 @@ function InboundReviewGeneration() {
               </label>
               <label htmlFor="inbound-escalation-reason">Escalation reason</label>
               <textarea id="inbound-escalation-reason" value={escalationReason} onChange={(event) => setEscalationReason(event.target.value)} minLength={8} maxLength={1000} aria-describedby="inbound-escalation-hint" disabled={!canReview || !escalate || Boolean(busy) || conflict} />
-              <small id="inbound-escalation-hint">Required for escalation, at least 8 characters. Describe uncertainty without pasting the recipient message.</small>
+              <small id="inbound-escalation-hint">Required for escalation, at least 8 characters. Previous private case reasons are not disclosed in the list; enter a fresh reason without pasting the recipient message.</small>
               {conflict ? <p role="alert">This reply was changed by another operator. Refresh before another mutation. A rejected write is never repeated automatically.</p> : null}
               <button className="primary" type="submit" disabled={!canReview || !classification || Boolean(busy) || conflict || (escalate && escalationReason.trim().length < 8)}>
                 {busy === 'review' ? 'Saving classification…' : 'Save classification'}

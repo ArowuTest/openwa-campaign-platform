@@ -56,7 +56,14 @@ function describeKind(kind: ExportKind) {
   return 'Campaign report';
 }
 
-export function ControlledExportManager({
+export function ControlledExportManager(props: ControlledExportManagerProps) {
+  const kind = props.kind ?? 'CAMPAIGN_REPORT';
+  const objectId = props.objectId ?? (kind === 'CAMPAIGN_REPORT' ? props.campaignId : undefined);
+  // A new object owns a new queue and one-time download grants immediately.
+  return <ScopedControlledExportManager key={JSON.stringify([kind, objectId ?? ''])} {...props} kind={kind} objectId={objectId} />;
+}
+
+function ScopedControlledExportManager({
   campaignId,
   campaignName,
   kind = 'CAMPAIGN_REPORT',
@@ -72,22 +79,28 @@ export function ControlledExportManager({
   const [message, setMessage] = useState('');
   const [downloadLinks, setDownloadLinks] = useState<Record<string, { href: string; expiresAt: string }>>({});
   const requestSequence = useRef(0);
+  const scopeActive = useRef(false);
 
   const canRequest = kind === 'PRIVACY_PACKAGE'
     ? hasPermission(session?.permissions, 'privacy.read')
     : hasPermission(session?.permissions, 'export.request');
   const canApprove = hasPermission(session?.permissions, 'export.approve');
+  const canDownload = hasPermission(session?.permissions, 'export.request');
   const query = useMemo(() => '/v1/exports?kind=' + encodeURIComponent(kind) + '&limit=100' + (objectId ? '&objectId=' + encodeURIComponent(objectId) : ''), [kind, objectId]);
 
   function requiresStepUp(error: unknown) {
     return error instanceof APIError && (error.code === 'STEP_UP_REQUIRED' || error.code === 'MFA_STEP_UP_REQUIRED');
   }
 
-  function goToStepUp() {
-    window.location.assign('/step-up?returnTo=' + encodeURIComponent('/privacy'));
-  }
+  const goToStepUp = useCallback(() => {
+    if (!scopeActive.current) return;
+    const path = window.location.pathname;
+    const returnTo = path.startsWith('/') && !path.startsWith('//') ? path + window.location.search : '/privacy';
+    window.location.assign('/step-up?returnTo=' + encodeURIComponent(returnTo));
+  }, []);
 
   const load = useCallback(async () => {
+    if (!scopeActive.current) return;
     const request = ++requestSequence.current;
     try {
       const values = await collectBoundedPages(
@@ -96,18 +109,24 @@ export function ControlledExportManager({
       );
       if (request === requestSequence.current) setItems(values);
     } catch (cause) {
+      if (request !== requestSequence.current || !scopeActive.current) return;
       if (requiresStepUp(cause)) {
         goToStepUp();
         return;
       }
       setMessage(cause instanceof Error ? cause.message : 'Controlled exports could not be loaded.');
     }
-  }, [query]);
+  }, [goToStepUp, query]);
 
   useEffect(() => {
+    scopeActive.current = true;
     // The initial load synchronizes the controlled-export inventory into local state.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void load();
+    return () => {
+      scopeActive.current = false;
+      requestSequence.current += 1;
+    };
   }, [load]);
 
   async function requestExport(event: FormEvent) {
@@ -171,6 +190,7 @@ export function ControlledExportManager({
   }
 
   async function authorizeDownload(item: ControlledExport) {
+    if (!canDownload || item.status !== 'READY') return;
     setBusy(item.id);
     setMessage('');
     try {
@@ -247,10 +267,10 @@ export function ControlledExportManager({
 
       <div className="workspace-stack export-list" aria-live="polite">
         {!items.length ? <p className="muted">No controlled exports yet.</p> : items.map((item) => {
-          const download = downloadLinks[item.id];
+          const download = canDownload && item.status === 'READY' ? downloadLinks[item.id] : undefined;
           const pending = item.status === 'PENDING_APPROVAL';
           const isRequester = item.requestedBy === session?.id;
-          const downloadable = item.status === 'READY';
+          const downloadable = canDownload && item.status === 'READY';
           return (
             <article className="card card-subtle" key={item.id}>
               <div className="section-heading">

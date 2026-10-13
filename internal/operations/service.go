@@ -354,29 +354,6 @@ type ExportOptions struct {
 	FrozenPayload   json.RawMessage
 }
 
-func (s *Service) freezeAuthenticationEventWatermark(ctx context.Context, asOf time.Time) (*time.Time, string, error) {
-	if s.AuthenticationEvents == nil {
-		return nil, "", errors.New("authentication event repository unavailable")
-	}
-	boundary := asOf.UTC().Truncate(time.Microsecond)
-	to := boundary.Add(time.Microsecond)
-	page, err := s.AuthenticationEvents.SearchAuthenticationEvents(ctx, identity.AuthenticationEventQuery{
-		To:    &to,
-		Limit: 1,
-	})
-	if err != nil {
-		return nil, "", err
-	}
-	headID := ""
-	if len(page.Items) > 0 {
-		headID = strings.TrimSpace(page.Items[0].ID)
-		if headID == "" {
-			return nil, "", errors.New("authentication event watermark head is invalid")
-		}
-	}
-	return &boundary, headID, nil
-}
-
 func (s *Service) RequestExport(ctx context.Context, kind, objectID, format, reason, actor, correlation string) (ExportRequest, error) {
 	return s.RequestExportWithOptions(ctx, kind, objectID, format, reason, actor, correlation, ExportOptions{})
 }
@@ -420,7 +397,7 @@ func (s *Service) RequestExportWithOptions(ctx context.Context, kind, objectID, 
 	if templateVersion == "" {
 		templateVersion = "EXPORT-V1"
 		if kind == "AUDIT_LOG" {
-			templateVersion = "AUDIT-EXPORT-V2"
+			templateVersion = auditExportTemplateVersion
 		}
 	}
 	now := s.now()
@@ -498,10 +475,12 @@ func (s *Service) DecideExport(ctx context.Context, identifier string, expected 
 			}
 			current.AuditHeadSequence = sequence
 			current.AuditHeadHash = hash
-			authAsOf, authHeadID, authErr := s.freezeAuthenticationEventWatermark(ctx, now)
+			frozenAuthentication, authAsOf, authHeadID, authErr := s.freezeAuthenticationEventSnapshot(ctx, criteria, now)
 			if authErr != nil {
 				return ExportRequest{}, authErr
 			}
+			current.FrozenPayload = frozenAuthentication
+			current.TemplateVersion = auditExportTemplateVersion
 			current.AuthenticationEventAsOf = authAsOf
 			current.AuthenticationEventHeadID = authHeadID
 		case "PRIVACY_PACKAGE":

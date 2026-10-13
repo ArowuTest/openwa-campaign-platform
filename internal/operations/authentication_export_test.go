@@ -40,13 +40,6 @@ func TestAuditExportIncludesRedactedAuthenticationStream(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := authRepository.Append(ctx, identity.AuthenticationEvent{
-		ID:     "00000000-0000-4000-8000-000000000011",
-		UserID: "00000000-0000-4000-8000-000000000002",
-		Type:   identity.EventLoginSucceeded, CorrelationID: "after-head", OccurredAt: boundary,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := authRepository.Append(ctx, identity.AuthenticationEvent{
 		ID:     "00000000-0000-4000-8000-000000000009",
 		UserID: "00000000-0000-4000-8000-000000000003",
 		Type:   identity.EventLoginFailed, CorrelationID: "corr-old",
@@ -55,11 +48,25 @@ func TestAuditExportIncludesRedactedAuthenticationStream(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	worker := &ExportWorker{AuditRepository: auditRepository, AuthenticationEvents: authRepository}
+	service := &Service{AuthenticationEvents: authRepository}
+	frozen, capturedAt, capturedHead, err := service.freezeAuthenticationEventSnapshot(ctx, auditExportCriteria{}, boundary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := authRepository.Append(ctx, identity.AuthenticationEvent{
+		ID:     "00000000-0000-4000-8000-000000000011",
+		UserID: "00000000-0000-4000-8000-000000000002",
+		Type:   identity.EventLoginSucceeded, CorrelationID: "after-head", OccurredAt: boundary,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Source access is no longer necessary after approval: rendering must use
+	// only the immutable redacted rows captured by the approval read.
+	worker := &ExportWorker{AuditRepository: auditRepository}
 	job := ExportRequest{
-		Kind: "AUDIT_LOG", Criteria: json.RawMessage("{}"),
-		AuditHeadSequence: sequence, AuditHeadHash: hash,
-		AuthenticationEventAsOf: &boundary, AuthenticationEventHeadID: headID,
+		Kind: "AUDIT_LOG", Criteria: json.RawMessage("{}"), TemplateVersion: auditExportTemplateVersion,
+		AuditHeadSequence: sequence, AuditHeadHash: hash, FrozenPayload: frozen,
+		AuthenticationEventAsOf: capturedAt, AuthenticationEventHeadID: capturedHead,
 	}
 	payload, err := worker.loadFrozenAudit(ctx, job)
 	if err != nil {
@@ -120,7 +127,7 @@ func TestAuditExportApprovalFreezesAuthenticationWatermark(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if request.TemplateVersion != "AUDIT-EXPORT-V2" {
+	if request.TemplateVersion != auditExportTemplateVersion {
 		t.Fatalf("unexpected audit export template version: %q", request.TemplateVersion)
 	}
 	approved, err := service.DecideExport(ctx, request.ID, request.Version, true, "", "approver", "corr-approval")
@@ -168,6 +175,121 @@ func TestAuthenticationExportCriteriaDoesNotBroadenTheAuthStream(t *testing.T) {
 			}
 			if include != tc.include || query.UserID != tc.wantUser {
 				t.Fatalf("query=%+v include=%v", query, include)
+			}
+		})
+	}
+}
+
+func TestAuditExportApprovalExcludesLateLowerUUIDAndBackdatedEvents(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 10, 12, 3, 10, 0, 123456000, time.UTC)
+	authRepository := identity.NewMemoryEventRecorder()
+	original := identity.AuthenticationEvent{
+		ID:   "00000000-0000-4000-8000-000000000020",
+		Type: identity.EventLoginSucceeded, CorrelationID: "before-approval", OccurredAt: now,
+	}
+	if err := authRepository.Append(ctx, original); err != nil {
+		t.Fatal(err)
+	}
+	auditRepository := audit.NewMemoryRepository()
+	service := &Service{
+		Repo: NewMemoryRepository(), AuditRepository: auditRepository,
+		AuthenticationEvents: authRepository, Clock: func() time.Time { return now },
+	}
+	request, err := service.RequestExport(ctx, "AUDIT_LOG", "", "JSON", "controlled evidence", "maker", "request")
+	if err != nil {
+		t.Fatal(err)
+	}
+	approved, err := service.DecideExport(ctx, request.ID, request.Version, true, "", "checker", "approval")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, late := range []identity.AuthenticationEvent{
+		{ID: "00000000-0000-4000-8000-000000000019", Type: identity.EventLoginFailed, CorrelationID: "late-lower-uuid", OccurredAt: now},
+		{ID: "00000000-0000-4000-8000-000000000018", Type: identity.EventLoginFailed, CorrelationID: "late-backdated", OccurredAt: now.Add(-time.Hour)},
+	} {
+		if err := authRepository.Append(ctx, late); err != nil {
+			t.Fatal(err)
+		}
+	}
+	worker := &ExportWorker{AuditRepository: auditRepository, AuthenticationEvents: authRepository}
+	payload, err := worker.loadFrozenAudit(ctx, approved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(payload.AuthenticationEvents) != 1 || payload.AuthenticationEvents[0].ID != original.ID {
+		t.Fatalf("approval snapshot admitted later events: %+v", payload.AuthenticationEvents)
+	}
+}
+
+func TestAuditExportNormalizesPendingLegacyTemplateAtApproval(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 10, 13, 3, 0, 0, 0, time.UTC)
+	service := &Service{Repo: NewMemoryRepository(), AuditRepository: audit.NewMemoryRepository(), AuthenticationEvents: identity.NewMemoryEventRecorder(), Clock: func() time.Time { return now }}
+	request, err := service.RequestExportWithOptions(ctx, "AUDIT_LOG", "", "JSON", "controlled evidence", "maker", "request", ExportOptions{TemplateVersion: "AUDIT-EXPORT-V2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	approved, err := service.DecideExport(ctx, request.ID, request.Version, true, "", "checker", "approval")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approved.TemplateVersion != auditExportTemplateVersion || len(approved.FrozenPayload) == 0 {
+		t.Fatalf("legacy pending approval did not produce immutable snapshot: %+v", approved)
+	}
+}
+
+func TestBusinessOnlyExportFreezesEmptyAuthenticationStreamWithoutSource(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 10, 13, 3, 0, 0, 0, time.UTC)
+	repository := audit.NewMemoryRepository()
+	service := &Service{Repo: NewMemoryRepository(), AuditRepository: repository, Clock: func() time.Time { return now }}
+	request, err := service.RequestExportWithOptions(ctx, "AUDIT_LOG", "", "JSON", "controlled evidence", "maker", "request", ExportOptions{Criteria: map[string]any{"action": "CAMPAIGN_VIEW"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	approved, err := service.DecideExport(ctx, request.ID, request.Version, true, "", "checker", "approval")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := (&ExportWorker{AuditRepository: repository}).loadFrozenAudit(ctx, approved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if payload.AuthenticationEvents == nil || len(payload.AuthenticationEvents) != 0 {
+		t.Fatalf("business-only export broadened auth scope: %+v", payload.AuthenticationEvents)
+	}
+}
+
+func TestAuthenticationExportRejectsMissingLegacyOrMismatchedSnapshot(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 10, 13, 3, 0, 0, 0, time.UTC)
+	service := &Service{AuthenticationEvents: identity.NewMemoryEventRecorder()}
+	frozen, captured, head, err := service.freezeAuthenticationEventSnapshot(ctx, auditExportCriteria{}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid := ExportRequest{Kind: "AUDIT_LOG", Criteria: json.RawMessage("{}"), TemplateVersion: auditExportTemplateVersion, FrozenPayload: frozen, AuthenticationEventAsOf: captured, AuthenticationEventHeadID: head}
+	cases := []struct {
+		name   string
+		mutate func(*ExportRequest)
+	}{
+		{"missing", func(job *ExportRequest) { job.FrozenPayload = nil }},
+		{"legacy", func(job *ExportRequest) { job.TemplateVersion = "AUDIT-EXPORT-V2" }},
+		{"malformed", func(job *ExportRequest) { job.FrozenPayload = json.RawMessage("{}") }},
+		{"different criteria", func(job *ExportRequest) { job.Criteria = json.RawMessage("{\"eventType\":\"LOGIN_FAILED\"}") }},
+		{"different boundary", func(job *ExportRequest) { later := now.Add(time.Second); job.AuthenticationEventAsOf = &later }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			job := valid
+			tc.mutate(&job)
+			criteria, err := decodeAuditExportCriteria(job.Criteria)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := (&ExportWorker{}).loadFrozenAuthenticationEvents(ctx, job, criteria); err == nil {
+				t.Fatal("expected fail-closed frozen snapshot rejection")
 			}
 		})
 	}

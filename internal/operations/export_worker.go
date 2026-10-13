@@ -58,7 +58,7 @@ type AuditExportPayload struct {
 	AuthenticationEventHeadID string                         `json:"authenticationEventHeadId,omitempty"`
 }
 
-const maxAuthenticationExportRows = 100000
+const maxAuthenticationExportRows = identity.MaxAuthenticationEventSnapshotRows
 
 type ExportWorker struct {
 	Repository           ExportJobRepository
@@ -220,8 +220,13 @@ func decodeAuditExportCriteria(raw json.RawMessage) (auditExportCriteria, error)
 	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
 		return criteria, nil
 	}
-	if err := json.Unmarshal(raw, &criteria); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&criteria); err != nil {
 		return auditExportCriteria{}, fmt.Errorf("decode audit export criteria: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return auditExportCriteria{}, errors.New("decode audit export criteria: expected one JSON value")
 	}
 	criteria.ActorID = strings.TrimSpace(criteria.ActorID)
 	criteria.Action = strings.TrimSpace(criteria.Action)
@@ -322,62 +327,8 @@ func (w *ExportWorker) loadFrozenAudit(ctx context.Context, job ExportRequest) (
 	}, nil
 }
 
-func (w *ExportWorker) loadFrozenAuthenticationEvents(ctx context.Context, job ExportRequest, criteria auditExportCriteria) ([]AuthenticationEventExportRow, error) {
-	if w.AuthenticationEvents == nil {
-		return nil, errors.New("authentication event repository unavailable")
-	}
-	if job.AuthenticationEventAsOf == nil || job.AuthenticationEventAsOf.IsZero() {
-		return nil, errors.New("authentication event watermark unavailable")
-	}
-	boundary := job.AuthenticationEventAsOf.UTC().Truncate(time.Microsecond)
-	to := boundary.Add(time.Microsecond)
-	if criteria.To != nil && criteria.To.Before(to) {
-		to = criteria.To.UTC()
-	}
-	criteria.To = &to
-	query, includeAuthentication, err := authenticationExportQuery(criteria)
-	if err != nil {
-		return nil, err
-	}
-	if !includeAuthentication || (query.From != nil && !query.From.Before(to)) {
-		return []AuthenticationEventExportRow{}, nil
-	}
-	rows := make([]AuthenticationEventExportRow, 0, 500)
-	for {
-		page, err := w.AuthenticationEvents.SearchAuthenticationEvents(ctx, query)
-		if err != nil {
-			return nil, err
-		}
-		for _, event := range page.Items {
-			occurred := event.OccurredAt.UTC()
-			// PostgreSQL and the approval watermark use a microsecond bucket;
-			// apply the same normalization here so nanosecond-bearing in-memory
-			// events cannot disappear between approval and rendering.
-			eventBucket := occurred.Truncate(time.Microsecond)
-			if eventBucket.After(boundary) {
-				continue
-			}
-			if eventBucket.Equal(boundary) && (job.AuthenticationEventHeadID == "" || strings.ToLower(event.ID) > strings.ToLower(job.AuthenticationEventHeadID)) {
-				continue
-			}
-			if len(rows) >= maxAuthenticationExportRows {
-				return nil, errors.New("authentication export row limit exceeded")
-			}
-			rows = append(rows, AuthenticationEventExportRow{
-				Source: "authentication", ID: event.ID, ActorID: event.UserID, EventType: string(event.Type),
-				CorrelationID: event.CorrelationID, OccurredAt: occurred,
-			})
-		}
-		if page.NextCursor == "" {
-			break
-		}
-		cursor, err := identity.DecodeAuthenticationEventCursor(page.NextCursor)
-		if err != nil {
-			return nil, fmt.Errorf("decode authentication export cursor: %w", err)
-		}
-		query.After = &cursor
-	}
-	return rows, nil
+func (w *ExportWorker) loadFrozenAuthenticationEvents(_ context.Context, job ExportRequest, criteria auditExportCriteria) ([]AuthenticationEventExportRow, error) {
+	return loadAuthenticationEventSnapshot(job, criteria)
 }
 
 func renderCSV(value any) ([]byte, error) {

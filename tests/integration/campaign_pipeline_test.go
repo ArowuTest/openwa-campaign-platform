@@ -11,6 +11,7 @@ import (
 	audiencefilter "campaign-platform/internal/audience/filter"
 	"campaign-platform/internal/audit"
 	"campaign-platform/internal/campaign"
+	"campaign-platform/internal/commercial"
 	"campaign-platform/internal/consent"
 	"campaign-platform/internal/delivery"
 	"campaign-platform/internal/dispatch"
@@ -149,6 +150,36 @@ func TestDryRunReleaseRecoveryDispatchAndFinalWithdrawal(t *testing.T) {
 		EligibleAudienceCount: 2, MessageVersionID: "message-1",
 		MessageContentHash: "message-hash", Version: 1,
 	}
+	// Use the governed maker-checker workflow, including paid commercial
+	// entitlement, so the composed release exercises the live approval guard.
+	commercialService := &commercial.Service{
+		Store: commercial.NewMemoryStore(), Clock: func() time.Time { return now },
+	}
+	paymentReceivedAt := now.Add(-time.Hour)
+	commercialRecord, err := commercialService.CreateDraft(ctx, commercial.Record{
+		CampaignID: campaignEntity.ID, OrganisationID: campaignEntity.OrganisationID,
+		QuotationReference: "Q-WORKFLOW", InvoiceReference: "I-WORKFLOW", Currency: "NGN",
+		ApprovedRecipients: campaignEntity.MaximumUniqueRecipients,
+		UnitPriceMinor:     50, ManagementFeeMinor: 1000, TotalAmountMinor: 1100,
+		PaymentReference: "PAY-WORKFLOW", PaymentReceivedAt: &paymentReceivedAt,
+	}, "commercial-maker", "record paid campaign entitlement")
+	if err != nil {
+		t.Fatal(err)
+	}
+	commercialRecord, err = commercialService.Submit(ctx, commercialRecord.ID, commercialRecord.Version,
+		"commercial-maker", "submit paid campaign entitlement")
+	if err != nil {
+		t.Fatal(err)
+	}
+	commercialRecord, err = commercialService.Decide(ctx, commercialRecord.ID, commercialRecord.Version,
+		true, "commercial-checker", "independently verify received payment")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if commercialRecord.Status != commercial.StatusApproved {
+		t.Fatalf("commercial entitlement was not approved: %+v", commercialRecord)
+	}
+	campaignEntity.CommercialApprovalID = commercialRecord.ID
 	if err := campaignRepo.Create(ctx, campaignEntity); err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +197,8 @@ func TestDryRunReleaseRecoveryDispatchAndFinalWithdrawal(t *testing.T) {
 			// dispatch check deliberately detects a withdrawal for one member.
 			return orchestration.EligibilityDecision{Eligible: true}, nil
 		}),
-		BatchSize: 1, Clock: func() time.Time { return now },
+		CommercialApprovals: commercialService,
+		BatchSize:           1, Clock: func() time.Time { return now },
 	}
 	first, err := release.Release(ctx, campaignEntity.ID)
 	if err != nil {

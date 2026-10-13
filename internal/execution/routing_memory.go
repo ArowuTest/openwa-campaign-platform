@@ -54,6 +54,21 @@ func (s *MemoryRoutingPlanStore) Get(_ context.Context, id string) (RoutingPlan,
 	}
 	return p, nil
 }
+
+func (s *MemoryRoutingPlanStore) GetByIdempotencyKey(_ context.Context, campaignID, idempotencyKey string) (RoutingPlan, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	planID, ok := s.idempotency[campaignID+"\x00"+idempotencyKey]
+	if !ok {
+		return RoutingPlan{}, ErrRoutingPlanNotFound
+	}
+	plan, ok := s.plans[planID]
+	if !ok {
+		return RoutingPlan{}, ErrRoutingPlanNotFound
+	}
+	return plan, nil
+}
+
 func (s *MemoryRoutingPlanStore) ListByCampaign(_ context.Context, id string) ([]RoutingPlan, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

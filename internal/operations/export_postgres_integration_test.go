@@ -59,12 +59,16 @@ func TestPostgreSQLExportPersistsCriteriaAndFrozenPayload(t *testing.T) {
 		t.Fatalf("unexpected persisted criteria: %v", initialCriteria)
 	}
 	asOf := now.Add(time.Minute)
+	authenticationAsOf := now.Add(30 * time.Second)
+	authenticationHeadID := "00000000-0000-4000-8000-000000000101"
 	expires := now.Add(time.Hour)
 	loaded.Status = ExportApproved
 	loaded.ApprovedBy = approverID
 	loaded.Criteria = json.RawMessage(`{"campaignStatus":"COMPLETED","includeUnknown":true}`)
 	loaded.FrozenPayload = json.RawMessage(`{"rows":10,"unknown":2}`)
 	loaded.AsOf = &asOf
+	loaded.AuthenticationEventAsOf = &authenticationAsOf
+	loaded.AuthenticationEventHeadID = authenticationHeadID
 	loaded.ExpiresAt = &expires
 	loaded.UpdatedAt = now.Add(2 * time.Minute)
 	updated, err := repo.UpdateExport(ctx, loaded, 1)
@@ -77,6 +81,9 @@ func TestPostgreSQLExportPersistsCriteriaAndFrozenPayload(t *testing.T) {
 	persisted, err := repo.GetExport(ctx, exportID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if persisted.AuthenticationEventAsOf == nil || !persisted.AuthenticationEventAsOf.Equal(authenticationAsOf) || persisted.AuthenticationEventHeadID != authenticationHeadID {
+		t.Fatalf("authentication watermark did not round-trip: %+v", persisted)
 	}
 	var criteria, frozen map[string]any
 	if err := json.Unmarshal(persisted.Criteria, &criteria); err != nil {

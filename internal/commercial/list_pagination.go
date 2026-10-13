@@ -8,6 +8,8 @@ import (
 	"io"
 	"strings"
 	"time"
+
+	"campaign-platform/internal/shared/id"
 )
 
 var ErrInvalidListCursor = errors.New("invalid commercial pagination cursor")
@@ -39,7 +41,7 @@ func decodeListCursor(v string) (*time.Time, string, error) {
 		return nil, "", ErrInvalidListCursor
 	}
 	var x any
-	if e = d.Decode(&x); !errors.Is(e, io.EOF) || c.CreatedAt.IsZero() || strings.TrimSpace(c.ID) == "" {
+	if e = d.Decode(&x); !errors.Is(e, io.EOF) || c.CreatedAt.IsZero() || !id.IsUUID(strings.TrimSpace(c.ID)) {
 		return nil, "", ErrInvalidListCursor
 	}
 	t := c.CreatedAt.UTC()

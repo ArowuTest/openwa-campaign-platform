@@ -7,8 +7,10 @@ import { useRouter } from 'next/navigation';
 import { StatusBadge } from '../../../components/status-badge';
 import { CampaignDraftEditor } from './campaign-draft-editor';
 import { CampaignReadinessPanel } from './campaign-readiness-panel';
+import { CommercialGovernance } from './commercial-governance';
+import { MessageComposer } from './message-composer';
 import { useAuth } from '../../../components/auth-provider';
-import { APIError, apiRequest, type ListEnvelope } from '../../../lib/api';
+import { APIError, apiRequest, collectBoundedPages, type ListEnvelope } from '../../../lib/api';
 import { canonicalUUID, getCampaignDetail, type CampaignDetail } from '../../../lib/campaign-preparation-model';
 import { hasPermission } from '../../../lib/session';
 
@@ -70,14 +72,93 @@ type Reservation = {
   reservedDailyUnits: number;
 };
 
+type ControlledTestOptions = {
+  campaignId: string;
+  campaignVersion: number;
+  messageVersionId?: string;
+  provider: string;
+  engine: string;
+  senderPoolId?: string;
+  gatewayPoolId?: string;
+  supported: boolean;
+  reason?: string;
+  recipients: Array<{ id: string; label: string; maskedMsisdn: string; status: string }>;
+  sessions: Array<{ id: string; profileDisplayName: string; maskedMsisdn: string; status: string; version: number }>;
+  recipientInventoryComplete: boolean;
+  sessionInventoryComplete: boolean;
+};
+
+type CapacityHoldProposal = {
+  campaignId: string;
+  campaignVersion: number;
+  senderPoolId: string;
+  gatewayPoolId: string;
+  provider: string;
+  engine: string;
+  reservationStart: string;
+  reservationEnd: string;
+  basisRecipientCount: number;
+  measurementAsOf: string;
+  healthySessions: number;
+  healthyNodes: number;
+  minimumHealthyNodes: number;
+  availableMessagesPerMinute: number;
+  availableHourlyUnits: number;
+  availableDailyUnits: number;
+  safetyMarginPercent: number;
+  requiredMessagesPerMinute: number;
+  reservedMessagesPerMinute: number;
+  reservedHourlyUnits: number;
+  reservedDailyUnits: number;
+  pacingPolicyId: string;
+  pacingPolicyVersion: number;
+  pacingMessagesPerMinute: number;
+  pacingHourlyAllowance: number;
+  pacingDailyAllowance: number;
+  routingPolicyVersion: string;
+  capacityEvidenceVersion: string;
+  classification: 'READY_TO_HOLD';
+};
+
 type Metrics = Record<string, number>;
+
+function optionsMatchCampaign(options: ControlledTestOptions, current: Campaign): boolean {
+  return options.campaignId === current.id &&
+    options.campaignVersion === current.version &&
+    (options.messageVersionId ?? '') === (current.messageVersionId ?? '') &&
+    options.provider === current.transport.provider &&
+    options.engine === current.transport.engine &&
+    (options.senderPoolId ?? '') === (current.transport.senderPoolId ?? '') &&
+    (options.gatewayPoolId ?? '') === (current.transport.gatewayPoolId ?? '');
+}
+
+function acceptedTestForCampaign(items: TestSend[], current: Campaign): TestSend | undefined {
+  return items.find((test) =>
+    test.status === 'ACCEPTED' &&
+    test.messageVersionId === current.messageVersionId &&
+    test.messageContentHash === current.messageContentHash &&
+    test.gatewayPoolId === current.transport.gatewayPoolId &&
+    test.gatewayPoolVersion === current.transport.gatewayPoolVersion &&
+    test.senderPoolId === current.transport.senderPoolId &&
+    test.provider === current.transport.provider &&
+    test.engine === current.transport.engine
+  );
+}
+
+function capacityProposalMatchesCampaign(proposal: CapacityHoldProposal, current: Campaign): boolean {
+  return proposal.campaignId === current.id &&
+    proposal.campaignVersion === current.version &&
+    proposal.senderPoolId === current.transport.senderPoolId &&
+    proposal.gatewayPoolId === current.transport.gatewayPoolId &&
+    proposal.provider === current.transport.provider &&
+    proposal.engine === current.transport.engine &&
+    proposal.routingPolicyVersion === current.transport.routingPolicyVersion &&
+    proposal.capacityEvidenceVersion === current.transport.capacityEvidenceVersion &&
+    proposal.classification === 'READY_TO_HOLD';
+}
 
 function isStepUp(error: unknown) {
   return error instanceof APIError && error.status === 403 && error.code.includes('STEP_UP');
-}
-
-function numberValue(data: FormData, name: string) {
-  return Number(String(data.get(name) ?? '0'));
 }
 
 export function CampaignWorkspace({ campaignId }: { campaignId: string }) {
@@ -98,6 +179,8 @@ function CampaignWorkspaceGeneration({ campaignId }: { campaignId: string }) {
   const [workspace, setWorkspace] = useState<Workspace>();
   const [metrics, setMetrics] = useState<Metrics>();
   const [tests, setTests] = useState<TestSend[]>([]);
+  const [testOptions, setTestOptions] = useState<ControlledTestOptions>();
+  const [capacityProposal, setCapacityProposal] = useState<CapacityHoldProposal>();
   const [plan, setPlan] = useState<RoutingPlan>();
   const [reservations, setReservations] = useState<Reservation[]>([]);
   const [busy, setBusy] = useState('');
@@ -108,6 +191,7 @@ function CampaignWorkspaceGeneration({ campaignId }: { campaignId: string }) {
   const activeRequest = useRef<AbortController | undefined>(undefined);
   const mounted = useRef(false);
   const activeMutation = useRef<symbol | undefined>(undefined);
+  const capacityHoldRequest = useRef<{ campaignVersion: number; reason: string; id: string } | undefined>(undefined);
   const canRead = hasPermission(session?.permissions, 'campaign.read');
 
   const canApprove = hasPermission(session?.permissions, 'campaign.approve');
@@ -126,15 +210,34 @@ function CampaignWorkspaceGeneration({ campaignId }: { campaignId: string }) {
     const settled = await Promise.allSettled([
       apiRequest<Workspace>(base + '/workspace', { signal }),
       apiRequest<Metrics>(base + '/metrics', { signal }),
-      apiRequest<ListEnvelope<TestSend>>(base + '/test-messages?limit=100', { signal }),
+      collectBoundedPages<TestSend>(
+        cursor => apiRequest<ListEnvelope<TestSend>>(
+          base + '/test-messages?limit=100' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''),
+          { signal }
+        ),
+        10
+      ),
       apiRequest<ListEnvelope<RoutingPlan>>(base + '/routing-plans?limit=20', { signal })
     ]);
     if (!isCurrent()) return;
     const unavailable = ['workspace', 'metrics', 'controlled tests', 'routing plans'].filter((_, index) => settled[index].status === 'rejected');
     const workspaceValue = settled[0].status === 'fulfilled' ? settled[0].value : undefined;
     const metricValue = settled[1].status === 'fulfilled' ? settled[1].value : undefined;
-    const testValues = settled[2].status === 'fulfilled' ? settled[2].value.items ?? [] : [];
+    const testValues = settled[2].status === 'fulfilled' ? settled[2].value : [];
     const latestPlan = settled[3].status === 'fulfilled' ? settled[3].value.items?.[0] : undefined;
+    let controlledTestOptions: ControlledTestOptions | undefined;
+    if (canWrite && current.messageVersionId) {
+      try {
+        const value = await apiRequest<ControlledTestOptions>(base + '/test-message-options', { signal });
+        if (optionsMatchCampaign(value, current)) {
+          controlledTestOptions = value;
+        } else {
+          unavailable.push('controlled-test options changed with the campaign');
+        }
+      } catch {
+        unavailable.push('controlled-test options');
+      }
+    }
     let reservationValues: Reservation[] = [];
     if (latestPlan) {
       try {
@@ -143,14 +246,32 @@ function CampaignWorkspaceGeneration({ campaignId }: { campaignId: string }) {
         unavailable.push('reservations');
       }
     }
+    const acceptedCapacityTest = acceptedTestForCampaign(testValues, current);
+    const liveReservation = reservationValues.some(item => item.status === 'HELD' || item.status === 'ACTIVE');
+    let capacityProposalValue: CapacityHoldProposal | undefined;
+    if (acceptedCapacityTest && !liveReservation &&
+        ['MESSAGE_APPROVED', 'COMMERCIAL_APPROVED', 'FINAL_APPROVAL_PENDING'].includes(current.status)) {
+      try {
+        const value = await apiRequest<CapacityHoldProposal>(base + '/capacity-hold-proposal', { signal });
+        if (capacityProposalMatchesCampaign(value, current)) {
+          capacityProposalValue = value;
+        } else {
+          unavailable.push('capacity-hold proposal changed with the campaign');
+        }
+      } catch {
+        unavailable.push('capacity-hold proposal');
+      }
+    }
     if (!isCurrent()) return;
     setWorkspace(workspaceValue);
     setMetrics(metricValue);
     setTests(testValues);
+    setTestOptions(controlledTestOptions);
+    setCapacityProposal(capacityProposalValue);
     setPlan(latestPlan);
     setReservations(reservationValues);
     setSupplementalState(unavailable.length ? 'Supplemental evidence unavailable: ' + unavailable.join(', ') + '.' : '');
-  }, [campaignId]);
+  }, [campaignId, canWrite]);
 
   const load = useCallback(async () => {
     // Validate ownership before aborting a controller or changing any state.
@@ -162,6 +283,8 @@ function CampaignWorkspaceGeneration({ campaignId }: { campaignId: string }) {
     setWorkspace(undefined);
     setMetrics(undefined);
     setTests([]);
+    setTestOptions(undefined);
+    setCapacityProposal(undefined);
     setPlan(undefined);
     setReservations([]);
     setCoreError(undefined);
@@ -199,19 +322,10 @@ function CampaignWorkspaceGeneration({ campaignId }: { campaignId: string }) {
     };
   }, [load]);
 
-  const acceptedExactTest = useMemo(() => {
-    if (!campaign) return undefined;
-    return tests.find((test) =>
-      test.status === 'ACCEPTED' &&
-      test.messageVersionId === campaign.messageVersionId &&
-      test.messageContentHash === campaign.messageContentHash &&
-      test.gatewayPoolId === campaign.transport.gatewayPoolId &&
-      test.gatewayPoolVersion === campaign.transport.gatewayPoolVersion &&
-      test.senderPoolId === campaign.transport.senderPoolId &&
-      test.provider === campaign.transport.provider &&
-      test.engine === campaign.transport.engine
-    );
-  }, [campaign, tests]);
+  const acceptedExactTest = useMemo(
+    () => campaign ? acceptedTestForCampaign(tests, campaign) : undefined,
+    [campaign, tests]
+  );
 
   const heldReservation = reservations.find((item) => item.status === 'HELD');
   const activeReservation = reservations.find((item) => item.status === 'ACTIVE');
@@ -270,51 +384,62 @@ function CampaignWorkspaceGeneration({ campaignId }: { campaignId: string }) {
     }));
   }
 
-  async function createRoutingPlan(event: FormEvent<HTMLFormElement>) {
+  async function confirmCapacityHold(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!campaign) return;
+    if (!campaign || !acceptedExactTest || !capacityProposal || heldReservation || activeReservation ||
+        !capacityProposalMatchesCampaign(capacityProposal, campaign)) {
+      setMessage('Reload the accepted controlled-test and server-derived capacity proposal before confirming a hold.');
+      return;
+    }
     const data = new FormData(event.currentTarget);
-    const route = {
-      senderPoolId: campaign.transport.senderPoolId,
-      gatewayPoolId: campaign.transport.gatewayPoolId,
-      provider: campaign.transport.provider,
-      engine: campaign.transport.engine,
-      allocationWeight: 100,
-      maximumRecipients: campaign.maximumUniqueRecipients,
-      reservedMessagesPerMinute: numberValue(data, 'mpm'),
-      reservedHourlyUnits: numberValue(data, 'hourly'),
-      reservedDailyUnits: numberValue(data, 'daily'),
-      allowReallocationIn: false,
-      allowReallocationOut: false
-    };
-    await mutate('Create exact-route pilot hold', () => apiRequest('/v1/campaigns/' + campaign.id + '/routing-plans', {
-      method: 'POST',
-      body: JSON.stringify({
-        distributionMode: 'WEIGHTED',
-        routes: [route],
-        routingPolicyVersion: campaign.transport.routingPolicyVersion,
-        capacityEvidenceVersion: campaign.transport.capacityEvidenceVersion,
-        pacingPolicyVersion: String(data.get('pacingPolicyVersion') ?? '').trim(),
-        fallbackMode: 'NONE',
-        idempotencyKey: crypto.randomUUID()
-      })
-    }));
+    const reason = String(data.get('reason') ?? '').trim();
+    if (reason.length < 8 || reason.length > 1000) {
+      setMessage('Enter a meaningful capacity-hold approval reason (8–1000 characters).');
+      return;
+    }
+    let request = capacityHoldRequest.current;
+    if (!request || request.campaignVersion !== campaign.version || request.reason !== reason) {
+      request = { campaignVersion: campaign.version, reason, id: crypto.randomUUID() };
+      capacityHoldRequest.current = request;
+    }
+    const clientRequestId = request.id;
+    await mutate('Confirm server-derived capacity hold', async () => {
+      await apiRequest('/v1/campaigns/' + campaign.id + '/capacity-hold', {
+        method: 'POST',
+        body: JSON.stringify({
+          expectedCampaignVersion: campaign.version,
+          reason,
+          clientRequestId
+        })
+      });
+      capacityHoldRequest.current = undefined;
+    });
   }
 
   async function sendControlledTest(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!campaign?.messageVersionId) return;
+    if (!campaign?.messageVersionId || !testOptions?.supported || !optionsMatchCampaign(testOptions, campaign)) {
+      setMessage('Reload governed controlled-test options before scheduling a test.');
+      return;
+    }
     const data = new FormData(event.currentTarget);
+    const testRecipientId = String(data.get('testRecipientId') ?? '').trim();
+    const senderSessionId = String(data.get('senderSessionId') ?? '').trim();
+    if (!testOptions.recipients.some((item) => item.id === testRecipientId) ||
+        !testOptions.sessions.some((item) => item.id === senderSessionId)) {
+      setMessage('Select an approved recipient and a READY sender session from the current governed options.');
+      return;
+    }
     await mutate('Schedule controlled test', () => apiRequest('/v1/campaigns/' + campaign.id + '/test-messages', {
       method: 'POST',
       body: JSON.stringify({
         messageVersionId: campaign.messageVersionId,
-        testRecipientId: String(data.get('testRecipientId') ?? '').trim(),
+        testRecipientId,
         gatewayPoolId: campaign.transport.gatewayPoolId,
         senderPoolId: campaign.transport.senderPoolId,
         provider: campaign.transport.provider,
         engine: campaign.transport.engine,
-        senderSessionId: String(data.get('senderSessionId') ?? '').trim(),
+        senderSessionId,
         variableValues: {},
         reason: String(data.get('reason') ?? '').trim(),
         idempotencyKey: crypto.randomUUID()
@@ -355,6 +480,9 @@ function CampaignWorkspaceGeneration({ campaignId }: { campaignId: string }) {
 
       <CampaignDraftEditor campaign={campaign} onSaved={saved => { if (mounted.current) { setCampaign(saved); setReadinessGeneration(value => value + 1); } }} />
       <CampaignReadinessPanel key={readinessGeneration} campaign={campaign} />
+      {['AUDIENCE_VALIDATED','MESSAGE_REVIEW_PENDING','MESSAGE_APPROVED','COMMERCIAL_APPROVED','FINAL_APPROVAL_PENDING','SCHEDULED','DISPATCHING','PAUSED','COMPLETED','COMPLETED_WITH_EXCEPTIONS'].includes(campaign.status)
+        ? <MessageComposer campaign={campaign} onChanged={load} />
+        : null}
 
       <section className="grid grid-4" aria-label="Campaign metrics">
         <article className="card metric"><span className="muted">Campaign version</span><strong>{campaign.version}</strong></article>
@@ -389,26 +517,77 @@ function CampaignWorkspaceGeneration({ campaignId }: { campaignId: string }) {
       </section>
 
       <section className="grid grid-2">
-        <form className="card form-stack" onSubmit={createRoutingPlan}>
-          <h2>Create Day‑1 capacity hold</h2>
-          <p className="muted">Creates one server-issued HELD reservation for the campaign’s exact sender/gateway route. Use measured, approved values only.</p>
-          <label>Reserved messages per minute<input name="mpm" type="number" min="1" required /></label>
-          <label>Reserved hourly units<input name="hourly" type="number" min="1" required /></label>
-          <label>Reserved daily units<input name="daily" type="number" min="1" required /></label>
-          <label>Pacing policy version<input name="pacingPolicyVersion" required /></label>
-          <button className="primary" type="submit" disabled={!canApprove || Boolean(busy) || Boolean(heldReservation) || Boolean(activeReservation)}>Create governed hold</button>
-        </form>
-
         <form className="card form-stack" onSubmit={sendControlledTest}>
           <h2>Controlled test</h2>
-          <p className="muted">The server validates the approved test recipient and a live READY session on the exact campaign route.</p>
-          <label>Approved test-recipient ID<input name="testRecipientId" required /></label>
-          <label>READY sender-session ID<input name="senderSessionId" required /></label>
+          <p className="muted">Choose only from server-filtered approved recipients and READY sessions on this campaign’s exact sender/gateway/engine route. The server revalidates everything again when the test is scheduled and executed.</p>
+          <label>Approved test recipient
+            <select aria-label="Approved test recipient" name="testRecipientId" required disabled={!testOptions?.supported || testOptions.recipients.length === 0 || Boolean(busy)} defaultValue="">
+              <option value="" disabled>Select an approved masked recipient</option>
+              {(testOptions?.recipients ?? []).map((item) => <option key={item.id} value={item.id}>{item.label} · {item.maskedMsisdn}</option>)}
+            </select>
+          </label>
+          <label>Compatible READY sender session
+            <select aria-label="Compatible READY sender session" name="senderSessionId" required disabled={!testOptions?.supported || testOptions.sessions.length === 0 || Boolean(busy)} defaultValue="">
+              <option value="" disabled>Select a READY session on the exact route</option>
+              {(testOptions?.sessions ?? []).map((item) => <option key={item.id} value={item.id}>{item.profileDisplayName || 'Sender'} · {item.maskedMsisdn}</option>)}
+            </select>
+          </label>
           <label>Reason<textarea name="reason" minLength={8} rows={3} required /></label>
-          <button className="primary" type="submit" disabled={!canWrite || !campaign.messageVersionId || Boolean(busy)}>Send controlled test</button>
+          <button className="primary" type="submit" disabled={!canWrite || !campaign.messageVersionId || !testOptions?.supported || testOptions.recipients.length === 0 || testOptions.sessions.length === 0 || Boolean(busy)}>Send controlled test</button>
           {!campaign.messageVersionId ? <small>An approved campaign message version is required first.</small> : null}
+          {testOptions && !testOptions.supported ? <small>{testOptions.reason || 'Controlled testing is unavailable for this campaign route.'}</small> : null}
+          {testOptions?.supported && testOptions.recipients.length === 0 ? <small>No ACTIVE approved test recipient is currently available. Govern one in the sender console before testing.</small> : null}
+          {testOptions?.supported && testOptions.sessions.length === 0 ? <small>No READY sender session currently matches this campaign’s sender pool, gateway pool and engine.</small> : null}
+          {testOptions?.supported && (!testOptions.recipientInventoryComplete || !testOptions.sessionInventoryComplete) ? <small>The selector inventory reached its bounded scan limit. Only the returned governed options are selectable; ask a technical administrator if an expected option is absent.</small> : null}
         </form>
+
+        <article className="card form-stack">
+          <h2>Day‑1 capacity hold</h2>
+          <p className="muted">Capacity values are derived and revalidated by the server from the accepted exact-route test, current measured health, pacing policy, saved campaign window and existing reservations. Operators cannot enter or enlarge capacity values.</p>
+          {heldReservation || activeReservation ? (
+            <div className="alert alert-information">
+              <strong>{activeReservation ? 'ACTIVE capacity reservation' : 'HELD capacity reservation'}</strong>
+              <p>The authoritative reservation already exists for this campaign. Its evidence is listed below.</p>
+            </div>
+          ) : !acceptedExactTest ? (
+            <div className="empty-state">
+              <strong>Accepted exact-route test required</strong>
+              <p>Complete a controlled test on the current message and frozen route before capacity can be reserved.</p>
+            </div>
+          ) : !capacityProposal ? (
+            <div className="empty-state">
+              <strong>Server-derived hold is not currently available</strong>
+              <p>Reload readiness after current route, pacing and capacity evidence is available.</p>
+            </div>
+          ) : (
+            <>
+              <dl className="definition-list">
+                <div><dt>Exact route</dt><dd>{capacityProposal.provider} / {capacityProposal.engine}<small>{capacityProposal.senderPoolId} · {capacityProposal.gatewayPoolId}</small></dd></div>
+                <div><dt>Reservation window</dt><dd>{new Date(capacityProposal.reservationStart).toLocaleString()} → {new Date(capacityProposal.reservationEnd).toLocaleString()}</dd></div>
+                <div><dt>Audience basis</dt><dd>{capacityProposal.basisRecipientCount.toLocaleString()} recipients</dd></div>
+                <div><dt>Measured at</dt><dd>{new Date(capacityProposal.measurementAsOf).toLocaleString()}</dd></div>
+                <div><dt>Healthy authority</dt><dd>{capacityProposal.healthySessions} sessions · {capacityProposal.healthyNodes} nodes (minimum {capacityProposal.minimumHealthyNodes})</dd></div>
+                <div><dt>Available capacity</dt><dd>{capacityProposal.availableMessagesPerMinute.toLocaleString()} MPM · {capacityProposal.availableHourlyUnits.toLocaleString()} hourly · {capacityProposal.availableDailyUnits.toLocaleString()} daily</dd></div>
+                <div><dt>Required rate</dt><dd>{capacityProposal.requiredMessagesPerMinute.toFixed(2)} MPM · {capacityProposal.safetyMarginPercent}% safety margin</dd></div>
+                <div><dt>Derived hold</dt><dd><strong>{capacityProposal.reservedMessagesPerMinute.toLocaleString()} MPM · {capacityProposal.reservedHourlyUnits.toLocaleString()} hourly · {capacityProposal.reservedDailyUnits.toLocaleString()} daily</strong></dd></div>
+                <div><dt>Pacing policy</dt><dd>{capacityProposal.pacingPolicyId} / v{capacityProposal.pacingPolicyVersion}<small>{capacityProposal.pacingMessagesPerMinute} MPM · {capacityProposal.pacingHourlyAllowance.toLocaleString()} hourly · {capacityProposal.pacingDailyAllowance.toLocaleString()} daily</small></dd></div>
+                <div><dt>Evidence versions</dt><dd>{capacityProposal.routingPolicyVersion}<small>{capacityProposal.capacityEvidenceVersion}</small></dd></div>
+              </dl>
+              <form className="form-stack" onSubmit={confirmCapacityHold}>
+                <label>Capacity approval reason<textarea name="reason" minLength={8} maxLength={1000} rows={3} required placeholder="Explain why this measured capacity hold is approved." /></label>
+                <button className="primary" type="submit" disabled={!canApprove || Boolean(busy)}>Confirm governed hold</button>
+                <small>The server re-derives current measured and pacing evidence immediately before the hold, then atomically rechecks overlapping reservations and pool limits while persisting the HELD reservation.</small>
+              </form>
+            </>
+          )}
+        </article>
       </section>
+
+      <CommercialGovernance
+        campaign={campaign}
+        pilotEvidenceReady={Boolean(acceptedExactTest && (heldReservation || activeReservation))}
+        onChanged={load}
+      />
 
       <section className="card">
         <div className="section-heading">

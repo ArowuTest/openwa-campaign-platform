@@ -12,6 +12,12 @@ test('availableNavigation exposes only routes backed by the operator permissions
   ]);
 });
 
+test('audit navigation requires audit.read and is available to compliance reviewers', () => {
+  assert.equal(availableNavigation(['audit.read']).some((item) => item.href === '/audit'), true);
+  assert.equal(availableNavigation(['operations.read']).some((item) => item.href === '/audit'), false);
+  assert.equal(permissionForPath('/audit'), 'audit.read');
+});
+
 test('wildcard receives the complete internal navigation', () => {
   const items = availableNavigation(['*']);
   assert.ok(items.length >= 9);

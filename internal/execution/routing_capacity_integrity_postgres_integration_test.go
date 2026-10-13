@@ -68,7 +68,7 @@ func TestPostgreSQLRoutingCreateRejectsMismatchedReservationAuthority(t *testing
 		ID: planID, CampaignID: campaignID, DistributionMode: DistributionWeighted,
 		RoutingPolicyVersion: "rp-capacity-integrity", CapacityEvidenceVersion: "cap-capacity-integrity",
 		PacingPolicyVersion: "pace-capacity-integrity", FallbackMode: "NONE", ApprovedAt: now,
-		ApprovedBy: actorID, IdempotencyKey: "capacity-integrity-" + campaignID,
+		ApprovedBy: actorID, ApprovedCampaignVersion: 1, IdempotencyKey: "capacity-integrity-" + campaignID,
 		RequestHash: "capacity-integrity-hash-" + campaignID,
 	}
 	plan.Routes = []PoolRoute{{
@@ -83,6 +83,26 @@ func TestPostgreSQLRoutingCreateRejectsMismatchedReservationAuthority(t *testing
 		ReservedMessagesPerMinute: 31, ReservedHourlyUnits: 100, ReservedDailyUnits: 500,
 		Status: "HELD", FencingVersion: 1, CreatedAt: now, UpdatedAt: now,
 	}}
+
+	// The routing service freezes campaign version 1 before entering the store.
+	// Simulate a concurrent campaign mutation that commits before the store's
+	// SELECT ... FOR UPDATE. The transaction boundary must reject the stale
+	// approval before any routing plan or reservation authority is persisted.
+	must(`UPDATE campaigns SET version=2 WHERE id=$1::uuid AND version=1`, campaignID)
+	if _, err := (&PostgreSQLRoutingPlanStore{DB: db}).Create(ctx, plan, reservations); !errors.Is(err, ErrRoutingPlanConflict) {
+		t.Fatalf("stale approved campaign version reached routing persistence: %v", err)
+	}
+	var stalePlans, staleReservations int
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM campaign_routing_plans WHERE id=$1::uuid`, planID).Scan(&stalePlans); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.QueryRowContext(ctx, `SELECT count(*) FROM campaign_pool_capacity_reservations WHERE campaign_id=$1::uuid`, campaignID).Scan(&staleReservations); err != nil {
+		t.Fatal(err)
+	}
+	if stalePlans != 0 || staleReservations != 0 {
+		t.Fatalf("stale campaign approval persisted authority plans=%d reservations=%d", stalePlans, staleReservations)
+	}
+	must(`UPDATE campaigns SET version=1 WHERE id=$1::uuid AND version=2`, campaignID)
 
 	_, err = (&PostgreSQLRoutingPlanStore{DB: db}).Create(ctx, plan, reservations)
 	if !errors.Is(err, ErrRoutingPlanInvalid) {

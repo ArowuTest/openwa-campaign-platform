@@ -157,7 +157,7 @@ func (s *Server) listExports(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	principal, _ := identity.PrincipalFromContext(r.Context())
-	query := operations.ExportQuery{Status: operations.ExportStatus(strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("status")))), Kind: strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("kind")))}
+	query := operations.ExportQuery{Status: operations.ExportStatus(strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("status")))), Kind: strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("kind"))), ObjectID: strings.TrimSpace(r.URL.Query().Get("objectId"))}
 	var err error
 	query.Limit, err = optionalPositiveIntQuery(r, "limit", 500)
 	if err != nil {
@@ -393,7 +393,7 @@ func (s *Server) searchAuditEvents(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	principal, _ := identity.PrincipalFromContext(r.Context())
-	page, err := s.deps.Operations.SearchAuditWithAccess(r.Context(), query, principal.User.ID, r.Header.Get("X-Request-ID"))
+	page, err := s.deps.Operations.SearchAuditWithAccess(r.Context(), query, principal.User.ID, httpx.RequestID(r.Context()))
 	if err != nil {
 		s.internalError(w, r, err)
 		return
@@ -403,6 +403,74 @@ func (s *Server) searchAuditEvents(w http.ResponseWriter, r *http.Request) {
 		nextCursor = strconv.FormatUint(page.NextSequence, 10)
 	}
 	httpx.WriteList(w, http.StatusOK, page.Items, len(page.Items), nextCursor)
+}
+
+type authenticationEventResponse struct {
+	Source        string                           `json:"source"`
+	ID            string                           `json:"id"`
+	ActorID       string                           `json:"actorId,omitempty"`
+	EventType     identity.AuthenticationEventType `json:"eventType"`
+	CorrelationID string                           `json:"correlationId"`
+	OccurredAt    time.Time                        `json:"occurredAt"`
+}
+
+func (s *Server) searchAuthenticationEvents(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Operations == nil {
+		httpx.WriteError(w, r, http.StatusServiceUnavailable, "OPERATIONS_UNAVAILABLE", "Authentication event search is unavailable.", nil)
+		return
+	}
+	query := identity.AuthenticationEventQuery{
+		UserID:        strings.TrimSpace(r.URL.Query().Get("userId")),
+		EventType:     identity.AuthenticationEventType(strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("eventType")))),
+		CorrelationID: strings.TrimSpace(r.URL.Query().Get("correlationId")),
+	}
+	cursorRaw := strings.TrimSpace(r.URL.Query().Get("cursor"))
+	if cursorRaw != "" {
+		cursor, err := identity.DecodeAuthenticationEventCursor(cursorRaw)
+		if err != nil {
+			httpx.WriteError(w, r, http.StatusBadRequest, "AUTHENTICATION_EVENT_CURSOR_INVALID", "The authentication-event cursor is invalid.", nil)
+			return
+		}
+		query.After = &cursor
+	}
+	limit, err := optionalPositiveIntQuery(r, "limit", 500)
+	if err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "INVALID_PAGE_LIMIT", "The page limit must be between 1 and 500.", nil)
+		return
+	}
+	query.Limit = limit
+	for key, target := range map[string]**time.Time{"from": &query.From, "to": &query.To} {
+		if raw := strings.TrimSpace(r.URL.Query().Get(key)); raw != "" {
+			parsed, parseErr := time.Parse(time.RFC3339, raw)
+			if parseErr != nil {
+				httpx.WriteError(w, r, http.StatusBadRequest, "AUTHENTICATION_EVENT_DATE_INVALID", "Authentication-event date filters must use RFC3339.", map[string]any{"field": key})
+				return
+			}
+			*target = &parsed
+		}
+	}
+	if err := identity.ValidateAuthenticationEventQuery(query); err != nil {
+		httpx.WriteError(w, r, http.StatusBadRequest, "AUTHENTICATION_EVENT_QUERY_INVALID", "The authentication-event query is invalid.", nil)
+		return
+	}
+	principal, _ := identity.PrincipalFromContext(r.Context())
+	page, err := s.deps.Operations.SearchAuthenticationEventsWithAccess(r.Context(), query, principal.User.ID, httpx.RequestID(r.Context()))
+	if err != nil {
+		s.internalError(w, r, err)
+		return
+	}
+	items := make([]authenticationEventResponse, 0, len(page.Items))
+	for _, event := range page.Items {
+		items = append(items, authenticationEventResponse{
+			Source:        "authentication",
+			ID:            event.ID,
+			ActorID:       event.UserID,
+			EventType:     event.Type,
+			CorrelationID: event.CorrelationID,
+			OccurredAt:    event.OccurredAt,
+		})
+	}
+	httpx.WriteList(w, http.StatusOK, items, len(items), page.NextCursor)
 }
 
 func (s *Server) listDeliveryExceptions(w http.ResponseWriter, r *http.Request) {

@@ -159,6 +159,9 @@ func (s *AdministrationService) Update(ctx context.Context, accountID string, in
 	if current.Status != StatusInvited && current.Status != StatusActive && current.Status != StatusSuspended && current.Status != StatusDisabled {
 		return Account{}, errors.New("unsupported account status")
 	}
+	if current.Status == StatusActive && !input.MFARequired {
+		return Account{}, ErrMFARequired
+	}
 	current.DisplayName = display
 	current.RoleCodes = roles
 	current.MFARequired = input.MFARequired

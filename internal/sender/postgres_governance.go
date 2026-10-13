@@ -371,6 +371,24 @@ SELECT `+governedSessionColumns+` FROM updated`, id, e, status, "STATUS_"+string
 	}
 	return value, err
 }
+
+func (p *PostgreSQLGovernanceStore) RecordSessionAction(ctx context.Context, id string, expected int64, action, actor, reason string) (GovernedSession, error) {
+	row := p.DB.QueryRowContext(ctx, `WITH updated AS (
+UPDATE sender_sessions
+SET governance_version=governance_version+1,updated_at=now()
+WHERE id=$1::uuid AND governance_version=$2
+RETURNING *
+), audit AS (
+INSERT INTO sender_governance_events(object_type,object_id,action,actor_id,reason,object_version)
+SELECT 'SESSION',id,$3,$4::uuid,$5,governance_version FROM updated
+)
+SELECT `+governedSessionColumns+` FROM updated`, id, expected, action, actor, reason)
+	value, err := scanGovernedSession(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return GovernedSession{}, ErrSenderConflict
+	}
+	return value, err
+}
 func (p *PostgreSQLGovernanceStore) HeartbeatSession(ctx context.Context, id string, e int64, v GovernedSession, now time.Time) (GovernedSession, error) {
 	return heartbeatPostgreSQLSession(ctx, p.DB, id, e, v, now)
 }

@@ -154,3 +154,91 @@ func TestPostgreSQLConsentReviewLifecyclePersistsGovernanceEvidence(t *testing.T
 		t.Fatalf("unexpected replacement review events=%q", replacementEvents)
 	}
 }
+
+func TestPostgreSQLConsentDraftRevisionPersistsSupersessionLineage(t *testing.T) {
+	dsn := os.Getenv("POSTGRES_CONSENT_REVIEW_DATABASE_URL")
+	if dsn == "" {
+		t.Skip("POSTGRES_CONSENT_REVIEW_DATABASE_URL is not set")
+	}
+	db, err := sql.Open("postgres", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err = db.PingContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	var maker, orgID string
+	if err = db.QueryRowContext(ctx, `SELECT gen_random_uuid()::text,gen_random_uuid()::text`).Scan(&maker, &orgID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.ExecContext(ctx, `INSERT INTO internal_users(id,email,display_name,status,mfa_required) VALUES($1::uuid,$2,'Draft revision maker','DISABLED',false)`, maker, "crv-draft-"+maker+"@internal.invalid"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.ExecContext(ctx, `INSERT INTO organisations(id,legal_name,status) VALUES($1::uuid,$2,'ACTIVE')`, orgID, "Draft Revision Organisation "+orgID); err != nil {
+		t.Fatal(err)
+	}
+
+	service := consent.NewService(&ConsentRepository{DB: db}).WithOrganisationReader(&OrganisationRepository{DB: db})
+	input := consent.CreateInput{
+		OrganisationID: orgID, Scope: consent.ReviewScopeSource, SourceSystem: "draft-source-" + orgID,
+		Name: "Draft consent evidence", PurposeDescription: "Governed promotional messaging", PurposeCode: "PROMOTIONAL_MESSAGING",
+		Channel: "WHATSAPP", ConsentSource: "offline-vetted-form", CollectionMethod: "WEB_FORM",
+		ControllerRole: "CONTROLLER", WordingVersion: "v1", ExactConsentWording: "I agree to receive WhatsApp messages.",
+		PrivacyNoticeVersion:       "privacy-v1",
+		ExternalEvidenceReferences: []consent.ExternalEvidenceReference{{Reference: "draft/" + orgID, SHA256Checksum: strings.Repeat("b", 64)}},
+		PrivacyNoticeReviewed:      true, OptOutProcessReviewed: true, SampleRecordsReviewed: true,
+		SampleReviewNotes: "Reviewed minimised sample records.", PermittedCountries: []string{"NG"},
+		PermittedMessageCategory: "PROMOTION", CreatedBy: maker,
+	}
+	draft, err := service.Create(ctx, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacementID := ""
+	defer func() {
+		cleanup, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cleanupCancel()
+		if replacementID != "" {
+			_, _ = db.ExecContext(cleanup, `DELETE FROM consent_review_events WHERE consent_review_id=$1::uuid`, replacementID)
+			_, _ = db.ExecContext(cleanup, `DELETE FROM consent_review_evidence WHERE consent_review_id=$1::uuid`, replacementID)
+			_, _ = db.ExecContext(cleanup, `DELETE FROM consent_reviews WHERE id=$1::uuid`, replacementID)
+		}
+		_, _ = db.ExecContext(cleanup, `DELETE FROM consent_review_events WHERE consent_review_id=$1::uuid`, draft.ID)
+		_, _ = db.ExecContext(cleanup, `DELETE FROM consent_review_evidence WHERE consent_review_id=$1::uuid`, draft.ID)
+		_, _ = db.ExecContext(cleanup, `DELETE FROM consent_reviews WHERE id=$1::uuid`, draft.ID)
+		_, _ = db.ExecContext(cleanup, `DELETE FROM organisations WHERE id=$1::uuid`, orgID)
+		_, _ = db.ExecContext(cleanup, `DELETE FROM internal_users WHERE id=$1::uuid`, maker)
+	}()
+
+	revision := input
+	revision.Name = "Corrected draft consent evidence"
+	revision.WordingVersion = "v2"
+	revision.RevisionReason = "Correct incomplete draft evidence"
+	replacement, err := service.CreateRevision(ctx, draft.ID, draft.Version, revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacementID = replacement.ID
+
+	previous, err := service.Get(ctx, draft.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if previous.Status != consent.StatusSuperseded || previous.SupersededByID != replacement.ID || replacement.Status != consent.StatusDraft || replacement.ParentReviewID != previous.ID {
+		t.Fatalf("draft revision lineage incomplete: previous=%+v replacement=%+v", previous, replacement)
+	}
+	var oldEvents, replacementEvents string
+	if err = db.QueryRowContext(ctx, `SELECT string_agg(event_type,',' ORDER BY review_version) FROM consent_review_events WHERE consent_review_id=$1::uuid`, previous.ID).Scan(&oldEvents); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.QueryRowContext(ctx, `SELECT string_agg(event_type,',' ORDER BY review_version) FROM consent_review_events WHERE consent_review_id=$1::uuid`, replacement.ID).Scan(&replacementEvents); err != nil {
+		t.Fatal(err)
+	}
+	if oldEvents != "CREATED,SUPERSEDED" || replacementEvents != "CREATED" {
+		t.Fatalf("unexpected draft revision events old=%q replacement=%q", oldEvents, replacementEvents)
+	}
+}

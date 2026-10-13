@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"campaign-platform/internal/audit"
+	"campaign-platform/internal/identity"
+	sharedid "campaign-platform/internal/shared/id"
 	"campaign-platform/internal/storage"
 )
 
@@ -34,15 +36,40 @@ type PrivacyPackageResolver interface {
 	ResolvePrivacyPackage(json.RawMessage) (json.RawMessage, error)
 }
 
+// AuthenticationEventExportRow is the deliberately redacted representation of
+// an authentication event that may leave the controlled export boundary.
+type AuthenticationEventExportRow struct {
+	Source        string    `json:"source"`
+	ID            string    `json:"id"`
+	ActorID       string    `json:"actorId,omitempty"`
+	EventType     string    `json:"eventType"`
+	CorrelationID string    `json:"correlationId"`
+	OccurredAt    time.Time `json:"occurredAt"`
+}
+
+// AuditExportPayload keeps the hash-chained business ledger and the separate
+// authentication stream distinguishable in every export format.
+type AuditExportPayload struct {
+	BusinessEvents            []audit.Event                  `json:"businessEvents"`
+	AuthenticationEvents      []AuthenticationEventExportRow `json:"authenticationEvents"`
+	BusinessHeadSequence      uint64                         `json:"businessHeadSequence,omitempty"`
+	BusinessHeadHash          string                         `json:"businessHeadHash,omitempty"`
+	AuthenticationEventAsOf   *time.Time                     `json:"authenticationEventAsOf,omitempty"`
+	AuthenticationEventHeadID string                         `json:"authenticationEventHeadId,omitempty"`
+}
+
+const maxAuthenticationExportRows = identity.MaxAuthenticationEventSnapshotRows
+
 type ExportWorker struct {
-	Repository      ExportJobRepository
-	AuditRepository audit.Repository
-	PrivacyPackages PrivacyPackageResolver
-	Objects         storage.ObjectStore
-	WorkerID        string
-	LeaseDuration   time.Duration
-	ReadyTTL        time.Duration
-	Clock           func() time.Time
+	Repository           ExportJobRepository
+	AuditRepository      audit.Repository
+	AuthenticationEvents identity.AuthenticationEventQueryRepository
+	PrivacyPackages      PrivacyPackageResolver
+	Objects              storage.ObjectStore
+	WorkerID             string
+	LeaseDuration        time.Duration
+	ReadyTTL             time.Duration
+	Clock                func() time.Time
 }
 
 func (w *ExportWorker) now() time.Time {
@@ -145,11 +172,11 @@ func (w *ExportWorker) render(ctx context.Context, job ExportRequest) ([]byte, s
 			value = payload
 		}
 	case "AUDIT_LOG":
-		events, err := w.loadFrozenAudit(ctx, job)
+		payload, err := w.loadFrozenAudit(ctx, job)
 		if err != nil {
 			return nil, "", err
 		}
-		value = events
+		value = payload
 	default:
 		return nil, "", ErrInvalid
 	}
@@ -171,60 +198,137 @@ func (w *ExportWorker) render(ctx context.Context, job ExportRequest) ([]byte, s
 	}
 }
 
-func (w *ExportWorker) loadFrozenAudit(ctx context.Context, job ExportRequest) ([]audit.Event, error) {
+type auditExportCriteria struct {
+	ActorID        string     `json:"actorId"`
+	Action         string     `json:"action"`
+	ObjectType     string     `json:"objectType"`
+	ObjectID       string     `json:"objectId"`
+	OrganisationID string     `json:"organisationId"`
+	Outcome        string     `json:"outcome"`
+	Sensitivity    string     `json:"sensitivity"`
+	CorrelationID  string     `json:"correlationId"`
+	IPAddress      string     `json:"ipAddress"`
+	UserID         string     `json:"userId"`
+	EventType      string     `json:"eventType"`
+	From           *time.Time `json:"from"`
+	To             *time.Time `json:"to"`
+}
+
+func decodeAuditExportCriteria(raw json.RawMessage) (auditExportCriteria, error) {
+	criteria := auditExportCriteria{}
+	raw = bytes.TrimSpace(raw)
+	if len(raw) == 0 || bytes.Equal(raw, []byte("null")) {
+		return criteria, nil
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&criteria); err != nil {
+		return auditExportCriteria{}, fmt.Errorf("decode audit export criteria: %w", err)
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return auditExportCriteria{}, errors.New("decode audit export criteria: expected one JSON value")
+	}
+	criteria.ActorID = strings.TrimSpace(criteria.ActorID)
+	criteria.Action = strings.TrimSpace(criteria.Action)
+	criteria.ObjectType = strings.TrimSpace(criteria.ObjectType)
+	criteria.ObjectID = strings.TrimSpace(criteria.ObjectID)
+	criteria.OrganisationID = strings.TrimSpace(criteria.OrganisationID)
+	criteria.Outcome = strings.TrimSpace(criteria.Outcome)
+	criteria.Sensitivity = strings.TrimSpace(criteria.Sensitivity)
+	criteria.CorrelationID = strings.TrimSpace(criteria.CorrelationID)
+	criteria.IPAddress = strings.TrimSpace(criteria.IPAddress)
+	criteria.UserID = strings.TrimSpace(criteria.UserID)
+	criteria.EventType = strings.ToUpper(strings.TrimSpace(criteria.EventType))
+	return criteria, nil
+}
+
+func validateAuditExportCriteria(criteria auditExportCriteria) error {
+	return identity.ValidateAuthenticationEventQuery(identity.AuthenticationEventQuery{
+		UserID: criteria.UserID, EventType: identity.AuthenticationEventType(criteria.EventType),
+		CorrelationID: criteria.CorrelationID, From: criteria.From, To: criteria.To, Limit: 1,
+	})
+}
+
+func authenticationExportQuery(criteria auditExportCriteria) (identity.AuthenticationEventQuery, bool, error) {
+	if err := validateAuditExportCriteria(criteria); err != nil {
+		return identity.AuthenticationEventQuery{}, false, err
+	}
+	query := identity.AuthenticationEventQuery{
+		UserID: criteria.UserID, EventType: identity.AuthenticationEventType(criteria.EventType),
+		CorrelationID: criteria.CorrelationID, From: criteria.From, To: criteria.To, Limit: 500,
+	}
+	// Business-ledger-only filters must not silently broaden the authentication
+	// stream. A UUID actorId is a safe shorthand for userId only when it is the
+	// sole non-temporal filter; otherwise an explicit authentication scope is
+	// required for authentication rows.
+	authScoped := query.UserID != "" || query.EventType != "" || query.CorrelationID != ""
+	businessFilters := criteria.Action != "" || criteria.ObjectType != "" || criteria.ObjectID != "" ||
+		criteria.OrganisationID != "" || criteria.Outcome != "" || criteria.Sensitivity != "" ||
+		criteria.IPAddress != ""
+	if !authScoped && criteria.ActorID != "" && !businessFilters && sharedid.IsUUID(criteria.ActorID) {
+		query.UserID = criteria.ActorID
+		authScoped = true
+	}
+	if !authScoped && (criteria.ActorID != "" || businessFilters) {
+		return identity.AuthenticationEventQuery{}, false, nil
+	}
+	return query, true, nil
+}
+
+func (w *ExportWorker) loadFrozenAudit(ctx context.Context, job ExportRequest) (AuditExportPayload, error) {
 	if w.AuditRepository == nil {
-		return nil, errors.New("audit repository unavailable")
+		return AuditExportPayload{}, errors.New("audit repository unavailable")
 	}
-	if job.AuditHeadSequence == 0 {
-		return []audit.Event{}, nil
-	}
-	head, err := w.AuditRepository.List(ctx, job.AuditHeadSequence-1, 1)
+	criteria, err := decodeAuditExportCriteria(job.Criteria)
 	if err != nil {
-		return nil, err
+		return AuditExportPayload{}, err
 	}
-	if len(head) != 1 || head[0].Sequence != job.AuditHeadSequence || head[0].Hash != job.AuditHeadHash {
-		return nil, errors.New("approved audit chain head no longer verifies")
-	}
-	query := audit.Query{Limit: 1000}
-	if len(job.Criteria) > 0 {
-		var criteria struct {
-			ActorID        string     `json:"actorId"`
-			Action         string     `json:"action"`
-			ObjectType     string     `json:"objectType"`
-			ObjectID       string     `json:"objectId"`
-			OrganisationID string     `json:"organisationId"`
-			Outcome        string     `json:"outcome"`
-			Sensitivity    string     `json:"sensitivity"`
-			CorrelationID  string     `json:"correlationId"`
-			IPAddress      string     `json:"ipAddress"`
-			From           *time.Time `json:"from"`
-			To             *time.Time `json:"to"`
-		}
-		if err := json.Unmarshal(job.Criteria, &criteria); err != nil {
-			return nil, fmt.Errorf("decode audit export criteria: %w", err)
-		}
-		query.ActorID, query.Action, query.ObjectType, query.ObjectID = criteria.ActorID, criteria.Action, criteria.ObjectType, criteria.ObjectID
-		query.OrganisationID, query.Outcome, query.Sensitivity = criteria.OrganisationID, criteria.Outcome, criteria.Sensitivity
-		query.CorrelationID, query.IPAddress, query.From, query.To = criteria.CorrelationID, criteria.IPAddress, criteria.From, criteria.To
+	query := audit.Query{
+		ActorID: criteria.ActorID, Action: criteria.Action, ObjectType: criteria.ObjectType, ObjectID: criteria.ObjectID,
+		OrganisationID: criteria.OrganisationID, Outcome: criteria.Outcome, Sensitivity: criteria.Sensitivity,
+		CorrelationID: criteria.CorrelationID, IPAddress: criteria.IPAddress, From: criteria.From, To: criteria.To, Limit: 1000,
 	}
 	items := make([]audit.Event, 0, 1000)
-	for {
-		page, err := w.AuditRepository.Search(ctx, query)
-		if err != nil {
-			return nil, err
+	if job.AuditHeadSequence > 0 {
+		head, headErr := w.AuditRepository.List(ctx, job.AuditHeadSequence-1, 1)
+		if headErr != nil {
+			return AuditExportPayload{}, headErr
 		}
-		for _, event := range page.Items {
-			if event.Sequence > job.AuditHeadSequence {
-				return items, nil
+		if len(head) != 1 || head[0].Sequence != job.AuditHeadSequence || head[0].Hash != job.AuditHeadHash {
+			return AuditExportPayload{}, errors.New("approved audit chain head no longer verifies")
+		}
+		for {
+			page, pageErr := w.AuditRepository.Search(ctx, query)
+			if pageErr != nil {
+				return AuditExportPayload{}, pageErr
 			}
-			items = append(items, event)
+			stop := false
+			for _, event := range page.Items {
+				if event.Sequence > job.AuditHeadSequence {
+					stop = true
+					break
+				}
+				items = append(items, event)
+			}
+			if stop || page.NextSequence == 0 || page.NextSequence >= job.AuditHeadSequence {
+				break
+			}
+			query.AfterSequence = page.NextSequence
 		}
-		if page.NextSequence == 0 || page.NextSequence >= job.AuditHeadSequence {
-			break
-		}
-		query.AfterSequence = page.NextSequence
 	}
-	return items, nil
+	authentication, err := w.loadFrozenAuthenticationEvents(ctx, job, criteria)
+	if err != nil {
+		return AuditExportPayload{}, err
+	}
+	return AuditExportPayload{
+		BusinessEvents: items, AuthenticationEvents: authentication,
+		BusinessHeadSequence: job.AuditHeadSequence, BusinessHeadHash: job.AuditHeadHash,
+		AuthenticationEventAsOf: job.AuthenticationEventAsOf, AuthenticationEventHeadID: job.AuthenticationEventHeadID,
+	}, nil
+}
+
+func (w *ExportWorker) loadFrozenAuthenticationEvents(_ context.Context, job ExportRequest, criteria auditExportCriteria) ([]AuthenticationEventExportRow, error) {
+	return loadAuthenticationEventSnapshot(job, criteria)
 }
 
 func renderCSV(value any) ([]byte, error) {
@@ -317,6 +421,25 @@ func renderCSV(value any) ([]byte, error) {
 		}
 		for _, warning := range v.Warnings {
 			if err := write("warning", warning, "1"); err != nil {
+				return nil, err
+			}
+		}
+	case AuditExportPayload:
+		businessHeadSequence := fmt.Sprint(v.BusinessHeadSequence)
+		authenticationAsOf := ""
+		if v.AuthenticationEventAsOf != nil {
+			authenticationAsOf = v.AuthenticationEventAsOf.UTC().Format(time.RFC3339Nano)
+		}
+		if err := write("source", "sequence", "occurred_at", "actor_type", "actor_id", "action", "object_type", "object_id", "reason", "correlation_id", "hash", "event_id", "event_type", "business_head_sequence", "business_head_hash", "authentication_event_as_of", "authentication_event_head_id"); err != nil {
+			return nil, err
+		}
+		for _, event := range v.BusinessEvents {
+			if err := write("business", fmt.Sprint(event.Sequence), event.OccurredAt.Format(time.RFC3339Nano), event.ActorType, event.ActorID, event.Action, event.ObjectType, event.ObjectID, event.Reason, event.CorrelationID, event.Hash, "", "", businessHeadSequence, v.BusinessHeadHash, authenticationAsOf, v.AuthenticationEventHeadID); err != nil {
+				return nil, err
+			}
+		}
+		for _, event := range v.AuthenticationEvents {
+			if err := write(event.Source, "", event.OccurredAt.Format(time.RFC3339Nano), "", event.ActorID, "", "", "", "", event.CorrelationID, "", event.ID, event.EventType, businessHeadSequence, v.BusinessHeadHash, authenticationAsOf, v.AuthenticationEventHeadID); err != nil {
 				return nil, err
 			}
 		}

@@ -39,9 +39,10 @@ const (
 )
 
 var (
-	ErrPacingInvalid  = errors.New("sender pacing policy is invalid")
-	ErrPacingNotFound = errors.New("sender pacing policy not found")
-	ErrPacingConflict = errors.New("sender pacing policy version conflict")
+	ErrPacingInvalid     = errors.New("sender pacing policy is invalid")
+	ErrPacingNotFound    = errors.New("sender pacing policy not found")
+	ErrPacingConflict    = errors.New("sender pacing policy version conflict")
+	ErrPacingWindowDrift = errors.New("resolved sender pacing authority changes within requested window")
 )
 
 type MessageTypeOverride struct {
@@ -264,6 +265,74 @@ func (s *PacingAdministration) Resolve(ctx context.Context, scopes []PacingScope
 		return ResolvedPacing{}, ErrPacingNotFound
 	}
 	return ResolvedPacing{Policy: *effective, SourcePolicyIDs: ids, ResolvedAt: at.UTC()}, nil
+}
+
+func pacingScopeKey(scope PacingScope, id string) string {
+	return string(scope) + "|" + strings.TrimSpace(id)
+}
+
+// ResolveStableWindow proves that one effective pacing authority governs the
+// entire half-open interval [start,end). Checking only the two endpoints is not
+// sufficient because a more-specific policy may be active only in the middle.
+func (s *PacingAdministration) ResolveStableWindow(ctx context.Context, scopes []PacingScopeRef, start, end time.Time) (ResolvedPacing, error) {
+	if s == nil || s.Store == nil {
+		return ResolvedPacing{}, ErrPacingInvalid
+	}
+	start = start.UTC()
+	end = end.UTC()
+	if start.IsZero() || end.IsZero() || !end.After(start) {
+		return ResolvedPacing{}, ErrPacingInvalid
+	}
+	baseline, err := s.Resolve(ctx, scopes, start)
+	if err != nil {
+		return ResolvedPacing{}, err
+	}
+	scopeSet := make(map[string]struct{}, len(scopes))
+	for _, scope := range scopes {
+		scopeSet[pacingScopeKey(scope.Scope, scope.ID)] = struct{}{}
+	}
+	policies, err := s.Store.List(ctx)
+	if err != nil {
+		return ResolvedPacing{}, err
+	}
+	boundarySet := map[int64]time.Time{}
+	for _, policy := range policies {
+		if policy.Status != PacingActive {
+			continue
+		}
+		if _, ok := scopeSet[pacingScopeKey(policy.Scope, policy.ScopeID)]; !ok {
+			continue
+		}
+		if policy.EffectiveFrom.After(start) && policy.EffectiveFrom.Before(end) {
+			boundarySet[policy.EffectiveFrom.UnixNano()] = policy.EffectiveFrom.UTC()
+		}
+		if policy.EffectiveTo != nil {
+			boundary := policy.EffectiveTo.UTC()
+			if boundary.After(start) && boundary.Before(end) {
+				boundarySet[boundary.UnixNano()] = boundary
+			}
+		}
+	}
+	boundaries := make([]time.Time, 0, len(boundarySet)+1)
+	for _, boundary := range boundarySet {
+		boundaries = append(boundaries, boundary)
+	}
+	endProbe := end.Add(-time.Nanosecond)
+	if endProbe.Before(start) {
+		endProbe = start
+	}
+	boundaries = append(boundaries, endProbe)
+	sort.Slice(boundaries, func(i, j int) bool { return boundaries[i].Before(boundaries[j]) })
+	for _, boundary := range boundaries {
+		resolved, resolveErr := s.Resolve(ctx, scopes, boundary)
+		if resolveErr != nil {
+			return ResolvedPacing{}, ErrPacingWindowDrift
+		}
+		if resolved.Policy.ID != baseline.Policy.ID || resolved.Policy.Version != baseline.Policy.Version {
+			return ResolvedPacing{}, ErrPacingWindowDrift
+		}
+	}
+	return baseline, nil
 }
 
 type MemoryPacingStore struct {

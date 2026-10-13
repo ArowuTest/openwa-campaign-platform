@@ -304,7 +304,7 @@ func (s *Service) SaveDraft(ctx context.Context, identifier string, input DraftS
 	for _, poolID := range []string{current.Transport.SenderPoolID, input.Transport.SenderPoolID} {
 		poolID = id.CanonicalUUID(poolID)
 		pool, err := s.draftPools.GetPool(ctx, poolID)
-		if err != nil || pool.ID != poolID || pool.Status != "ACTIVE" {
+		if err != nil || pool.ID != poolID || pool.Status != "ACTIVE" || (pool.OrganisationID != "" && pool.OrganisationID != current.OrganisationID) {
 			return Campaign{}, draftInvalid("SENDER_POOL")
 		}
 	}

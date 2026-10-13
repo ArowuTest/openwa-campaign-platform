@@ -52,6 +52,8 @@ type RoutingPlan struct {
 	FallbackMode            string           `json:"fallbackMode"`
 	ApprovedAt              time.Time        `json:"approvedAt"`
 	ApprovedBy              string           `json:"approvedBy"`
+	ApprovalReason          string           `json:"approvalReason,omitempty"`
+	ApprovedCampaignVersion int64            `json:"approvedCampaignVersion,omitempty"`
 	IdempotencyKey          string           `json:"idempotencyKey"`
 	RequestHash             string           `json:"-"`
 }
@@ -62,6 +64,7 @@ func (p *RoutingPlan) Validate(maximumRecipients int64) error {
 	p.CapacityEvidenceVersion = strings.TrimSpace(p.CapacityEvidenceVersion)
 	p.PacingPolicyVersion = strings.TrimSpace(p.PacingPolicyVersion)
 	p.ApprovedBy = strings.TrimSpace(p.ApprovedBy)
+	p.ApprovalReason = strings.TrimSpace(p.ApprovalReason)
 	p.IdempotencyKey = strings.TrimSpace(p.IdempotencyKey)
 	if p.DistributionMode == "" {
 		p.DistributionMode = DistributionWeighted
@@ -69,7 +72,10 @@ func (p *RoutingPlan) Validate(maximumRecipients int64) error {
 	if p.DistributionMode != DistributionAuto && p.DistributionMode != DistributionWeighted {
 		return ErrRoutingPlanInvalid
 	}
-	if p.CampaignID == "" || p.RoutingPolicyVersion == "" || p.CapacityEvidenceVersion == "" || p.PacingPolicyVersion == "" || p.ApprovedBy == "" || p.IdempotencyKey == "" || len(p.IdempotencyKey) > 200 || p.FallbackMode != "NONE" || len(p.Routes) == 0 || maximumRecipients < 1 {
+	if p.CampaignID == "" || p.RoutingPolicyVersion == "" || p.CapacityEvidenceVersion == "" || p.PacingPolicyVersion == "" || p.ApprovedBy == "" || len(p.ApprovalReason) > 1000 || p.IdempotencyKey == "" || len(p.IdempotencyKey) > 200 || p.FallbackMode != "NONE" || len(p.Routes) == 0 || maximumRecipients < 1 {
+		return ErrRoutingPlanInvalid
+	}
+	if p.ApprovalReason != "" && (len(p.ApprovalReason) < 8 || p.ApprovedCampaignVersion < 1) {
 		return ErrRoutingPlanInvalid
 	}
 	seen := map[string]struct{}{}
@@ -138,7 +144,9 @@ func (p RoutingPlan) computeRequestHash() (string, error) {
 		PacingPolicyVersion     string           `json:"pacingPolicyVersion"`
 		FallbackMode            string           `json:"fallbackMode"`
 		ApprovedBy              string           `json:"approvedBy"`
-	}{CampaignID: p.CampaignID, Routes: routes, DistributionMode: p.DistributionMode, RoutingPolicyVersion: p.RoutingPolicyVersion, CapacityEvidenceVersion: p.CapacityEvidenceVersion, PacingPolicyVersion: p.PacingPolicyVersion, FallbackMode: p.FallbackMode, ApprovedBy: p.ApprovedBy}
+		ApprovalReason          string           `json:"approvalReason,omitempty"`
+		ApprovedCampaignVersion int64            `json:"approvedCampaignVersion,omitempty"`
+	}{CampaignID: p.CampaignID, Routes: routes, DistributionMode: p.DistributionMode, RoutingPolicyVersion: p.RoutingPolicyVersion, CapacityEvidenceVersion: p.CapacityEvidenceVersion, PacingPolicyVersion: p.PacingPolicyVersion, FallbackMode: p.FallbackMode, ApprovedBy: p.ApprovedBy, ApprovalReason: p.ApprovalReason, ApprovedCampaignVersion: p.ApprovedCampaignVersion}
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return "", err
@@ -346,6 +354,35 @@ func governedCompletionDuration(recipients int64, messagesPerMinute int, hourlyA
 		minuteBound = dayBound
 	}
 	return minuteBound
+}
+
+// MinimumDailyReservationForWindow returns the smallest daily reservation that,
+// together with the already-governed per-minute and hourly limits, can complete
+// the full one-message-per-recipient obligation inside the saved campaign
+// window. The completion model is deliberately conservative: allowance windows
+// are treated as starting at campaign start, while production UTC calendar
+// resets can only make additional allowance available earlier.
+func MinimumDailyReservationForWindow(recipients int64, messagesPerMinute int, hourlyAllowance int64, window time.Duration) (int64, error) {
+	if recipients <= 0 || messagesPerMinute <= 0 || hourlyAllowance <= 0 || window <= 0 {
+		return 0, ErrRoutingPlanInvalid
+	}
+	low := hourlyAllowance
+	high := recipients
+	if high < low {
+		high = low
+	}
+	if governedCompletionDuration(recipients, messagesPerMinute, hourlyAllowance, high) > window {
+		return 0, ErrRoutingPlanInvalid
+	}
+	for low < high {
+		mid := low + (high-low)/2
+		if governedCompletionDuration(recipients, messagesPerMinute, hourlyAllowance, mid) <= window {
+			high = mid
+		} else {
+			low = mid + 1
+		}
+	}
+	return low, nil
 }
 
 func durationForUnits(units, rate int64, interval time.Duration) time.Duration {

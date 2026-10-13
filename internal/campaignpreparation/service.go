@@ -394,7 +394,7 @@ func (s *Service) transportCheck(ctx context.Context, c campaign.Campaign, p pro
 		out.fail("BLOCKED", "TRANSPORT_SOURCE_RETIRED", "A saved route source is no longer active.")
 		return out
 	}
-	if p.ID != t.ProviderDefinitionID || p.Version != t.ProviderDefinitionVersion || p.Provider != string(t.Provider) || p.Channel != provider.ChannelWhatsApp || p.Engine != string(t.Engine) || p.AdapterVersion != t.AdapterVersion || g.ID != t.GatewayPoolID || g.Version != t.GatewayPoolVersion || string(g.Provider) != string(t.Provider) || string(g.Engine) != string(t.Engine) || g.AdapterVersion != t.AdapterVersion || pool.ID != t.SenderPoolID {
+	if p.ID != t.ProviderDefinitionID || p.Version != t.ProviderDefinitionVersion || p.Provider != string(t.Provider) || p.Channel != provider.ChannelWhatsApp || p.Engine != string(t.Engine) || p.AdapterVersion != t.AdapterVersion || g.ID != t.GatewayPoolID || g.Version != t.GatewayPoolVersion || string(g.Provider) != string(t.Provider) || string(g.Engine) != string(t.Engine) || g.AdapterVersion != t.AdapterVersion || pool.ID != t.SenderPoolID || (pool.OrganisationID != "" && pool.OrganisationID != c.OrganisationID) {
 		out.fail("BLOCKED", "TRANSPORT_EVIDENCE_CHANGED", "Saved route identity or version differs from current evidence.")
 		return out
 	}

@@ -166,3 +166,74 @@ func TestR17AssignShardRejectsZeroTotalWeightWithoutPanic(t *testing.T) {
 		t.Fatalf("zero-total-weight plan returned %v, want ErrRoutingPlanInvalid", err)
 	}
 }
+
+func TestRoutingPlanRequestHashBindsApprovedCampaignVersion(t *testing.T) {
+	first := validPlan()
+	first.ApprovedCampaignVersion = 7
+	hashA, err := first.computeRequestHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	second := first
+	second.ApprovedCampaignVersion = 8
+	hashB, err := second.computeRequestHash()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hashA == hashB {
+		t.Fatal("routing-plan request hash did not bind the approved campaign version")
+	}
+}
+
+func TestRoutingPlanApprovalEvidenceRequiresMeaningfulReasonAndFrozenCampaignVersion(t *testing.T) {
+	p := validPlan()
+	p.ApprovalReason = "short"
+	p.ApprovedCampaignVersion = 7
+	if err := p.Validate(1000); !errors.Is(err, ErrRoutingPlanInvalid) {
+		t.Fatalf("short approval reason should fail closed: %v", err)
+	}
+
+	p = validPlan()
+	p.ApprovalReason = "approved governed capacity reservation"
+	if err := p.Validate(1000); !errors.Is(err, ErrRoutingPlanInvalid) {
+		t.Fatalf("approval evidence without frozen campaign version should fail closed: %v", err)
+	}
+
+	p.ApprovedCampaignVersion = 7
+	if err := p.Validate(1000); err != nil {
+		t.Fatalf("complete approval evidence should validate: %v", err)
+	}
+}
+
+func TestMinimumDailyReservationForWindowHandlesPartialFinalDay(t *testing.T) {
+	const recipients int64 = 10_000
+	const messagesPerMinute = 1
+	const hourlyAllowance int64 = 60
+	window := 217 * time.Hour // nine full days plus one hour.
+
+	daily, err := MinimumDailyReservationForWindow(recipients, messagesPerMinute, hourlyAllowance, window)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if daily <= 1000 {
+		t.Fatalf("daily reservation=%d; rounded-day average 1000 cannot meet a 217h deadline", daily)
+	}
+	if got := governedCompletionDuration(recipients, messagesPerMinute, hourlyAllowance, daily); got > window {
+		t.Fatalf("derived daily reservation misses deadline: duration=%s window=%s daily=%d", got, window, daily)
+	}
+	if daily > hourlyAllowance {
+		if got := governedCompletionDuration(recipients, messagesPerMinute, hourlyAllowance, daily-1); got <= window {
+			t.Fatalf("daily reservation is not minimal: daily=%d previous duration=%s", daily, got)
+		}
+	}
+}
+
+func TestMinimumDailyReservationForWindowKeepsShortCampaignBoundedByAudience(t *testing.T) {
+	daily, err := MinimumDailyReservationForWindow(120, 2, 120, 2*time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if daily != 120 {
+		t.Fatalf("daily reservation=%d want 120", daily)
+	}
+}

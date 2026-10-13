@@ -133,13 +133,9 @@ func (s *SessionLifecycleService) QR(ctx context.Context, id string) (SessionGat
 	return s.Gateway.QR(ctx, node, session)
 }
 
-func (s *SessionLifecycleService) PairingCode(ctx context.Context, id, phone string) (SessionGatewayResult, error) {
-	session, node, err := s.loadForChange(ctx, id)
-	if err != nil {
+func (s *SessionLifecycleService) PairingCode(ctx context.Context, id, phone string, expected int64, actor, reason string) (SessionGatewayResult, error) {
+	if err := validateLifecycleInput(expected, actor, reason); err != nil {
 		return SessionGatewayResult{}, err
-	}
-	if session.Status != StatusPairing && session.Status != StatusDisconnected {
-		return SessionGatewayResult{}, fmt.Errorf("pairing code is not permitted while session is %s", session.Status)
 	}
 	phone = strings.TrimPrefix(strings.TrimSpace(phone), "+")
 	if len(phone) < 8 || len(phone) > 15 {
@@ -149,6 +145,20 @@ func (s *SessionLifecycleService) PairingCode(ctx context.Context, id, phone str
 		if r < '0' || r > '9' {
 			return SessionGatewayResult{}, errors.New("pairing phone number must contain digits only")
 		}
+	}
+	session, node, err := s.loadForChange(ctx, id)
+	if err != nil {
+		return SessionGatewayResult{}, err
+	}
+	if session.Version != expected {
+		return SessionGatewayResult{}, ErrSenderConflict
+	}
+	if session.Status != StatusPairing && session.Status != StatusDisconnected {
+		return SessionGatewayResult{}, fmt.Errorf("pairing code is not permitted while session is %s", session.Status)
+	}
+	session, err = s.Governance.RecordSessionAction(ctx, id, expected, "PAIRING_CODE_REQUESTED", actor, reason)
+	if err != nil {
+		return SessionGatewayResult{}, err
 	}
 	return s.Gateway.PairingCode(ctx, node, session, phone)
 }

@@ -176,12 +176,21 @@ SELECT pg_temp.grant_existing_tables('campaign_campaign_worker', 'SELECT, UPDATE
 -- Export worker: it claims and finalises approved export jobs, verifies the
 -- frozen audit-chain head and streams the immutable audit page set. It does not
 -- own export approval, download grants or privacy-case mutation.
-SELECT pg_temp.grant_existing_tables('campaign_export_worker', 'SELECT, UPDATE', ARRAY[
+SELECT pg_temp.grant_existing_tables('campaign_export_worker', 'SELECT', ARRAY[
   'export_requests'
 ]);
+-- These result/lease columns also provide the UPDATE authority required by
+-- SELECT FOR UPDATE. Governance, frozen evidence and download grants stay
+-- under control-API ownership.
+SELECT pg_temp.grant_existing_tables('campaign_export_worker',
+  'UPDATE (status,lease_owner,lease_expires_at,attempt_count,updated_at,version,object_key,content_type,sha256,size_bytes,generated_at,expires_at,failure_code,failure_detail)',
+  ARRAY['export_requests']);
 SELECT pg_temp.grant_existing_tables('campaign_export_worker', 'SELECT', ARRAY[
   'audit_chain_head','audit_events'
 ]);
+-- The control API freezes redacted authentication evidence at approval.
+-- The worker renders that immutable export payload and has no source-event
+-- access. The broad revoke above also removes older column-level read grants.
 
 -- Inbound governance worker: encrypted-content rotation and governed retention.
 SELECT pg_temp.grant_existing_tables('campaign_inbound_governance_worker', 'SELECT, INSERT, UPDATE, DELETE', ARRAY[

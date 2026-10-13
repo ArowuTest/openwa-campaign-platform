@@ -101,3 +101,76 @@ func TestPacingPolicyCreatorCannotApproveAfterIndependentSubmission(t *testing.T
 		t.Fatalf("rejected decision mutated policy: status=%s err=%v", stored.Status, err)
 	}
 }
+
+func TestResolveStableWindowRejectsMoreSpecificPolicyOnlyInMiddle(t *testing.T) {
+	ctx := context.Background()
+	start := time.Date(2026, 10, 12, 10, 0, 0, 0, time.UTC)
+	end := start.Add(2 * time.Hour)
+	store := NewMemoryPacingStore()
+
+	platform := basePacing(PacingPlatform, "")
+	platform.ID = "platform-stable"
+	platform.Status = PacingActive
+	platform.Version = 1
+	platform.EffectiveFrom = start.Add(-time.Hour)
+	platform.CreatedAt = start.Add(-2 * time.Hour)
+	if _, err := store.Create(ctx, platform); err != nil {
+		t.Fatal(err)
+	}
+
+	middle := basePacing(PacingCampaign, "campaign-1")
+	middle.ID = "campaign-middle"
+	middle.Status = PacingActive
+	middle.Version = 1
+	middle.MessagesPerMinute = 1
+	middle.HourlyAllowance = 60
+	middle.DailyAllowance = 60
+	middle.EffectiveFrom = start.Add(30 * time.Minute)
+	middleEnd := start.Add(60 * time.Minute)
+	middle.EffectiveTo = &middleEnd
+	middle.CreatedAt = start.Add(-time.Hour)
+	if _, err := store.Create(ctx, middle); err != nil {
+		t.Fatal(err)
+	}
+
+	admin := &PacingAdministration{Store: store}
+	scopes := []PacingScopeRef{{Scope: PacingPlatform}, {Scope: PacingCampaign, ID: "campaign-1"}}
+	atStart, err := admin.Resolve(ctx, scopes, start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	atEnd, err := admin.Resolve(ctx, scopes, end.Add(-time.Nanosecond))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if atStart.Policy.ID != platform.ID || atEnd.Policy.ID != platform.ID {
+		t.Fatalf("fixture does not reproduce equal endpoint authority: start=%s end=%s", atStart.Policy.ID, atEnd.Policy.ID)
+	}
+	if _, err := admin.ResolveStableWindow(ctx, scopes, start, end); !errors.Is(err, ErrPacingWindowDrift) {
+		t.Fatalf("mid-window pacing override was not rejected: %v", err)
+	}
+}
+
+func TestResolveStableWindowReturnsOneAuthorityAcrossWholeWindow(t *testing.T) {
+	ctx := context.Background()
+	start := time.Date(2026, 10, 12, 10, 0, 0, 0, time.UTC)
+	end := start.Add(2 * time.Hour)
+	store := NewMemoryPacingStore()
+	policy := basePacing(PacingSenderPool, "pool-1")
+	policy.ID = "pool-policy"
+	policy.Status = PacingActive
+	policy.Version = 4
+	policy.EffectiveFrom = start.Add(-time.Hour)
+	policy.CreatedAt = start.Add(-2 * time.Hour)
+	if _, err := store.Create(ctx, policy); err != nil {
+		t.Fatal(err)
+	}
+	admin := &PacingAdministration{Store: store}
+	resolved, err := admin.ResolveStableWindow(ctx, []PacingScopeRef{{Scope: PacingSenderPool, ID: "pool-1"}}, start, end)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Policy.ID != policy.ID || resolved.Policy.Version != policy.Version {
+		t.Fatalf("wrong stable authority: %+v", resolved.Policy)
+	}
+}

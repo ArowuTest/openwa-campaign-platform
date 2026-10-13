@@ -493,9 +493,26 @@ paths:
               required: [file]
               properties:
                 file: { type: string, format: binary }
+                rightsBasis:
+                  type: string
+                  enum: [OWNED, LICENSED, CLIENT_SUPPLIED, PUBLIC_DOMAIN]
+                  description: Required only for MESSAGE_MEDIA.
+                rightsReference:
+                  type: string
+                  minLength: 3
+                  maxLength: 500
+                  description: Governed licence, ownership or client-supply evidence reference; required only for MESSAGE_MEDIA.
+                rightsExpiresAt:
+                  type: string
+                  format: date-time
+                  description: Optional rights expiry for MESSAGE_MEDIA; must be in the future when supplied.
       responses:
-        '201': { description: Trusted asset accepted and clean }
-        '422': { description: Asset rejected or malware scan failed }
+        '201':
+          description: Trusted asset accepted and clean
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TrustedAssetMetadata' }
+        '422': { description: Asset rejected, rights evidence invalid or malware scan failed }
   /assets/{id}:
     get:
       operationId: getTrustedAsset
@@ -503,7 +520,11 @@ paths:
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
-        '200': { description: Trusted asset metadata }
+        '200':
+          description: Safe trusted-asset metadata; private object-store keys are never returned
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TrustedAssetMetadata' }
         '404': { $ref: '#/components/responses/NotFound' }
   /assets/{id}/revoke:
     post:
@@ -523,7 +544,11 @@ paths:
                 expectedVersion: { type: integer, format: int64, minimum: 1 }
                 reason: { type: string, minLength: 8 }
       responses:
-        '200': { description: Asset revoked }
+        '200':
+          description: Asset revoked
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TrustedAssetMetadata' }
         '403': { description: Recent MFA step-up required }
         '409': { description: Optimistic version conflict }
   /filter-definitions:
@@ -1230,6 +1255,58 @@ paths:
         '409': { description: CAMPAIGN_VERSION_CONFLICT or CAMPAIGN_READINESS_STAGE_UNSUPPORTED. Reload changed detail or use existing execution evidence for scheduled and later stages. }
         '500': { description: INTERNAL_ERROR with no persistence or private source details }
         '503': { description: CAMPAIGN_READINESS_UNAVAILABLE for missing required query wiring }
+  /campaigns/{id}/capacity-hold-proposal:
+    get:
+      operationId: getCampaignCapacityHoldProposal
+      summary: Read one server-derived Day-1 OpenWA capacity-hold proposal
+      description: Requires campaign.read. Returns read-only capacity evidence derived from the saved campaign window, current accepted exact-route controlled test, current preparation capacity measurement, effective pacing policy and current route. The browser cannot supply capacity or pacing values. No reservation is created.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Current server-derived hold proposal
+          headers:
+            Cache-Control:
+              schema: { type: string, const: no-store }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CampaignCapacityHoldProposal' }
+        '401': { description: Authentication required or invalid session }
+        '403': { description: Permission denied }
+        '404': { description: CAMPAIGN_NOT_FOUND }
+        '409': { description: CAPACITY_HOLD_STALE because the campaign changed while evidence was measured }
+        '422': { description: CAPACITY_HOLD_BLOCKED because current controlled-test, route, schedule, pacing or measured capacity evidence cannot support a hold }
+        '503': { description: CAPACITY_HOLD_UNAVAILABLE because required authoritative evidence is unavailable }
+  /campaigns/{id}/capacity-hold:
+    post:
+      operationId: createCampaignCapacityHold
+      summary: Confirm a server-derived Day-1 OpenWA capacity hold
+      description: Requires campaign.approve and recent MFA step-up. The client supplies only the expected campaign version, a meaningful approval reason and a stable client request ID. The server re-derives the accepted controlled test, route, current pacing and measured capacity evidence immediately before creation, then atomically rechecks overlapping reservations and pool limits while creating the approved one-route routing plan plus HELD reservation. Exact replays converge before proposal recomputation; semantic reuse of a client request ID fails closed.
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CampaignCapacityHoldRequest' }
+      responses:
+        '200':
+          description: Exact idempotent replay of an existing governed hold
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CampaignCapacityHoldReplay' }
+        '201':
+          description: New governed routing plan and HELD capacity reservation created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CampaignCapacityHoldCreated' }
+        '400': { description: INVALID_JSON }
+        '401': { description: Authentication required or invalid session }
+        '403': { description: Permission denied or MFA_STEP_UP_REQUIRED }
+        '404': { description: CAMPAIGN_NOT_FOUND }
+        '409': { description: CAPACITY_HOLD_STALE, CAPACITY_HOLD_CONFLICT, CAPACITY_HOLD_REPLAY_CONFLICT or ROUTING_CAPACITY_OVERBOOKED }
+        '422': { description: Confirmation invalid, current evidence blocked, or governed hold rejected }
+        '503': { description: Required capacity-hold or replay authority unavailable }
   /campaigns/{id}/draft:
     put:
       operationId: saveCampaignDraft
@@ -1497,12 +1574,17 @@ paths:
                   hasMore: { type: boolean }
     post:
       operationId: createCampaignRoutingPlan
-      summary: Approve a multi-pool routing plan and atomically reserve pool capacity
+      summary: Approve advanced/non-Day-1 routing plans and atomically reserve pool capacity
+      description: Requires campaign.approve and recent MFA. OpenWA campaigns are deliberately rejected here; their capacity must be derived and approved through /campaigns/{id}/capacity-hold so operators cannot manufacture MPM/hourly/daily authority. This direct endpoint remains available only for non-OpenWA advanced routing administration.
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
         '201': { description: Routing plan approved }
-        '409': { description: Pool capacity is already reserved }
+        '400': { description: Invalid request }
+        '403': { description: Permission denied or MFA_STEP_UP_REQUIRED }
+        '404': { description: CAMPAIGN_NOT_FOUND }
+        '409': { description: Pool capacity is already reserved or ROUTING_PLAN_DIRECT_CREATE_DISABLED for Day-1 OpenWA }
+        '422': { description: Routing plan invalid }
   /routing-plans/{id}:
     get:
       operationId: getCampaignRoutingPlan
@@ -1682,6 +1764,42 @@ paths:
         - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 1000 } }
       responses:
         '200': { description: Audit event page }
+  /operations/authentication-events:
+    get:
+      operationId: searchAuthenticationEvents
+      summary: Search persisted authentication events for compliance review
+      parameters:
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque keyset cursor returned by the previous page. }
+        - { name: userId, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: eventType, in: query, required: false, schema: { type: string, enum: [LOGIN_SUCCEEDED, LOGIN_FAILED, MFA_SUCCEEDED, MFA_FAILED, ACCOUNT_LOCKED, SESSION_REVOKED, ALL_SESSIONS_REVOKED, PERMISSION_DENIED, STEP_UP_REQUIRED, NETWORK_ACCESS_DENIED] } }
+        - { name: correlationId, in: query, required: false, schema: { type: string } }
+        - { name: from, in: query, required: false, schema: { type: string, format: date-time } }
+        - { name: to, in: query, required: false, schema: { type: string, format: date-time } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500 } }
+      responses:
+        '200':
+          description: Redacted authentication event page
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [source, id, eventType, correlationId, occurredAt]
+                      properties:
+                        source: { type: string, enum: [authentication] }
+                        id: { type: string, format: uuid }
+                        actorId: { type: string, format: uuid }
+                        eventType: { type: string }
+                        correlationId: { type: string }
+                        occurredAt: { type: string, format: date-time }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
   /operations/delivery-exceptions:
     get:
       operationId: listDeliveryExceptions
@@ -1853,7 +1971,10 @@ paths:
       operationId: listControlledExports
       summary: List controlled exports using bounded cursor pagination
       parameters:
-        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: kind, in: query, required: false, schema: { type: string, enum: [CAMPAIGN_REPORT, AUDIT_LOG, PRIVACY_PACKAGE] } }
+        - { name: objectId, in: query, required: false, schema: { type: string, format: uuid }, description: Restrict results to one governed object. }
+        - { name: status, in: query, required: false, schema: { type: string } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 50 } }
         - { name: after, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
         '200':
@@ -2392,21 +2513,21 @@ paths:
   /campaigns/{id}/message-versions:
     get:
       operationId: listMessageVersions
-      summary: listMessageVersions
+      summary: List immutable campaign message versions without exposing private media object keys
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500 } }
         - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
         '200':
-          description: Request completed
+          description: Message versions returned
           content:
             application/json:
               schema:
                 type: object
                 required: [items, count, hasMore]
                 properties:
-                  items: { type: array, items: { type: object } }
+                  items: { type: array, items: { $ref: '#/components/schemas/MessageVersionMetadata' } }
                   count: { type: integer, minimum: 0 }
                   nextCursor: { type: string }
                   hasMore: { type: boolean }
@@ -2415,14 +2536,25 @@ paths:
         '403': { description: Permission denied }
     post:
       operationId: createMessageVersion
-      summary: createMessageVersion
+      summary: Create one immutable governed message version
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateMessageVersionRequest' }
       responses:
-        '200': { description: Request completed }
-        '400': { description: Invalid request }
+        '201':
+          description: Immutable message version created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MessageVersionMetadata' }
+        '400': { description: Invalid request or idempotency key }
         '401': { description: Authentication required }
         '403': { description: Permission denied }
+        '409': { description: Duplicate content or idempotency conflict }
+        '422': { description: Message content, links or media evidence invalid }
   /campaigns/{id}/metrics:
     get:
       operationId: getCampaignMetrics
@@ -2565,14 +2697,31 @@ paths:
   /message-versions/{id}/approve:
     post:
       operationId: approveMessageVersion
-      summary: approveMessageVersion
+      summary: Independently approve an immutable message version using its expected content hash
       parameters:
         - { name: id, in: path, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedContentHash]
+              properties:
+                expectedContentHash: { type: string, pattern: '^[0-9a-f]{64}$' }
       responses:
-        '200': { description: Request completed }
+        '200':
+          description: Message version approved
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MessageVersionMetadata' }
         '400': { description: Invalid request }
         '401': { description: Authentication required }
         '403': { description: Permission denied }
+        '404': { description: Message version not found }
+        '409': { description: Message version content changed before approval }
+        '422': { description: Maker/checker or message status rule rejected approval }
   /admin/test-recipients:
     get:
       operationId: listTestRecipients
@@ -2625,6 +2774,61 @@ paths:
       responses:
         '200': { description: Recipient revoked }
         '403': { description: Recent MFA step-up required }
+  /campaigns/{id}/test-message-options:
+    get:
+      operationId: getCampaignTestMessageOptions
+      summary: List bounded approved recipients and exact-route READY sessions for a controlled campaign test
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        '200':
+          description: Governed controlled-test options bound to the current campaign version and route
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [campaignId, campaignVersion, provider, engine, supported, recipients, sessions, recipientInventoryComplete, sessionInventoryComplete]
+                properties:
+                  campaignId: { type: string, format: uuid }
+                  campaignVersion: { type: integer, format: int64, minimum: 1 }
+                  messageVersionId: { type: string, format: uuid }
+                  provider: { type: string }
+                  engine: { type: string }
+                  senderPoolId: { type: string, format: uuid }
+                  gatewayPoolId: { type: string, format: uuid }
+                  supported: { type: boolean }
+                  reason: { type: string }
+                  recipientInventoryComplete: { type: boolean }
+                  sessionInventoryComplete: { type: boolean }
+                  recipients:
+                    type: array
+                    maxItems: 100
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [id, label, maskedMsisdn, status]
+                      properties:
+                        id: { type: string, format: uuid }
+                        label: { type: string }
+                        maskedMsisdn: { type: string }
+                        status: { type: string, enum: [ACTIVE] }
+                  sessions:
+                    type: array
+                    maxItems: 100
+                    items:
+                      type: object
+                      additionalProperties: false
+                      required: [id, profileDisplayName, maskedMsisdn, status, version]
+                      properties:
+                        id: { type: string, format: uuid }
+                        profileDisplayName: { type: string }
+                        maskedMsisdn: { type: string }
+                        status: { type: string, enum: [READY] }
+                        version: { type: integer, format: int64, minimum: 1 }
+        '403': { description: campaign.write permission required }
+        '404': { description: Campaign not found }
+        '503': { description: Controlled-test option services unavailable }
   /campaigns/{id}/test-messages:
     get:
       operationId: listTestMessages
@@ -2682,7 +2886,11 @@ paths:
                   additionalProperties: { type: string }
                 maskSensitive: { type: boolean, default: true }
       responses:
-        '200': { description: Preview rendered }
+        '200':
+          description: Masked representative preview rendered
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/MessagePreviewResult' }
         '400': { description: Invalid request }
         '401': { description: Authentication required }
         '403': { description: Permission denied }
@@ -2915,11 +3123,15 @@ paths:
             schema:
               type: object
               additionalProperties: false
-              required: [phoneNumber]
-              properties: { phoneNumber: { type: string, pattern: '^\\+?[0-9]{8,15}$' } }
+              required: [expectedVersion, reason, phoneNumber]
+              properties:
+                expectedVersion: { type: integer, format: int64, minimum: 1 }
+                reason: { type: string, minLength: 8, maxLength: 2000 }
+                phoneNumber: { type: string, pattern: '^\\+?[0-9]{8,15}$' }
       responses:
-        '200': { description: Pairing code material }
+        '200': { description: Pairing code material; governance version reserved before provider delegation }
         '403': { description: Technical-administrator permission or recent MFA step-up required }
+        '409': { description: Sender session changed concurrently; reload before retrying }
   /sender-sessions/{id}/start:
     post:
       operationId: startGatewaySenderSession
@@ -3103,8 +3315,9 @@ paths:
   /commercial-records:
     get:
       operationId: listCommercialRecords
-      summary: List governed commercial records
+      summary: List governed commercial records for finance operators
       parameters:
+        - { name: organisationId, in: query, required: false, schema: { type: string, format: uuid } }
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
         - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
@@ -3116,42 +3329,161 @@ paths:
                 type: object
                 required: [items, count, hasMore]
                 properties:
-                  items: { type: array, items: { type: object } }
+                  items: { type: array, items: { $ref: '#/components/schemas/CommercialRecord' } }
                   count: { type: integer, minimum: 0 }
                   nextCursor: { type: string }
                   hasMore: { type: boolean }
   /campaigns/{id}/commercial-record:
-    post:
-      operationId: createCommercialRecord
-      summary: Create a campaign commercial record draft
+    get:
+      operationId: getCampaignCommercialRecord
+      summary: Get the finance-governed commercial record bound to one campaign
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       responses:
-        '201': { description: Commercial record created }
+        '200':
+          description: Commercial record
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CommercialRecord' }
+        '404': { description: Campaign or commercial record not found }
+    post:
+      operationId: createCommercialRecord
+      summary: Create a campaign commercial record draft from offline quote, invoice and payment evidence
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CommercialDraftRequest' }
+      responses:
+        '201':
+          description: Commercial record created
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CommercialRecord' }
+        '400': { description: Invalid or authority-bearing fields supplied by the client }
+        '422': { description: Commercial evidence is invalid }
+  /commercial-records/{id}/draft:
+    put:
+      operationId: updateCommercialRecordDraft
+      summary: Correct a DRAFT or REJECTED commercial record using optimistic versioning
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CommercialDraftUpdateRequest' }
+      responses:
+        '200':
+          description: Corrected commercial draft
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CommercialRecord' }
+        '404': { description: Commercial record not found }
+        '409': { description: Commercial record version conflict }
+        '422': { description: Commercial correction invalid or record no longer editable }
+  /commercial-records/{id}/events:
+    get:
+      operationId: listCommercialRecordEvents
+      summary: List immutable commercial evidence events in record-version order
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
+        - { name: cursor, in: query, required: false, schema: { type: string } }
+      responses:
+        '200':
+          description: Immutable commercial event history
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count, hasMore]
+                properties:
+                  items: { type: array, items: { $ref: '#/components/schemas/CommercialEvent' } }
+                  count: { type: integer, minimum: 0 }
+                  nextCursor: { type: string }
+                  hasMore: { type: boolean }
+        '404': { description: Commercial record not found }
   /commercial-records/{id}/submit:
     post:
       operationId: submitCommercialRecord
-      summary: Submit a commercial record for maker-checker approval
+      summary: Submit a commercial record for independent finance approval
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedVersion, reason]
+              properties:
+                expectedVersion: { type: integer, format: int64, minimum: 1 }
+                reason: { type: string, minLength: 5, maxLength: 1000 }
       responses:
-        '200': { description: Commercial record submitted }
+        '200':
+          description: Commercial record submitted
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CommercialRecord' }
+        '409': { description: Commercial record version conflict }
+        '422': { description: Commercial submission invalid }
   /commercial-records/{id}/decision:
     post:
       operationId: decideCommercialRecord
-      summary: Approve or reject a commercial record
+      summary: Independently approve or reject a commercial record
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedVersion, approve, reason]
+              properties:
+                expectedVersion: { type: integer, format: int64, minimum: 1 }
+                approve: { type: boolean }
+                reason: { type: string, minLength: 5, maxLength: 1000 }
       responses:
-        '200': { description: Commercial decision recorded }
+        '200':
+          description: Commercial decision recorded
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CommercialRecord' }
+        '403': { description: Recent MFA step-up required }
+        '409': { description: Commercial record version conflict }
+        '422': { description: Maker/checker, payment or lifecycle rule rejected the decision }
   /commercial-records/{id}/revoke:
     post:
       operationId: revokeCommercialRecord
-      summary: Revoke an approved commercial record
+      summary: Revoke an approved commercial record and retain immutable revocation evidence
       parameters:
         - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [expectedVersion, reason]
+              properties:
+                expectedVersion: { type: integer, format: int64, minimum: 1 }
+                reason: { type: string, minLength: 5, maxLength: 1000 }
       responses:
-        '200': { description: Commercial record revoked }
+        '200':
+          description: Commercial record revoked
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CommercialRecord' }
+        '403': { description: Recent MFA step-up required }
+        '409': { description: Commercial record version conflict }
+        '422': { description: Commercial record cannot be revoked }
 
   /exports/{id}:
     get:
@@ -3470,8 +3802,10 @@ paths:
   /privacy/legal-holds:
     get:
       operationId: listPrivacyLegalHolds
-      summary: List active and released privacy legal holds
+      summary: List privacy legal holds for an exact subject lookup
       parameters:
+        - { name: msisdn, in: query, required: true, schema: { type: string }, description: Exact E.164 subject identifier used only for protected lookup; responses remain masked. }
+        - { name: activeOnly, in: query, required: false, schema: { type: boolean, default: false }, description: When true, return only non-expired active holds; when false, include the full lifecycle for the exact subject. }
         - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 500, default: 100 } }
         - { name: cursor, in: query, required: false, schema: { type: string }, description: Opaque continuation token returned by the previous page. }
       responses:
@@ -4428,6 +4762,178 @@ components:
         application/json:
           schema: { $ref: '#/components/schemas/ErrorResponse' }
   schemas:
+    CommercialDraftRequest:
+      type: object
+      additionalProperties: false
+      required: [quotationReference, invoiceReference, currency, approvedRecipients, unitPriceMinor, managementFeeMinor, reason]
+      properties:
+        quotationReference: { type: string, minLength: 1 }
+        invoiceReference: { type: string, minLength: 1 }
+        currency: { type: string, minLength: 3, maxLength: 3, pattern: '^[A-Z]{3}$' }
+        approvedRecipients: { type: integer, format: int64, minimum: 1 }
+        unitPriceMinor: { type: integer, format: int64, minimum: 0 }
+        managementFeeMinor: { type: integer, format: int64, minimum: 0 }
+        paymentReference: { type: string }
+        paymentReceivedAt: { type: string, format: date-time }
+        reason: { type: string, minLength: 5, maxLength: 1000 }
+    CommercialDraftUpdateRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedVersion, quotationReference, invoiceReference, currency, approvedRecipients, unitPriceMinor, managementFeeMinor, reason]
+      properties:
+        expectedVersion: { type: integer, format: int64, minimum: 1 }
+        quotationReference: { type: string, minLength: 1 }
+        invoiceReference: { type: string, minLength: 1 }
+        currency: { type: string, minLength: 3, maxLength: 3, pattern: '^[A-Z]{3}$' }
+        approvedRecipients: { type: integer, format: int64, minimum: 1 }
+        unitPriceMinor: { type: integer, format: int64, minimum: 0 }
+        managementFeeMinor: { type: integer, format: int64, minimum: 0 }
+        paymentReference: { type: string }
+        paymentReceivedAt: { type: string, format: date-time }
+        reason: { type: string, minLength: 5, maxLength: 1000 }
+    CommercialRecord:
+      type: object
+      additionalProperties: false
+      required: [id, campaignId, organisationId, quotationReference, invoiceReference, currency, approvedRecipients, unitPriceMinor, managementFeeMinor, totalAmountMinor, status, version, createdBy, reason, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        campaignId: { type: string, format: uuid }
+        organisationId: { type: string, format: uuid }
+        quotationReference: { type: string }
+        invoiceReference: { type: string }
+        currency: { type: string, minLength: 3, maxLength: 3, pattern: '^[A-Z]{3}$' }
+        approvedRecipients: { type: integer, format: int64, minimum: 1 }
+        unitPriceMinor: { type: integer, format: int64, minimum: 0 }
+        managementFeeMinor: { type: integer, format: int64, minimum: 0 }
+        totalAmountMinor: { type: integer, format: int64, minimum: 0 }
+        paymentReference: { type: string }
+        paymentReceivedAt: { type: string, format: date-time }
+        status: { type: string, enum: [DRAFT, PENDING_APPROVAL, APPROVED, REJECTED, REVOKED] }
+        version: { type: integer, format: int64, minimum: 1 }
+        createdBy: { type: string, format: uuid }
+        submittedBy: { type: string, format: uuid }
+        approvedBy: { type: string, format: uuid }
+        reason: { type: string }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    CommercialEvent:
+      type: object
+      additionalProperties: false
+      required: [id, commercialRecordId, eventType, actorId, reason, recordVersion, evidence, occurredAt]
+      properties:
+        id: { type: string, format: uuid }
+        commercialRecordId: { type: string, format: uuid }
+        eventType: { type: string, enum: [CREATED, UPDATED, SUBMITTED, APPROVED, REJECTED, REVOKED] }
+        actorId: { type: string, format: uuid }
+        reason: { type: string, minLength: 5, maxLength: 1000 }
+        recordVersion: { type: integer, format: int64, minimum: 1 }
+        evidence:
+          type: object
+          additionalProperties: true
+          description: Immutable commercial record snapshot for this record version.
+        occurredAt: { type: string, format: date-time }
+    MessageVariable:
+      type: object
+      additionalProperties: false
+      required: [name, dataType, fallback]
+      properties:
+        name: { type: string, pattern: '^[A-Za-z][A-Za-z0-9_.-]{0,63}$' }
+        dataType: { type: string, enum: [TEXT, INTEGER, DECIMAL, BOOLEAN, DATE, MSISDN, EMAIL, PERSONAL, SENSITIVE] }
+        fallback: { type: string }
+    MessageLink:
+      type: object
+      additionalProperties: false
+      required: [url]
+      properties:
+        url: { type: string, format: uri, pattern: '^https://' }
+        label: { type: string }
+    MessageMediaMetadata:
+      type: object
+      additionalProperties: false
+      required: [assetId, sha256, mediaType, size, scanStatus]
+      properties:
+        assetId: { type: string, format: uuid }
+        sha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        mediaType: { type: string }
+        size: { type: integer, format: int64, minimum: 1 }
+        scanStatus: { type: string, enum: [CLEAN] }
+    CreateMessageVersionRequest:
+      type: object
+      additionalProperties: false
+      required: [type]
+      properties:
+        type: { type: string, enum: [TEXT, IMAGE_CAPTION, VIDEO, DOCUMENT] }
+        body: { type: string }
+        mediaAssetId: { type: string, format: uuid }
+        links:
+          type: array
+          maxItems: 20
+          items: { $ref: '#/components/schemas/MessageLink' }
+        variables:
+          type: array
+          maxItems: 50
+          items: { $ref: '#/components/schemas/MessageVariable' }
+    MessageVersionMetadata:
+      type: object
+      additionalProperties: false
+      required: [id, campaignId, version, type, links, variables, contentHash, status, createdBy, createdAt]
+      properties:
+        id: { type: string, format: uuid }
+        campaignId: { type: string, format: uuid }
+        version: { type: integer, minimum: 1 }
+        type: { type: string, enum: [TEXT, IMAGE_CAPTION, VIDEO, DOCUMENT] }
+        body: { type: string }
+        media: { $ref: '#/components/schemas/MessageMediaMetadata' }
+        links:
+          type: array
+          items: { $ref: '#/components/schemas/MessageLink' }
+        variables:
+          type: array
+          items: { $ref: '#/components/schemas/MessageVariable' }
+        contentHash: { type: string, pattern: '^[0-9a-f]{64}$' }
+        status: { type: string, enum: [DRAFT, APPROVED, SUPERSEDED] }
+        createdBy: { type: string, format: uuid }
+        approvedBy: { type: string, format: uuid }
+        createdAt: { type: string, format: date-time }
+        approvedAt: { type: string, format: date-time }
+    MessagePreviewResult:
+      type: object
+      additionalProperties: false
+      required: [body, resolved, usedFallbacks, missing, undeclared, characterCount, byteCount]
+      properties:
+        body: { type: string }
+        resolved:
+          type: object
+          additionalProperties: { type: string }
+        usedFallbacks:
+          type: array
+          items: { type: string }
+        missing:
+          type: array
+          items: { type: string }
+        undeclared:
+          type: array
+          items: { type: string }
+        characterCount: { type: integer, minimum: 0 }
+        byteCount: { type: integer, minimum: 0 }
+    TrustedAssetMetadata:
+      type: object
+      additionalProperties: false
+      required: [id, purpose, originalFilename, mediaType, size, sha256, status, createdAt, updatedAt, version]
+      properties:
+        id: { type: string, format: uuid }
+        purpose: { type: string, enum: [MESSAGE_MEDIA, CONSENT_EVIDENCE, CAMPAIGN_EVIDENCE] }
+        originalFilename: { type: string }
+        mediaType: { type: string }
+        size: { type: integer, format: int64, minimum: 1 }
+        sha256: { type: string, pattern: '^[0-9a-f]{64}$' }
+        status: { type: string, enum: [SCANNING, CLEAN, INFECTED, SCAN_FAILED, REVOKED] }
+        rightsBasis: { type: string, enum: [OWNED, LICENSED, CLIENT_SUPPLIED, PUBLIC_DOMAIN] }
+        rightsReference: { type: string, minLength: 3, maxLength: 500 }
+        rightsExpiresAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+        version: { type: integer, format: int64, minimum: 1 }
     AuthenticatedOperatorContext:
       type: object
       additionalProperties: false
@@ -5307,6 +5813,106 @@ components:
           type: array
           uniqueItems: true
           items: { type: string, enum: [SEND_TEXT, SEND_TEMPLATE, SEND_IMAGE, SEND_VIDEO, SEND_DOCUMENT, DELIVERY_EVENTS, READ_EVENTS, INBOUND_MESSAGES, PAIRING_QR, PAIRING_CODE] }
+    CampaignCapacityHoldRequest:
+      type: object
+      additionalProperties: false
+      required: [expectedCampaignVersion, reason, clientRequestId]
+      properties:
+        expectedCampaignVersion: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991 }
+        reason: { type: string, minLength: 8, maxLength: 1000, description: Trimmed capacity-approval reason recorded with the routing plan. }
+        clientRequestId: { type: string, minLength: 16, maxLength: 128, description: Stable client-generated idempotency key reused after ambiguous response loss. }
+    CampaignCapacityHoldProposal:
+      type: object
+      additionalProperties: false
+      required:
+        [campaignId, campaignVersion, senderPoolId, gatewayPoolId, provider, engine, reservationStart, reservationEnd, basisRecipientCount, measurementAsOf, healthySessions, healthyNodes, minimumHealthyNodes, availableMessagesPerMinute, availableHourlyUnits, availableDailyUnits, safetyMarginPercent, requiredMessagesPerMinute, reservedMessagesPerMinute, reservedHourlyUnits, reservedDailyUnits, pacingPolicyId, pacingPolicyVersion, pacingMessagesPerMinute, pacingHourlyAllowance, pacingDailyAllowance, routingPolicyVersion, capacityEvidenceVersion, classification]
+      properties:
+        campaignId: { type: string, format: uuid }
+        campaignVersion: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991 }
+        senderPoolId: { type: string, format: uuid }
+        gatewayPoolId: { type: string, format: uuid }
+        provider: { type: string, const: OPENWA }
+        engine: { type: string, enum: [WHATSAPP_WEB_JS, BAILEYS] }
+        reservationStart: { type: string, format: date-time }
+        reservationEnd: { type: string, format: date-time }
+        basisRecipientCount: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991 }
+        measurementAsOf: { type: string, format: date-time }
+        healthySessions: { type: integer, minimum: 0 }
+        healthyNodes: { type: integer, minimum: 0 }
+        minimumHealthyNodes: { type: integer, minimum: 0 }
+        availableMessagesPerMinute: { type: integer, minimum: 0 }
+        availableHourlyUnits: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991 }
+        availableDailyUnits: { type: integer, format: int64, minimum: 0, maximum: 9007199254740991 }
+        safetyMarginPercent: { type: integer, minimum: 0, maximum: 90 }
+        requiredMessagesPerMinute: { type: number, minimum: 0 }
+        reservedMessagesPerMinute: { type: integer, minimum: 1 }
+        reservedHourlyUnits: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991 }
+        reservedDailyUnits: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991 }
+        pacingPolicyId: { type: string, minLength: 1 }
+        pacingPolicyVersion: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991 }
+        pacingMessagesPerMinute: { type: integer, minimum: 1 }
+        pacingHourlyAllowance: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991 }
+        pacingDailyAllowance: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991 }
+        routingPolicyVersion: { type: string, minLength: 1 }
+        capacityEvidenceVersion: { type: string, minLength: 1 }
+        classification: { type: string, const: READY_TO_HOLD }
+    CampaignCapacityHoldRoute:
+      type: object
+      additionalProperties: false
+      required: [senderPoolId, gatewayPoolId, provider, engine, providerAdapterVersion, providerDefinitionId, providerDefinitionVersion, gatewayPoolVersion, allocationWeight, maximumRecipients, reservedMessagesPerMinute, reservedHourlyUnits, reservedDailyUnits, allowReallocationIn, allowReallocationOut]
+      properties:
+        senderPoolId: { type: string, format: uuid }
+        gatewayPoolId: { type: string, format: uuid }
+        provider: { type: string, const: OPENWA }
+        engine: { type: string, enum: [WHATSAPP_WEB_JS, BAILEYS] }
+        providerAdapterVersion: { type: string, minLength: 1 }
+        providerDefinitionId: { type: string, format: uuid }
+        providerDefinitionVersion: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991 }
+        gatewayPoolVersion: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991 }
+        allocationWeight: { type: integer, minimum: 1, maximum: 10000 }
+        maximumRecipients: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991 }
+        reservedMessagesPerMinute: { type: integer, minimum: 1 }
+        reservedHourlyUnits: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991 }
+        reservedDailyUnits: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991 }
+        allowReallocationIn: { type: boolean, const: false }
+        allowReallocationOut: { type: boolean, const: false }
+    CampaignCapacityHoldPlan:
+      type: object
+      additionalProperties: false
+      required: [id, campaignId, version, routes, distributionMode, routingPolicyVersion, capacityEvidenceVersion, pacingPolicyVersion, fallbackMode, approvedAt, approvedBy, approvalReason, approvedCampaignVersion, idempotencyKey]
+      properties:
+        id: { type: string, format: uuid }
+        campaignId: { type: string, format: uuid }
+        version: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991 }
+        routes:
+          type: array
+          minItems: 1
+          maxItems: 1
+          items: { $ref: '#/components/schemas/CampaignCapacityHoldRoute' }
+        distributionMode: { type: string, enum: [WEIGHTED, AUTO] }
+        routingPolicyVersion: { type: string, minLength: 1 }
+        capacityEvidenceVersion: { type: string, minLength: 1 }
+        pacingPolicyVersion: { type: string, minLength: 1 }
+        fallbackMode: { type: string, const: NONE }
+        approvedAt: { type: string, format: date-time }
+        approvedBy: { type: string, format: uuid }
+        approvalReason: { type: string, minLength: 8, maxLength: 1000 }
+        approvedCampaignVersion: { type: integer, format: int64, minimum: 1, maximum: 9007199254740991 }
+        idempotencyKey: { type: string, minLength: 16, maxLength: 128 }
+    CampaignCapacityHoldCreated:
+      type: object
+      additionalProperties: false
+      required: [plan, proposal]
+      properties:
+        plan: { $ref: '#/components/schemas/CampaignCapacityHoldPlan' }
+        proposal: { $ref: '#/components/schemas/CampaignCapacityHoldProposal' }
+    CampaignCapacityHoldReplay:
+      type: object
+      additionalProperties: false
+      required: [plan, replayed]
+      properties:
+        plan: { $ref: '#/components/schemas/CampaignCapacityHoldPlan' }
+        replayed: { type: boolean, const: true }
     CampaignReadiness:
       type: object
       additionalProperties: false

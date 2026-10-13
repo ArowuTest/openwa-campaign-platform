@@ -581,9 +581,14 @@
       "internal/identity/events.go",
       "internal/persistence/postgres/identity.go",
       "internal/persistence/postgres/identity_acceptance_integration_test.go",
+      "internal/operations/authentication_export_test.go",
+      "internal/operations/export_postgres_integration_test.go",
+      "internal/operations/export_worker.go",
+      "database/migrations/0101_authentication_event_export_watermark.sql",
+      "database/bootstrap/002_service_roles.sql",
       "internal/audit/postgres.go"
     ],
-    "notes": "Authentication success/failure, MFA, lockout, permission/step-up/network-denied events are persisted with actor/time/context, and privileged business actions use the audit ledger. Authentication events are not yet integrated into the controlled audit-search/export surface required by the acceptance wording."
+    "notes": "Authentication success/failure, MFA, lockout, permission/step-up/network-denied events are persisted with actor/time/context, exposed through the audit.read-gated redacted search endpoint and admin audit screen, and included in controlled audit exports through a separate approval-time occurrence-time/ID high-water mark. Privileged business actions remain in the hash-chained audit ledger. Authentication events remain a distinct non-hash-chained stream with an independent watermark, so cryptographic unification, cross-stream snapshot coherence and production evidence remain partial."
   },
   {
     "id": "IAM-012",

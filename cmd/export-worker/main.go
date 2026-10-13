@@ -102,8 +102,8 @@ func main() {
 	privacyResolver := &privacy.Service{Evidence: privacyKeyring}
 	worker := &operations.ExportWorker{
 		Repository: repo, AuditRepository: &audit.PostgreSQLRepository{DB: db},
-		PrivacyPackages: privacyResolver, Objects: objects, WorkerID: workerID,
-		LeaseDuration: 2 * time.Minute, ReadyTTL: readyTTL,
+		PrivacyPackages: privacyResolver,
+		Objects:         objects, WorkerID: workerID, LeaseDuration: 2 * time.Minute, ReadyTTL: readyTTL,
 	}
 
 	var active atomic.Int64

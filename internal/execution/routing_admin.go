@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -67,6 +68,7 @@ type RoutingAdministration struct {
 	GatewayPools         *sender.GatewayPoolService
 	MetaSenders          MetaSenderReader
 	MetaTemplates        MetaTemplateReader
+	PacingPolicies       *sender.PacingAdministration
 	MetaHealthStaleAfter time.Duration
 	Clock                func() time.Time
 }
@@ -103,6 +105,7 @@ func (s *RoutingAdministration) CreateApproved(ctx context.Context, plan Routing
 	}
 	plan.ApprovedBy = strings.TrimSpace(actor)
 	plan.ApprovedAt = s.now()
+	plan.ApprovedCampaignVersion = entity.Version
 	if err := prepareDistribution(&plan); err != nil {
 		return RoutingPlan{}, err
 	}
@@ -212,12 +215,79 @@ func (s *RoutingAdministration) freezeGovernedRoutes(ctx context.Context, plan *
 	return nil
 }
 
+func routingPacingScopes(entity campaign.Campaign) []sender.PacingScopeRef {
+	scopes := []sender.PacingScopeRef{{Scope: sender.PacingPlatform}}
+	if entity.Transport.Provider != "" {
+		scopes = append(scopes, sender.PacingScopeRef{Scope: sender.PacingProvider, ID: string(entity.Transport.Provider)})
+	}
+	if entity.Transport.Engine != "" {
+		scopes = append(scopes, sender.PacingScopeRef{Scope: sender.PacingEngine, ID: string(entity.Transport.Engine)})
+	}
+	if entity.Transport.GatewayPoolID != "" {
+		scopes = append(scopes, sender.PacingScopeRef{Scope: sender.PacingGatewayPool, ID: entity.Transport.GatewayPoolID})
+	}
+	if entity.Transport.SenderPoolID != "" {
+		scopes = append(scopes, sender.PacingScopeRef{Scope: sender.PacingSenderPool, ID: entity.Transport.SenderPoolID})
+	}
+	return append(scopes, sender.PacingScopeRef{Scope: sender.PacingCampaign, ID: entity.ID})
+}
+
+func frozenPacingAuthority(value string) (string, int64, bool, error) {
+	value = strings.TrimSpace(value)
+	separator := strings.LastIndex(value, "/v")
+	if separator < 1 {
+		return "", 0, false, nil
+	}
+	policyID := strings.TrimSpace(value[:separator])
+	if !id.IsUUID(policyID) {
+		return "", 0, false, ErrRoutingPlanInvalid
+	}
+	version, err := strconv.ParseInt(value[separator+2:], 10, 64)
+	if err != nil || version < 1 {
+		return "", 0, false, ErrRoutingPlanInvalid
+	}
+	return policyID, version, true, nil
+}
+
+func (s *RoutingAdministration) validateFrozenPacingAuthority(ctx context.Context, plan RoutingPlan, entity campaign.Campaign) error {
+	policyID, version, canonical, err := frozenPacingAuthority(plan.PacingPolicyVersion)
+	if err != nil {
+		return fmt.Errorf("routing plan pacing evidence is invalid: %w", err)
+	}
+	if !canonical {
+		// Historical routing plans predate canonical pacing authority evidence.
+		// New server-derived Day-1 holds always persist <policy-uuid>/v<version>
+		// and therefore take the fail-closed path below.
+		return nil
+	}
+	if s.PacingPolicies == nil || entity.RequestedStartAt == nil || entity.CompletionDeadlineAt == nil ||
+		!entity.CompletionDeadlineAt.After(*entity.RequestedStartAt) {
+		return errors.New("canonical routing plan pacing authority cannot be revalidated")
+	}
+	resolved, err := s.PacingPolicies.ResolveStableWindow(
+		ctx,
+		routingPacingScopes(entity),
+		entity.RequestedStartAt.UTC(),
+		entity.CompletionDeadlineAt.UTC(),
+	)
+	if err != nil {
+		return fmt.Errorf("revalidate routing plan pacing authority: %w", err)
+	}
+	if resolved.Policy.ID != policyID || resolved.Policy.Version != version {
+		return errors.New("routing plan pacing authority has changed")
+	}
+	return nil
+}
+
 func (s *RoutingAdministration) ValidateForExecution(ctx context.Context, plan RoutingPlan, entity campaign.Campaign, at time.Time) error {
 	if s == nil || s.ProviderCapabilities == nil {
 		return errors.New("provider capability governance is required")
 	}
 	if err := plan.Validate(entity.MaximumUniqueRecipients); err != nil {
 		return fmt.Errorf("routing plan structure is invalid: %w", err)
+	}
+	if err := s.validateFrozenPacingAuthority(ctx, plan, entity); err != nil {
+		return err
 	}
 	providerRequired := make([]provider.Capability, 0, len(entity.Transport.RequiredCapabilities))
 	gatewayRequired := make([]sender.Capability, 0, len(entity.Transport.RequiredCapabilities))
@@ -302,9 +372,27 @@ func (s *RoutingAdministration) ValidateForExecution(ctx context.Context, plan R
 	return nil
 }
 
+type routingPlanIdempotencyReader interface {
+	GetByIdempotencyKey(context.Context, string, string) (RoutingPlan, error)
+}
+
 func (s *RoutingAdministration) Get(ctx context.Context, id string) (RoutingPlan, error) {
 	return s.Store.Get(ctx, id)
 }
+
+func (s *RoutingAdministration) GetByIdempotencyKey(ctx context.Context, campaignID, idempotencyKey string) (RoutingPlan, error) {
+	campaignID = strings.TrimSpace(campaignID)
+	idempotencyKey = strings.TrimSpace(idempotencyKey)
+	if s == nil || s.Store == nil || campaignID == "" || idempotencyKey == "" {
+		return RoutingPlan{}, ErrRoutingPlanInvalid
+	}
+	reader, ok := s.Store.(routingPlanIdempotencyReader)
+	if !ok {
+		return RoutingPlan{}, errors.New("routing-plan idempotency lookup is unavailable")
+	}
+	return reader.GetByIdempotencyKey(ctx, campaignID, idempotencyKey)
+}
+
 func (s *RoutingAdministration) ListByCampaign(ctx context.Context, campaignID string) ([]RoutingPlan, error) {
 	return s.Store.ListByCampaign(ctx, campaignID)
 }

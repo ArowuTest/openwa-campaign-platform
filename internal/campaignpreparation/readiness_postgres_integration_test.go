@@ -196,7 +196,7 @@ func newSQLPreparationFixture(t *testing.T, owner, db *sql.DB, media bool) *sqlP
 	if media {
 		asset := sqlID(t)
 		objects.sha = fmt.Sprintf("%x", sha256.Sum256([]byte(asset)))
-		sqlMust(t, owner, `INSERT INTO trusted_assets(id,purpose,object_key,original_filename,media_type,byte_size,sha256_checksum,status,created_by,version) VALUES($1::uuid,'MESSAGE_MEDIA',$2,'synthetic.png','image/png',3,$3,'CLEAN',$4::uuid,1)`, asset, "private/synthetic/"+asset, objects.sha, actor)
+		sqlMust(t, owner, `INSERT INTO trusted_assets(id,purpose,object_key,original_filename,media_type,byte_size,sha256_checksum,status,rights_basis,rights_reference,created_by,version) VALUES($1::uuid,'MESSAGE_MEDIA',$2,'synthetic.png','image/png',3,$3,'CLEAN','OWNED',$4,$5::uuid,1)`, asset, "private/synthetic/"+asset, objects.sha, "test-fixture/readiness/"+asset, actor)
 		sqlMust(t, owner, `INSERT INTO message_versions(id,campaign_id,version,message_type,body,content_hash,status,created_by,approved_by,approved_at,client_request_id,media_asset_id,media_object_key,media_sha256,media_type,media_size,media_scan_status) VALUES($1::uuid,$2::uuid,1,'IMAGE_CAPTION','Synthetic image',$3,'APPROVED',$4::uuid,$5::uuid,$6,'u3-message-'||$1::text,$7::uuid,$8,$9,'image/png',3,'CLEAN')`, msg, c.ID, strings.Repeat("b", 64), actor, checker, now, asset, "private/synthetic/"+asset, objects.sha)
 	} else {
 		sqlMust(t, owner, `INSERT INTO message_versions(id,campaign_id,version,message_type,body,content_hash,status,created_by,approved_by,approved_at,client_request_id) VALUES($1::uuid,$2::uuid,1,'TEXT','Synthetic text',$3,'APPROVED',$4::uuid,$5::uuid,$6,'u3-message-'||$1::text)`, msg, c.ID, strings.Repeat("b", 64), actor, checker, now)

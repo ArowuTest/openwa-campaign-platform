@@ -15,6 +15,7 @@ import (
 
 	"campaign-platform/internal/audit"
 	"campaign-platform/internal/delivery"
+	"campaign-platform/internal/identity"
 	"campaign-platform/internal/shared/id"
 )
 
@@ -54,13 +55,14 @@ type DownloadAtomicAuditRepository interface {
 	ConsumeDownloadGrantWithAudit(context.Context, string, string, string, time.Time, audit.Input) (ExportRequest, DownloadGrant, error)
 }
 type Service struct {
-	Repo             Repository
-	AuditRepository  audit.Repository
-	Audit            *audit.Recorder
-	Deliveries       *delivery.Service
-	ReportingPrivacy *ReportingPrivacyAdministration
-	Alerting         AlertStore
-	Clock            func() time.Time
+	Repo                 Repository
+	AuditRepository      audit.Repository
+	AuthenticationEvents identity.AuthenticationEventQueryRepository
+	Audit                *audit.Recorder
+	Deliveries           *delivery.Service
+	ReportingPrivacy     *ReportingPrivacyAdministration
+	Alerting             AlertStore
+	Clock                func() time.Time
 }
 
 func (s *Service) now() time.Time {
@@ -83,6 +85,27 @@ func (s *Service) SearchAuditWithAccess(ctx context.Context, query audit.Query, 
 	}
 	if s.Audit != nil {
 		_, err = s.Audit.Record(ctx, audit.Input{ActorType: "USER", ActorID: actor, Action: "AUDIT_LOG_SEARCHED", ObjectType: "AUDIT_LOG", ObjectID: "AUDIT_SEARCH", OrganisationID: query.OrganisationID, Outcome: "SUCCESS", Sensitivity: "HIGH", After: map[string]any{"actorId": query.ActorID, "action": query.Action, "objectType": query.ObjectType, "objectId": query.ObjectID, "organisationId": query.OrganisationID, "outcome": query.Outcome, "sensitivity": query.Sensitivity, "resultCount": len(page.Items)}, Reason: "authorised audit search", CorrelationID: correlation, OccurredAt: s.now()})
+	}
+	return page, err
+}
+
+func (s *Service) SearchAuthenticationEvents(ctx context.Context, query identity.AuthenticationEventQuery) (identity.AuthenticationEventPage, error) {
+	if err := identity.ValidateAuthenticationEventQuery(query); err != nil {
+		return identity.AuthenticationEventPage{}, err
+	}
+	if s.AuthenticationEvents == nil {
+		return identity.AuthenticationEventPage{}, errors.New("authentication event query is unavailable")
+	}
+	return s.AuthenticationEvents.SearchAuthenticationEvents(ctx, query)
+}
+
+func (s *Service) SearchAuthenticationEventsWithAccess(ctx context.Context, query identity.AuthenticationEventQuery, actor, correlation string) (identity.AuthenticationEventPage, error) {
+	page, err := s.SearchAuthenticationEvents(ctx, query)
+	if err != nil {
+		return page, err
+	}
+	if s.Audit != nil {
+		_, err = s.Audit.Record(ctx, audit.Input{ActorType: "USER", ActorID: actor, Action: "AUDIT_LOG_SEARCHED", ObjectType: "AUTHENTICATION_EVENTS", ObjectID: "AUTHENTICATION_SEARCH", Outcome: "SUCCESS", Sensitivity: "HIGH", After: map[string]any{"source": "authentication", "userId": query.UserID, "eventType": query.EventType, "correlationId": query.CorrelationID, "resultCount": len(page.Items)}, Reason: "authorised authentication event search", CorrelationID: correlation, OccurredAt: s.now()})
 	}
 	return page, err
 }
@@ -360,6 +383,12 @@ func (s *Service) RequestExportWithOptions(ctx context.Context, kind, objectID, 
 	if len(criteria) > 64<<10 {
 		return ExportRequest{}, ErrInvalid
 	}
+	if kind == "AUDIT_LOG" {
+		decodedCriteria, criteriaErr := decodeAuditExportCriteria(criteria)
+		if criteriaErr != nil || validateAuditExportCriteria(decodedCriteria) != nil {
+			return ExportRequest{}, ErrInvalid
+		}
+	}
 	identifier, err := id.New()
 	if err != nil {
 		return ExportRequest{}, err
@@ -367,6 +396,9 @@ func (s *Service) RequestExportWithOptions(ctx context.Context, kind, objectID, 
 	templateVersion := strings.TrimSpace(options.TemplateVersion)
 	if templateVersion == "" {
 		templateVersion = "EXPORT-V1"
+		if kind == "AUDIT_LOG" {
+			templateVersion = auditExportTemplateVersion
+		}
 	}
 	now := s.now()
 	frozenPayload := append(json.RawMessage(nil), options.FrozenPayload...)
@@ -430,6 +462,10 @@ func (s *Service) DecideExport(ctx context.Context, identifier string, expected 
 			}
 			current.FrozenPayload = payload
 		case "AUDIT_LOG":
+			criteria, criteriaErr := decodeAuditExportCriteria(current.Criteria)
+			if criteriaErr != nil || validateAuditExportCriteria(criteria) != nil {
+				return ExportRequest{}, ErrInvalid
+			}
 			if s.AuditRepository == nil {
 				return ExportRequest{}, errors.New("audit repository unavailable")
 			}
@@ -439,6 +475,14 @@ func (s *Service) DecideExport(ctx context.Context, identifier string, expected 
 			}
 			current.AuditHeadSequence = sequence
 			current.AuditHeadHash = hash
+			frozenAuthentication, authAsOf, authHeadID, authErr := s.freezeAuthenticationEventSnapshot(ctx, criteria, now)
+			if authErr != nil {
+				return ExportRequest{}, authErr
+			}
+			current.FrozenPayload = frozenAuthentication
+			current.TemplateVersion = auditExportTemplateVersion
+			current.AuthenticationEventAsOf = authAsOf
+			current.AuthenticationEventHeadID = authHeadID
 		case "PRIVACY_PACKAGE":
 			// The privacy service injects an encrypted, immutable package into
 			// FrozenPayload before approval. Empty payloads fail closed.
@@ -457,7 +501,10 @@ func (s *Service) DecideExport(ctx context.Context, identifier string, expected 
 	if approve {
 		action = "EXPORT_APPROVED"
 	}
-	auditInput := audit.Input{ActorType: "USER", ActorID: actor, Action: action, ObjectType: "EXPORT_REQUEST", ObjectID: identifier, Outcome: "SUCCESS", Sensitivity: "HIGH", After: map[string]any{"status": current.Status, "asOf": current.AsOf, "auditHeadSequence": current.AuditHeadSequence}, Reason: reason, CorrelationID: correlation, OccurredAt: now}
+	auditInput := audit.Input{ActorType: "USER", ActorID: actor, Action: action, ObjectType: "EXPORT_REQUEST", ObjectID: identifier, Outcome: "SUCCESS", Sensitivity: "HIGH", After: map[string]any{
+		"status": current.Status, "asOf": current.AsOf, "auditHeadSequence": current.AuditHeadSequence,
+		"authenticationEventAsOf": current.AuthenticationEventAsOf, "authenticationEventHeadId": current.AuthenticationEventHeadID,
+	}, Reason: reason, CorrelationID: correlation, OccurredAt: now}
 	var out ExportRequest
 	atomicAudit := false
 	if atomicRepo, ok := s.Repo.(ExportAtomicAuditRepository); ok {

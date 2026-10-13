@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -87,5 +88,45 @@ func TestMeReturnsAuthoritativeRuntimeAndPlatformScopeContext(t *testing.T) {
 	orgs, ok := payload["organisationIds"].([]any)
 	if !ok || len(orgs) != 0 {
 		t.Fatalf("platform scope must not invent organisation bindings: %#v", payload["organisationIds"])
+	}
+}
+
+func TestCookieAuthenticationWithMalformedAuthorizationStillRequiresCSRF(t *testing.T) {
+	hash, err := identity.HashPassword("a-very-long-development-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	user := identity.User{
+		ID: "csrf-user", Email: "csrf@example.test", DisplayName: "CSRF User",
+		Status: identity.StatusActive, PasswordHash: hash, MFARequired: false,
+		Permissions: map[string]struct{}{"campaign.write": {}},
+	}
+	service := identity.NewService(identity.NewMemoryRepository(user), 30*time.Minute, 12*time.Hour)
+	login, err := service.Login(context.Background(), user.Email, "a-very-long-development-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &Server{deps: Dependencies{Identity: service}}
+	protected := server.require("campaign.write", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	missingCSRF := httptest.NewRequest(http.MethodPost, "/api/v1/campaigns/1/draft", nil)
+	missingCSRF.AddCookie(&http.Cookie{Name: sessionCookieName, Value: login.SessionToken})
+	missingCSRF.Header.Set("Authorization", "Basic malformed")
+	response := httptest.NewRecorder()
+	protected.ServeHTTP(response, missingCSRF)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("malformed Authorization must not bypass cookie CSRF, got %d", response.Code)
+	}
+
+	validCSRF := httptest.NewRequest(http.MethodPost, "/api/v1/campaigns/1/draft", nil)
+	validCSRF.AddCookie(&http.Cookie{Name: sessionCookieName, Value: login.SessionToken})
+	validCSRF.Header.Set("Authorization", "Basic malformed")
+	validCSRF.Header.Set("X-CSRF-Token", login.CSRFToken)
+	response = httptest.NewRecorder()
+	protected.ServeHTTP(response, validCSRF)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("valid CSRF should permit cookie-authenticated request, got %d", response.Code)
 	}
 }

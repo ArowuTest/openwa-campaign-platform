@@ -43,6 +43,7 @@ type Command struct {
 	ExpectedCampaignVersion int64
 	SnapshotID              string
 	MessageVersionID        string
+	CommercialApprovalID    string
 	OrganisationID          string
 	PurposeID               string
 	Channel                 string

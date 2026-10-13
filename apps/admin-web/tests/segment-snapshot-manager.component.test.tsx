@@ -113,7 +113,7 @@ test('comparison evidence clears on segment selection', async () => {
 });
 
 test('an old polling response cannot expose its snapshot in a different campaign', async () => {
-  let tick: () => void = () => {};
+  let tick: (() => void) | undefined;
   const originalSetInterval = window.setInterval.bind(window);
   vi.spyOn(window, 'setInterval').mockImplementation((callback, delay) => {
     if (delay !== 3000) return originalSetInterval(callback, delay) as unknown as ReturnType<typeof window.setInterval>;
@@ -129,8 +129,9 @@ test('an old polling response cannot expose its snapshot in a different campaign
   });
   render(<SegmentSnapshotManager {...props} />);
   await screen.findByRole('button', { name: 'Cancel materialisation' });
-  await act(async () => { tick(); });
-  expect(calls.some((call) => call.path === '/v1/audience-materialisations/job-a')).toBe(true);
+  await waitFor(() => expect(tick).toBeTypeOf('function'));
+  await act(async () => { tick?.(); });
+  await waitFor(() => expect(calls.some((call) => call.path === '/v1/audience-materialisations/job-a')).toBe(true));
   fireEvent.change(screen.getByLabelText('Audience-building campaign'), { target: { value: 'campaign-b' } });
   await screen.findByText('No materialisation jobs');
   await settle(progress, job('job-a', 'campaign-a', 'COMPLETED'));
@@ -266,7 +267,7 @@ test('current scheduling and cancellation display durable evidence with the exac
 });
 
 test('a current scheduling reload can finish while existing-job polling continues', async () => {
-  let tick: () => void = () => {};
+  let tick: (() => void) | undefined;
   const originalSetInterval = window.setInterval.bind(window);
   vi.spyOn(window, 'setInterval').mockImplementation((callback, delay) => {
     if (delay !== 3000) return originalSetInterval(callback, delay) as unknown as ReturnType<typeof window.setInterval>;
@@ -286,9 +287,10 @@ test('a current scheduling reload can finish while existing-job polling continue
   render(<SegmentSnapshotManager {...props} />);
   await screen.findByRole('button', { name: 'Cancel materialisation' });
   await screen.findByText('segment-a evidence 3');
+  await waitFor(() => expect(tick).toBeTypeOf('function'));
   fireEvent.click(screen.getByRole('button', { name: 'Schedule durable snapshot' }));
   await waitFor(() => expect(reads).toBe(2));
-  await act(async () => { tick(); });
+  await act(async () => { tick?.(); });
   await settle(reload, envelope([newJob, job('job-a')]));
   expect(screen.getByText('77% durable')).toBeDefined();
   expect(screen.getByText('Durable audience materialisation scheduled.')).toBeDefined();

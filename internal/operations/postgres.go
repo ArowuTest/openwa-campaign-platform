@@ -623,12 +623,12 @@ func (r *PostgreSQLRepository) CampaignFinancialReconciliation(ctx context.Conte
 
 func scanExport(s interface{ Scan(...any) error }) (ExportRequest, error) {
 	var v ExportRequest
-	var exp, asOf, generated, leaseExp, lastDownloaded, revoked sql.NullTime
+	var exp, asOf, authAsOf, generated, leaseExp, lastDownloaded, revoked sql.NullTime
 	var criteria, frozen []byte
 	err := s.Scan(
 		&v.ID, &v.Kind, &v.ObjectID, &v.Format, &v.Status, &v.RequestedBy, &v.ApprovedBy,
 		&v.Reason, &v.RejectionReason, &criteria, &v.TemplateVersion, &asOf, &frozen,
-		&v.AuditHeadSequence, &v.AuditHeadHash, &v.WatermarkText,
+		&v.AuditHeadSequence, &v.AuditHeadHash, &authAsOf, &v.AuthenticationEventHeadID, &v.WatermarkText,
 		&v.CreatedAt, &v.UpdatedAt, &exp, &v.ObjectKey, &v.ContentType, &v.SHA256,
 		&v.SizeBytes, &v.FailureCode, &v.FailureDetail, &generated,
 		&v.DownloadCount, &lastDownloaded, &revoked, &v.RevokedBy, &v.RevocationReason,
@@ -641,6 +641,10 @@ func scanExport(s interface{ Scan(...any) error }) (ExportRequest, error) {
 	if asOf.Valid {
 		t := asOf.Time.UTC()
 		v.AsOf = &t
+	}
+	if authAsOf.Valid {
+		t := authAsOf.Time.UTC()
+		v.AuthenticationEventAsOf = &t
 	}
 	if generated.Valid {
 		t := generated.Time.UTC()
@@ -670,7 +674,8 @@ func scanExport(s interface{ Scan(...any) error }) (ExportRequest, error) {
 const exportSelect = `SELECT
  id::text,kind,coalesce(object_id::text,''),format,status,requested_by::text,coalesce(approved_by::text,''),
  reason,coalesce(rejection_reason,''),criteria,template_version,as_of,frozen_payload,
- coalesce(audit_head_sequence,0),coalesce(audit_head_hash,''),coalesce(watermark_text,''),
+ coalesce(audit_head_sequence,0),coalesce(audit_head_hash,''),authentication_event_as_of,
+ coalesce(authentication_event_head_id::text,''),coalesce(watermark_text,''),
  created_at,updated_at,expires_at,coalesce(object_key,''),coalesce(content_type,''),coalesce(sha256,''),
  coalesce(size_bytes,0),coalesce(failure_code,''),coalesce(failure_detail,''),generated_at,
  download_count,last_downloaded_at,revoked_at,coalesce(revoked_by::text,''),coalesce(revocation_reason,''),
@@ -686,12 +691,19 @@ func insertExport(ctx context.Context, exec exportExecer, v ExportRequest) error
 	if strings.TrimSpace(criteria) == "" {
 		criteria = `{}`
 	}
+	var frozen any
+	if len(v.FrozenPayload) > 0 {
+		frozen = string(v.FrozenPayload)
+	}
 	_, err := exec.ExecContext(ctx, `INSERT INTO export_requests(
- id,kind,object_id,format,status,requested_by,reason,criteria,template_version,watermark_text,
- created_at,updated_at,version
-) VALUES($1::uuid,$2,NULLIF($3,'')::uuid,$4,$5,$6::uuid,$7,$8::jsonb,$9,NULLIF($10,''),$11,$12,$13)`,
+ id,kind,object_id,format,status,requested_by,reason,criteria,template_version,
+ authentication_event_as_of,authentication_event_head_id,watermark_text,
+ created_at,updated_at,version,frozen_payload
+) VALUES($1::uuid,$2,NULLIF($3,'')::uuid,$4,$5,$6::uuid,$7,$8::jsonb,$9,$10,
+ NULLIF($11,'')::uuid,NULLIF($12,''),$13,$14,$15,$16::jsonb)`,
 		v.ID, v.Kind, v.ObjectID, v.Format, v.Status, v.RequestedBy, v.Reason, criteria,
-		v.TemplateVersion, v.WatermarkText, v.CreatedAt, v.UpdatedAt, v.Version)
+		v.TemplateVersion, v.AuthenticationEventAsOf, v.AuthenticationEventHeadID, v.WatermarkText,
+		v.CreatedAt, v.UpdatedAt, v.Version, frozen)
 	return err
 }
 
@@ -745,6 +757,9 @@ func (r *PostgreSQLRepository) ListExports(ctx context.Context, query ExportQuer
 	if value := strings.ToUpper(strings.TrimSpace(query.Kind)); value != "" {
 		add("kind=$%d", value)
 	}
+	if value := strings.TrimSpace(query.ObjectID); value != "" {
+		add("object_id=NULLIF($%d,'')::uuid", value)
+	}
 	if value := strings.TrimSpace(query.RequestedBy); value != "" {
 		add("requested_by=NULLIF($%d,'')::uuid", value)
 	}
@@ -790,12 +805,15 @@ func updateExport(ctx context.Context, exec exportExecer, v ExportRequest, expec
 	res, err := exec.ExecContext(ctx, `UPDATE export_requests SET
  status=$2,approved_by=NULLIF($3,'')::uuid,rejection_reason=NULLIF($4,''),expires_at=$5,
  criteria=$6::jsonb,template_version=$7,as_of=$8,frozen_payload=$9::jsonb,
- audit_head_sequence=NULLIF($10,0),audit_head_hash=NULLIF($11,''),watermark_text=NULLIF($12,''),
- revoked_at=$13,revoked_by=NULLIF($14,'')::uuid,revocation_reason=NULLIF($15,''),
- updated_at=$16,version=version+1
- WHERE id=$1::uuid AND version=$17`,
+ audit_head_sequence=NULLIF($10,0),audit_head_hash=NULLIF($11,''),
+ authentication_event_as_of=$12,authentication_event_head_id=NULLIF($13,'')::uuid,
+ watermark_text=NULLIF($14,''),
+ revoked_at=$15,revoked_by=NULLIF($16,'')::uuid,revocation_reason=NULLIF($17,''),
+ updated_at=$18,version=version+1
+ WHERE id=$1::uuid AND version=$19`,
 		v.ID, v.Status, v.ApprovedBy, v.RejectionReason, v.ExpiresAt, string(v.Criteria),
-		v.TemplateVersion, v.AsOf, frozen, v.AuditHeadSequence, v.AuditHeadHash, v.WatermarkText,
+		v.TemplateVersion, v.AsOf, frozen, v.AuditHeadSequence, v.AuditHeadHash,
+		v.AuthenticationEventAsOf, v.AuthenticationEventHeadID, v.WatermarkText,
 		v.RevokedAt, v.RevokedBy, v.RevocationReason, v.UpdatedAt, expected)
 	if err != nil {
 		return v, err

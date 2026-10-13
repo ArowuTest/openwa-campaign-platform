@@ -530,7 +530,7 @@ func (s *Service) CreateRevision(ctx context.Context, previousID string, expecte
 	if err != nil {
 		return Review{}, err
 	}
-	if previous.Version != expected || previous.Status != StatusApproved {
+	if previous.Version != expected || (previous.Status != StatusApproved && previous.Status != StatusDraft) {
 		return Review{}, ErrConflict
 	}
 	input.OrganisationID = previous.OrganisationID

@@ -76,10 +76,11 @@ func TestAudienceCannotExceedAuthorisedMaximum(t *testing.T) {
 
 func TestConcurrentTransitionsUseOptimisticConcurrency(t *testing.T) {
 	repo := NewMemoryRepository()
-	service := NewService(repo)
+	service := NewService(repo).WithCommercialApprovals(commercialGateStub{id: "commercial-current"})
 	entity := baseCampaign(t)
 	entity.Status = StatusScheduled
 	entity.Version = 9
+	entity.CommercialApprovalID = "commercial-current"
 	if err := repo.Create(context.Background(), entity); err != nil {
 		t.Fatal(err)
 	}

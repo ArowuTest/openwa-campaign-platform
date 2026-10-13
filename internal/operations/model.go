@@ -210,40 +210,42 @@ const (
 )
 
 type ExportRequest struct {
-	ID                string          `json:"id"`
-	Kind              string          `json:"kind"`
-	ObjectID          string          `json:"objectId"`
-	Format            string          `json:"format"`
-	Status            ExportStatus    `json:"status"`
-	RequestedBy       string          `json:"requestedBy"`
-	ApprovedBy        string          `json:"approvedBy,omitempty"`
-	Reason            string          `json:"reason"`
-	RejectionReason   string          `json:"rejectionReason,omitempty"`
-	Criteria          json.RawMessage `json:"criteria,omitempty"`
-	TemplateVersion   string          `json:"templateVersion"`
-	AsOf              *time.Time      `json:"asOf,omitempty"`
-	FrozenPayload     json.RawMessage `json:"-"`
-	AuditHeadSequence uint64          `json:"auditHeadSequence,omitempty"`
-	AuditHeadHash     string          `json:"auditHeadHash,omitempty"`
-	WatermarkText     string          `json:"watermarkText,omitempty"`
-	CreatedAt         time.Time       `json:"createdAt"`
-	UpdatedAt         time.Time       `json:"updatedAt"`
-	ExpiresAt         *time.Time      `json:"expiresAt,omitempty"`
-	ObjectKey         string          `json:"objectKey,omitempty"`
-	ContentType       string          `json:"contentType,omitempty"`
-	SHA256            string          `json:"sha256,omitempty"`
-	SizeBytes         int64           `json:"sizeBytes,omitempty"`
-	FailureCode       string          `json:"failureCode,omitempty"`
-	FailureDetail     string          `json:"failureDetail,omitempty"`
-	GeneratedAt       *time.Time      `json:"generatedAt,omitempty"`
-	DownloadCount     int64           `json:"downloadCount"`
-	LastDownloadedAt  *time.Time      `json:"lastDownloadedAt,omitempty"`
-	RevokedAt         *time.Time      `json:"revokedAt,omitempty"`
-	RevokedBy         string          `json:"revokedBy,omitempty"`
-	RevocationReason  string          `json:"revocationReason,omitempty"`
-	LeaseOwner        string          `json:"-"`
-	LeaseExpiresAt    *time.Time      `json:"-"`
-	Version           int64           `json:"version"`
+	ID                        string          `json:"id"`
+	Kind                      string          `json:"kind"`
+	ObjectID                  string          `json:"objectId"`
+	Format                    string          `json:"format"`
+	Status                    ExportStatus    `json:"status"`
+	RequestedBy               string          `json:"requestedBy"`
+	ApprovedBy                string          `json:"approvedBy,omitempty"`
+	Reason                    string          `json:"reason"`
+	RejectionReason           string          `json:"rejectionReason,omitempty"`
+	Criteria                  json.RawMessage `json:"criteria,omitempty"`
+	TemplateVersion           string          `json:"templateVersion"`
+	AsOf                      *time.Time      `json:"asOf,omitempty"`
+	FrozenPayload             json.RawMessage `json:"-"`
+	AuditHeadSequence         uint64          `json:"auditHeadSequence,omitempty"`
+	AuditHeadHash             string          `json:"auditHeadHash,omitempty"`
+	AuthenticationEventAsOf   *time.Time      `json:"authenticationEventAsOf,omitempty"`
+	AuthenticationEventHeadID string          `json:"authenticationEventHeadId,omitempty"`
+	WatermarkText             string          `json:"watermarkText,omitempty"`
+	CreatedAt                 time.Time       `json:"createdAt"`
+	UpdatedAt                 time.Time       `json:"updatedAt"`
+	ExpiresAt                 *time.Time      `json:"expiresAt,omitempty"`
+	ObjectKey                 string          `json:"objectKey,omitempty"`
+	ContentType               string          `json:"contentType,omitempty"`
+	SHA256                    string          `json:"sha256,omitempty"`
+	SizeBytes                 int64           `json:"sizeBytes,omitempty"`
+	FailureCode               string          `json:"failureCode,omitempty"`
+	FailureDetail             string          `json:"failureDetail,omitempty"`
+	GeneratedAt               *time.Time      `json:"generatedAt,omitempty"`
+	DownloadCount             int64           `json:"downloadCount"`
+	LastDownloadedAt          *time.Time      `json:"lastDownloadedAt,omitempty"`
+	RevokedAt                 *time.Time      `json:"revokedAt,omitempty"`
+	RevokedBy                 string          `json:"revokedBy,omitempty"`
+	RevocationReason          string          `json:"revocationReason,omitempty"`
+	LeaseOwner                string          `json:"-"`
+	LeaseExpiresAt            *time.Time      `json:"-"`
+	Version                   int64           `json:"version"`
 }
 
 type ExportQuery struct {
@@ -251,6 +253,7 @@ type ExportQuery struct {
 	AfterID        string
 	Status         ExportStatus
 	Kind           string
+	ObjectID       string
 	RequestedBy    string
 	Limit          int
 }

@@ -53,7 +53,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"net/url"
 	"reflect"
 	"runtime"
 	"strconv"
@@ -135,35 +134,6 @@ func open(ctx context.Context, dsn string) (*conn, error) {
 	}
 	C.PQclear(result)
 	return &conn{pg: pg}, nil
-}
-
-func withConnectTimeout(ctx context.Context, dsn string) string {
-	timeout := 10 * time.Second
-	if deadline, ok := ctx.Deadline(); ok {
-		remaining := time.Until(deadline)
-		if remaining > 0 && remaining < timeout {
-			timeout = remaining
-		}
-	}
-	seconds := int(math.Ceil(timeout.Seconds()))
-	if seconds < 1 {
-		seconds = 1
-	}
-	if parsed, err := url.Parse(dsn); err == nil && (parsed.Scheme == "postgres" || parsed.Scheme == "postgresql") {
-		query := parsed.Query()
-		if strings.TrimSpace(query.Get("connect_timeout")) == "" {
-			query.Set("connect_timeout", strconv.Itoa(seconds))
-			parsed.RawQuery = query.Encode()
-		}
-		return parsed.String()
-	}
-	for _, field := range strings.Fields(dsn) {
-		key, _, ok := strings.Cut(field, "=")
-		if ok && strings.EqualFold(strings.TrimSpace(key), "connect_timeout") {
-			return dsn
-		}
-	}
-	return dsn + " connect_timeout=" + strconv.Itoa(seconds)
 }
 
 func (c *conn) Prepare(query string) (driver.Stmt, error) {

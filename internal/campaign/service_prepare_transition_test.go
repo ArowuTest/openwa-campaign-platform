@@ -10,16 +10,17 @@ func TestServicePrepareTransitionDoesNotPersist(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 8, 10, 13, 0, 0, 0, time.UTC)
 	entity := Campaign{
-		ID:        "campaign-atomic-1",
-		Status:    StatusScheduled,
-		Version:   7,
-		UpdatedAt: now.Add(-time.Minute),
+		ID:                   "campaign-atomic-1",
+		Status:               StatusScheduled,
+		Version:              7,
+		CommercialApprovalID: "commercial-current",
+		UpdatedAt:            now.Add(-time.Minute),
 	}
 	repository := NewMemoryRepository()
 	if err := repository.Create(ctx, entity); err != nil {
 		t.Fatal(err)
 	}
-	service := NewService(repository)
+	service := NewService(repository).WithCommercialApprovals(commercialGateStub{id: "commercial-current"})
 	service.clock = func() time.Time { return now }
 
 	prepared, err := service.PrepareTransition(ctx, entity.ID, TransitionInput{

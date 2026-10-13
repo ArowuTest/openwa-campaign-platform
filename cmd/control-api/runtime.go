@@ -102,7 +102,8 @@ func buildMemoryRuntime(cfg config.Config, protector *sharedcrypto.MSISDNProtect
 		return nil, fmt.Errorf("bootstrap administrator: %w", err)
 	}
 	memorySessions := identity.NewMemorySessionRepository()
-	identityService := identity.NewPersistentServiceWithEvents(adminStore, memorySessions, identity.NewMemoryChallengeRepository(), identity.NewMemoryEventRecorder(), cfg.SessionIdleTimeout, cfg.SessionAbsoluteTimeout)
+	authenticationEvents := identity.NewMemoryEventRecorder()
+	identityService := identity.NewPersistentServiceWithEvents(adminStore, memorySessions, identity.NewMemoryChallengeRepository(), authenticationEvents, cfg.SessionIdleTimeout, cfg.SessionAbsoluteTimeout)
 	identityAdministration := identity.NewAdministrationService(adminStore, memorySessions)
 	orgs := organisation.NewService(organisation.NewMemoryRepository())
 	organisationPolicies := &organisation.PolicyAdministration{Store: organisation.NewMemoryPolicyStore(), Organisations: orgs}
@@ -173,7 +174,7 @@ func buildMemoryRuntime(cfg config.Config, protector *sharedcrypto.MSISDNProtect
 		m, err := executionStore.Metrics(ctx, id)
 		return campaignworkspace.DeliveryMetrics{Authorised: m.Authorised, Queued: m.Queued, Pending: m.Pending, Submitted: m.Submitted, Sent: m.Sent, Delivered: m.Delivered, Read: m.Read, Unknown: m.Unknown}, err
 	})}
-	routingPlans := &execution.RoutingAdministration{Store: execution.NewMemoryRoutingPlanStore(), Campaigns: campaigns, ProviderCapabilities: providerCapabilities, GatewayPools: gatewayPools}
+	routingPlans := &execution.RoutingAdministration{Store: execution.NewMemoryRoutingPlanStore(), Campaigns: campaigns, ProviderCapabilities: providerCapabilities, GatewayPools: gatewayPools, PacingPolicies: pacingPolicies}
 	applyMetaRoutingRuntime(routingPlans, metaRuntime, cfg.MetaHealthStaleAfter)
 	shardReallocations := &execution.ReallocationAdministration{Store: execution.NewMemoryShardRepository()}
 	executionCoordinator.RoutingPlans = routingPlans
@@ -183,7 +184,7 @@ func buildMemoryRuntime(cfg config.Config, protector *sharedcrypto.MSISDNProtect
 	alertStore := operations.NewMemoryAlertStore()
 	alertStore.IncidentRepo = operationsRepo
 	alertPolicies := &operations.AlertAdministration{Store: alertStore}
-	operationsService := &operations.Service{Repo: operationsRepo, Audit: auditRecorder, AuditRepository: auditRepository, Deliveries: deliveryEvents, ReportingPrivacy: reportingPrivacy, Alerting: alertStore}
+	operationsService := &operations.Service{Repo: operationsRepo, Audit: auditRecorder, AuditRepository: auditRepository, AuthenticationEvents: authenticationEvents, Deliveries: deliveryEvents, ReportingPrivacy: reportingPrivacy, Alerting: alertStore}
 	alertEvaluator := &operations.AlertEvaluator{Store: alertStore, Dashboard: operationsService}
 	platformRetentionStore := retention.NewMemoryStore()
 	platformRetention := &retention.Administration{Store: platformRetentionStore}
@@ -255,7 +256,8 @@ func buildPostgreSQLRuntime(ctx context.Context, cfg config.Config, protector *s
 		logger.Warn("bootstrap super-administrator created; rotate bootstrap deployment secrets immediately", "email", cfg.BootstrapAdminEmail)
 	}
 	sessionRepo := &postgresrepo.IdentitySessionRepository{DB: db}
-	identityService := identity.NewPersistentServiceWithEvents(identityRepo, sessionRepo, &postgresrepo.IdentityChallengeRepository{DB: db}, &postgresrepo.AuthenticationEventRecorder{DB: db}, cfg.SessionIdleTimeout, cfg.SessionAbsoluteTimeout)
+	authenticationEvents := &postgresrepo.AuthenticationEventRecorder{DB: db}
+	identityService := identity.NewPersistentServiceWithEvents(identityRepo, sessionRepo, &postgresrepo.IdentityChallengeRepository{DB: db}, authenticationEvents, cfg.SessionIdleTimeout, cfg.SessionAbsoluteTimeout)
 	identityAdministration := identity.NewAdministrationService(&postgresrepo.IdentityAdministrationRepository{DB: db, Secrets: secretBox}, sessionRepo)
 	filterStore := &postgresrepo.FilterDefinitionStore{DB: db}
 	filters, err := buildFilterRuntime(ctx, filterStore)
@@ -347,7 +349,7 @@ func buildPostgreSQLRuntime(ctx context.Context, cfg config.Config, protector *s
 		m, err := executionStore.Metrics(ctx, id)
 		return campaignworkspace.DeliveryMetrics{Authorised: m.Authorised, Queued: m.Queued, Pending: m.Pending, Submitted: m.Submitted, Sent: m.Sent, Delivered: m.Delivered, Read: m.Read, Unknown: m.Unknown}, err
 	})}
-	routingPlans := &execution.RoutingAdministration{Store: &execution.PostgreSQLRoutingPlanStore{DB: db}, Campaigns: campaigns, ProviderCapabilities: providerCapabilities, GatewayPools: gatewayPools}
+	routingPlans := &execution.RoutingAdministration{Store: &execution.PostgreSQLRoutingPlanStore{DB: db}, Campaigns: campaigns, ProviderCapabilities: providerCapabilities, GatewayPools: gatewayPools, PacingPolicies: pacingPolicies}
 	applyMetaRoutingRuntime(routingPlans, metaRuntime, cfg.MetaHealthStaleAfter)
 	shardReallocations := &execution.ReallocationAdministration{Store: &execution.PostgreSQLShardRepository{DB: db}}
 	executionCoordinator.RoutingPlans = routingPlans
@@ -356,7 +358,7 @@ func buildPostgreSQLRuntime(ctx context.Context, cfg config.Config, protector *s
 	alertStore := &operations.PostgreSQLAlertStore{DB: db}
 	alertPolicies := &operations.AlertAdministration{Store: alertStore}
 	operationsRepo := &operations.PostgreSQLRepository{DB: db, RuntimeHealth: &operations.PlatformGatewayRuntimeHealthResolver{Configurations: configurations, FallbackStaleAfter: cfg.GatewayStaleAfter}, FallbackGatewayStaleAfter: cfg.GatewayStaleAfter}
-	operationsService := &operations.Service{Repo: operationsRepo, Audit: auditRecorder, AuditRepository: auditRepository, Deliveries: deliveryEvents, ReportingPrivacy: reportingPrivacy, Alerting: alertStore}
+	operationsService := &operations.Service{Repo: operationsRepo, Audit: auditRecorder, AuditRepository: auditRepository, AuthenticationEvents: authenticationEvents, Deliveries: deliveryEvents, ReportingPrivacy: reportingPrivacy, Alerting: alertStore}
 	alertEvaluator := &operations.AlertEvaluator{Store: alertStore, Dashboard: operationsService}
 	platformRetentionStore := &retention.PostgreSQLStore{DB: db}
 	platformRetention := &retention.Administration{Store: platformRetentionStore}
@@ -398,7 +400,7 @@ func buildPostgreSQLRuntime(ctx context.Context, cfg config.Config, protector *s
 		SessionTTL:  24 * time.Hour,
 	}
 	releases := &orchestration.ReleaseService{
-		Campaigns: campaigns, Organisations: orgs, Snapshots: snapshots,
+		Campaigns: campaigns, Organisations: orgs, CommercialApprovals: commercialService, Snapshots: snapshots,
 		Store: &orchestration.PostgreSQLStore{DB: db}, Eligibility: orchestration.SQLFinalEligibilityChecker{},
 		PilotAdmission: func(ctx context.Context, entity campaign.Campaign) error {
 			_, err := executionCoordinator.ValidateDayOnePilot(ctx, entity)
@@ -518,6 +520,9 @@ const controlSchemaReadinessQuery = `SELECT
   AND to_regclass('public.campaign_execution_leases') IS NOT NULL
   AND to_regclass('public.operations_incidents') IS NOT NULL
   AND to_regclass('public.export_requests') IS NOT NULL
+  AND to_regclass('public.authentication_events') IS NOT NULL
+  AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='export_requests' AND column_name='authentication_event_as_of')
+  AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='export_requests' AND column_name='authentication_event_head_id')
   AND to_regclass('public.export_download_grants') IS NOT NULL
   AND to_regclass('public.privacy_cases') IS NOT NULL
   AND to_regclass('public.privacy_legal_holds') IS NOT NULL
@@ -534,6 +539,10 @@ const controlSchemaReadinessQuery = `SELECT
   AND to_regclass('public.audience_profile_conflicts') IS NOT NULL
   AND to_regclass('public.organisation_policy_versions') IS NOT NULL
   AND to_regclass('public.campaign_commercial_approvals') IS NOT NULL
+  AND to_regclass('public.campaign_commercial_events') IS NOT NULL
+  AND EXISTS (SELECT 1 FROM pg_index WHERE indexrelid=to_regclass('public.campaign_commercial_events_record_time_idx') AND indrelid=to_regclass('public.campaign_commercial_events') AND indisvalid AND indisready)
+  AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='campaign_commercial_events_append_only' AND tgrelid=to_regclass('public.campaign_commercial_events') AND NOT tgisinternal AND tgenabled IN ('O','A'))
+  AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='campaign_commercial_events_no_truncate' AND tgrelid=to_regclass('public.campaign_commercial_events') AND NOT tgisinternal AND tgenabled IN ('O','A'))
   AND to_regclass('public.audience_materialisation_jobs') IS NOT NULL
   AND to_regclass('public.sender_pacing_policies') IS NOT NULL
   AND to_regclass('public.sender_pacing_runtime') IS NOT NULL

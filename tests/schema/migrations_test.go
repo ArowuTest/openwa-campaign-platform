@@ -474,3 +474,70 @@ func TestMetaUpgradeMigrationsNormalizeLegacyInvalidEvidenceBeforeConstraints(t 
 		}
 	}
 }
+
+func TestMessageMediaRightsMigrationAddsDurableEvidenceWithoutFabricatedBackfill(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(migrationDirectory(t), "0097_message_media_rights_evidence.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(content)
+	for _, required := range []string{
+		"ADD COLUMN IF NOT EXISTS rights_basis text",
+		"ADD COLUMN IF NOT EXISTS rights_reference text",
+		"ADD COLUMN IF NOT EXISTS rights_expires_at timestamptz",
+		"trusted_assets_rights_shape_check",
+		"rights_basis IN ('OWNED','LICENSED','CLIENT_SUPPLIED','PUBLIC_DOMAIN')",
+		"DROP CONSTRAINT IF EXISTS trusted_assets_purpose_sha256_checksum_byte_size_key",
+		"trusted_assets_message_rights_expiry_idx",
+	} {
+		if !strings.Contains(source, required) {
+			t.Fatalf("media-rights migration missing %q", required)
+		}
+	}
+	if strings.Contains(source, "UPDATE trusted_assets SET rights_basis") {
+		t.Fatal("migration must not fabricate rights authority for legacy media")
+	}
+}
+
+func TestRoutingPlanApprovalEvidenceMigrationStrengthensEvidenceWithoutFabricatedBackfill(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(migrationDirectory(t), "0098_routing_plan_approval_reason.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(content)
+	for _, required := range []string{
+		"ADD COLUMN IF NOT EXISTS approval_reason text NULL",
+		"ADD COLUMN IF NOT EXISTS approved_campaign_version bigint NULL",
+		"campaign_routing_plans_approval_reason_check",
+		"length(btrim(approval_reason)) BETWEEN 8 AND 1000",
+		"campaign_routing_plans_approved_campaign_version_check",
+		"approved_campaign_version IS NULL OR approved_campaign_version > 0",
+	} {
+		if !strings.Contains(source, required) {
+			t.Fatalf("routing-plan approval-evidence migration missing %q", required)
+		}
+	}
+	if strings.Contains(strings.ToUpper(source), "UPDATE CAMPAIGN_ROUTING_PLANS") {
+		t.Fatal("migration must not fabricate approval evidence for historical routing plans")
+	}
+}
+
+func TestCommercialEventHistoryMigrationIsVersionedAndAppendOnly(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join(migrationDirectory(t), "0099_commercial_event_history.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(content)
+	for _, required := range []string{
+		"CREATE TABLE campaign_commercial_events",
+		"UNIQUE(commercial_record_id,record_version)",
+		"campaign_commercial_events_append_only",
+		"BEFORE UPDATE OR DELETE ON campaign_commercial_events",
+		"campaign_commercial_events_no_truncate",
+		"BEFORE TRUNCATE ON campaign_commercial_events",
+	} {
+		if !strings.Contains(source, required) {
+			t.Fatalf("commercial event-history migration missing %q", required)
+		}
+	}
+}

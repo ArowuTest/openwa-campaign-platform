@@ -61,7 +61,18 @@ func (r *CampaignRepository) CompareAndSwap(ctx context.Context, v campaign.Camp
 	if r == nil || r.DB == nil {
 		return errors.New("database is required")
 	}
-	return r.compareAndSwapWith(ctx, r.DB, v, expected)
+	tx, err := r.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := lockCommercialApprovalForTransition(ctx, tx, v); err != nil {
+		return err
+	}
+	if err := r.compareAndSwapWith(ctx, tx, v, expected); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (r *CampaignRepository) CompareAndSwapInTx(
@@ -73,7 +84,39 @@ func (r *CampaignRepository) CompareAndSwapInTx(
 	if r == nil || r.DB == nil || tx == nil {
 		return errors.New("database transaction is required")
 	}
+	if err := lockCommercialApprovalForTransition(ctx, tx, v); err != nil {
+		return err
+	}
 	return r.compareAndSwapWith(ctx, tx, v, expected)
+}
+
+func lockCommercialApprovalForTransition(ctx context.Context, tx *sql.Tx, v campaign.Campaign) error {
+	switch v.Status {
+	case campaign.StatusCommercialApproved, campaign.StatusFinalApprovalPending, campaign.StatusScheduled, campaign.StatusDispatching:
+	default:
+		return nil
+	}
+	approvalID := strings.TrimSpace(v.CommercialApprovalID)
+	if approvalID == "" {
+		return nil
+	}
+	var status string
+	err := tx.QueryRowContext(ctx, `
+SELECT status
+FROM campaign_commercial_approvals
+WHERE id=$1::uuid
+  AND campaign_id=$2::uuid
+FOR SHARE`, approvalID, v.ID).Scan(&status)
+	if errors.Is(err, sql.ErrNoRows) {
+		return campaign.ErrConflict
+	}
+	if err != nil {
+		return fmt.Errorf("lock commercial approval: %w", err)
+	}
+	if status != "APPROVED" {
+		return campaign.ErrConflict
+	}
+	return nil
 }
 
 func (r *CampaignRepository) compareAndSwapWith(

@@ -36,6 +36,14 @@ type Account struct {
 	UpdatedAt   time.Time  `json:"updatedAt"`
 }
 
+type RoleDefinition struct {
+	Code        string   `json:"code"`
+	Name        string   `json:"name"`
+	Description string   `json:"description,omitempty"`
+	SystemRole  bool     `json:"systemRole"`
+	Permissions []string `json:"permissions"`
+}
+
 type CreateAccountInput struct {
 	Email             string   `json:"email"`
 	DisplayName       string   `json:"displayName"`
@@ -70,6 +78,7 @@ type ProvisionedAccount struct {
 
 type AdministrationRepository interface {
 	ListAccounts(context.Context) ([]Account, error)
+	ListRoles(context.Context) ([]RoleDefinition, error)
 	GetAccount(context.Context, string) (Account, error)
 	CreateAccount(context.Context, Account, string, string, string, string) error
 	CompareAndSwapAccount(context.Context, Account, int64, string, string) error
@@ -92,6 +101,22 @@ func (s *AdministrationService) List(ctx context.Context) ([]Account, error) {
 		return nil, errors.New("identity administration repository is required")
 	}
 	return s.repository.ListAccounts(ctx)
+}
+func (s *AdministrationService) ListRoles(ctx context.Context) ([]RoleDefinition, error) {
+	if s == nil || s.repository == nil {
+		return nil, errors.New("identity administration repository is required")
+	}
+	roles, err := s.repository.ListRoles(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]RoleDefinition, len(roles))
+	for i, role := range roles {
+		out[i] = role
+		out[i].Permissions = append([]string(nil), role.Permissions...)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Code < out[j].Code })
+	return out, nil
 }
 func (s *AdministrationService) Get(ctx context.Context, accountID string) (Account, error) {
 	if s == nil || s.repository == nil {
@@ -295,27 +320,61 @@ type MemoryAdministrationRepository struct {
 	passwords       map[string]string
 	totp            map[string]string
 	roles           map[string]struct{}
+	roleDefinitions map[string]RoleDefinition
 	rolePermissions map[string][]string
 	loginState      map[string]memoryLoginState
+}
+
+var builtinRoleDefinitions = map[string]RoleDefinition{
+	"SUPER_ADMIN": {
+		Code: "SUPER_ADMIN", Name: "Super administrator", Description: "Full platform administration.", SystemRole: true,
+		Permissions: []string{"*", "operations.read", "operations.write", "report.read", "export.request", "export.approve", "privacy.read", "privacy.write", "privacy.approve", "privacy.execute", "privacy.hold", "reporting_privacy.write", "reporting_privacy.approve", "audience.contact_status.write", "audience.import_mapping.write", "audience.import_mapping.approve", "audience.import.rollback"},
+	},
+	"CAMPAIGN_OPERATOR": {
+		Code: "CAMPAIGN_OPERATOR", Name: "Campaign operator", Description: "Creates audiences and campaigns but cannot self-approve.", SystemRole: true,
+		Permissions: []string{"organisation.read", "consent.read", "audience.read", "audience.write", "campaign.read", "campaign.write", "operations.read", "operations.write", "report.read", "export.request", "audience.import_mapping.write"},
+	},
+	"COMPLIANCE_REVIEWER": {
+		Code: "COMPLIANCE_REVIEWER", Name: "Compliance reviewer", Description: "Reviews consent evidence and grants or rejects consent-use approvals.", SystemRole: true,
+		Permissions: []string{"organisation.read", "consent.read", "consent.review", "audit.read", "export.approve", "privacy.read", "privacy.write", "privacy.approve", "privacy.hold", "reporting_privacy.write", "reporting_privacy.approve", "audience.contact_status.write", "audience.import_mapping.approve", "audience.import.rollback"},
+	},
+	"CAMPAIGN_APPROVER": {
+		Code: "CAMPAIGN_APPROVER", Name: "Campaign approver", Description: "Approves messages, audiences and final campaign release.", SystemRole: true,
+		Permissions: []string{"campaign.read", "campaign.approve", "audience.read", "consent.read"},
+	},
+	"ANALYST": {
+		Code: "ANALYST", Name: "Analyst", Description: "Views aggregated reports without unrestricted raw identifier access.", SystemRole: true,
+		Permissions: []string{"report.read", "operations.read", "export.request", "campaign.read"},
+	},
+	"TECHNICAL_ADMIN": {
+		Code: "TECHNICAL_ADMIN", Name: "Technical administrator", Description: "Operates sender nodes, sessions and queues.", SystemRole: true,
+		Permissions: []string{"sender.read", "sender.write", "queue.read", "queue.write", "operations.read", "operations.write", "report.read", "export.request", "privacy.read", "privacy.execute"},
+	},
+	"FINANCE_USER": {
+		Code: "FINANCE_USER", Name: "Finance user", Description: "Records quotations, invoices, payment evidence and commercial approvals.", SystemRole: true,
+		Permissions: []string{"finance.read", "finance.write"},
+	},
+	"FINANCE_APPROVER": {
+		Code: "FINANCE_APPROVER", Name: "Finance approver", Description: "Independently approves or revokes campaign commercial evidence.", SystemRole: true,
+		Permissions: []string{"finance.read", "finance.approve"},
+	},
 }
 
 func NewMemoryAdministrationRepository(roles ...string) *MemoryAdministrationRepository {
 	r := &MemoryAdministrationRepository{
 		accounts: map[string]Account{}, byEmail: map[string]string{}, passwords: map[string]string{}, totp: map[string]string{},
-		roles: map[string]struct{}{}, rolePermissions: map[string][]string{}, loginState: map[string]memoryLoginState{},
-	}
-	defaults := map[string][]string{
-		"SUPER_ADMIN":         {"*"},
-		"CAMPAIGN_OPERATOR":   {"organisation.read", "consent.read", "audience.read", "audience.write", "campaign.read", "campaign.write"},
-		"COMPLIANCE_REVIEWER": {"organisation.read", "consent.read", "consent.review", "audit.read"},
-		"CAMPAIGN_APPROVER":   {"campaign.read", "campaign.approve", "audience.read", "consent.read"},
-		"ANALYST":             {"report.read", "campaign.read"},
-		"TECHNICAL_ADMIN":     {"sender.read", "sender.write", "queue.read", "queue.write"},
+		roles: map[string]struct{}{}, roleDefinitions: map[string]RoleDefinition{}, rolePermissions: map[string][]string{}, loginState: map[string]memoryLoginState{},
 	}
 	for _, value := range roles {
 		code := strings.ToUpper(strings.TrimSpace(value))
+		definition, ok := builtinRoleDefinitions[code]
+		if !ok {
+			definition = RoleDefinition{Code: code, Name: code, SystemRole: false, Permissions: []string{}}
+		}
+		definition.Permissions = append([]string(nil), definition.Permissions...)
 		r.roles[code] = struct{}{}
-		r.rolePermissions[code] = append([]string(nil), defaults[code]...)
+		r.roleDefinitions[code] = definition
+		r.rolePermissions[code] = append([]string(nil), definition.Permissions...)
 	}
 	return r
 }
@@ -328,6 +387,18 @@ func (r *MemoryAdministrationRepository) ListAccounts(_ context.Context) ([]Acco
 		out = append(out, cloneAccount(account))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	return out, nil
+}
+func (r *MemoryAdministrationRepository) ListRoles(_ context.Context) ([]RoleDefinition, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]RoleDefinition, 0, len(r.roleDefinitions))
+	for _, role := range r.roleDefinitions {
+		clone := role
+		clone.Permissions = append([]string(nil), role.Permissions...)
+		out = append(out, clone)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Code < out[j].Code })
 	return out, nil
 }
 func (r *MemoryAdministrationRepository) ListAccountPage(_ context.Context, limit int, before *time.Time, beforeID string) ([]Account, error) {

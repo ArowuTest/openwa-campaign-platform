@@ -36,6 +36,27 @@ func (r *IdentityAdministrationRepository) ListAccounts(ctx context.Context) ([]
 	}
 	return out, rows.Err()
 }
+func (r *IdentityAdministrationRepository) ListRoles(ctx context.Context) ([]identity.RoleDefinition, error) {
+	if r == nil || r.DB == nil {
+		return nil, errors.New("identity administration repository is not configured")
+	}
+	rows, err := r.DB.QueryContext(ctx, `SELECT code,name,coalesce(description,''),system_role,permissions FROM roles ORDER BY code`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []identity.RoleDefinition{}
+	for rows.Next() {
+		var role identity.RoleDefinition
+		if err := rows.Scan(&role.Code, &role.Name, &role.Description, &role.SystemRole, &role.Permissions); err != nil {
+			return nil, err
+		}
+		role.Permissions = append([]string(nil), role.Permissions...)
+		out = append(out, role)
+	}
+	return out, rows.Err()
+}
+
 func (r *IdentityAdministrationRepository) ListAccountPage(ctx context.Context, limit int, before *time.Time, beforeID string) ([]identity.Account, error) {
 	if r == nil || r.DB == nil {
 		return nil, errors.New("identity administration repository is not configured")

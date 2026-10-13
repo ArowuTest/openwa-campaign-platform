@@ -188,6 +188,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/v1/assets", s.require("", s.uploadTrustedAsset))
 	mux.Handle("GET /api/v1/assets/{id}", s.require("", s.getTrustedAsset))
 	mux.Handle("POST /api/v1/assets/{id}/revoke", s.require("security.admin", s.revokeTrustedAsset))
+	mux.Handle("GET /api/v1/admin/roles", s.require("identity.admin", s.listInternalRoles))
 	mux.Handle("GET /api/v1/admin/users", s.require("identity.admin", s.listInternalUsers))
 	mux.Handle("POST /api/v1/admin/users", s.require("identity.admin", s.createInternalUser))
 	mux.Handle("PUT /api/v1/admin/users/{id}", s.require("identity.admin", s.updateInternalUser))

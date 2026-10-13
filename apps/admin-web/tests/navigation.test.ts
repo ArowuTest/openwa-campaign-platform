@@ -18,6 +18,14 @@ test('audit navigation requires audit.read and is available to compliance review
   assert.equal(permissionForPath('/audit'), 'audit.read');
 });
 
+test('user administration is visible only to identity administrators', () => {
+  assert.equal(availableNavigation(['identity.admin']).some((item) => item.href === '/admin/users'), true);
+  assert.equal(availableNavigation(['campaign.read']).some((item) => item.href === '/admin/users'), false);
+  assert.equal(permissionForPath('/admin/users'), 'identity.admin');
+  assert.equal(permissionForPath('/admin/users/example'), 'identity.admin');
+  assert.equal(defaultLandingPath(['identity.admin']), '/admin/users');
+});
+
 test('wildcard receives the complete internal navigation', () => {
   const items = availableNavigation(['*']);
   assert.ok(items.length >= 9);

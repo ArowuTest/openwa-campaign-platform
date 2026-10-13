@@ -322,6 +322,27 @@ paths:
       responses:
         '200': { description: Effective pacing policy and source versions }
         '404': { description: No active policy matched }
+  /admin/roles:
+    get:
+      operationId: listInternalRoles
+      summary: List the authoritative internal role catalogue
+      description: Returns role codes, names, descriptions and effective permission keys for identity administrators.
+      responses:
+        '200':
+          description: Internal role catalogue
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required: [code, name, systemRole, permissions]
+                  properties:
+                    code: { type: string }
+                    name: { type: string }
+                    description: { type: string }
+                    systemRole: { type: boolean }
+                    permissions: { type: array, items: { type: string } }
   /admin/users:
     get:
       operationId: listInternalUsers

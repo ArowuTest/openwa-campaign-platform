@@ -13,6 +13,7 @@ export const navigation: readonly NavigationItem[] = [
   { label: 'Organisations', href: '/organisations', permission: 'organisation.read', group: 'Govern', description: 'Internal client records and governance state' },
   { label: 'Consent reviews', href: '/consent-reviews', permission: 'consent.read', group: 'Govern', description: 'Offline consent evidence and maker-checker decisions' },
   { label: 'Privacy and legal holds', href: '/privacy', permission: 'privacy.read', group: 'Govern', description: 'Masked data-subject requests, legal holds and governed exports' },
+  { label: 'Users', href: '/admin/users', permission: 'identity.admin', group: 'Govern', description: 'Provision named operators, roles, MFA policy and active sessions' },
   { label: 'Audience imports', href: '/audiences/imports', permission: 'audience.read', group: 'Operate', description: 'Preview, reconcile and approve governed audience intake' },
   { label: 'Audience builder', href: '/audiences/builder', permission: 'audience.read', group: 'Operate', description: 'Build governed cohorts and immutable snapshots' },
   { label: 'Campaigns', href: '/campaigns', permission: 'campaign.read', group: 'Operate', description: 'Prepare, test, approve and execute campaigns' },
@@ -38,7 +39,7 @@ export function permissionForPath(pathname: string): string | undefined {
 
 export function defaultLandingPath(permissions: readonly string[] | undefined): string {
   if (hasPermission(permissions, 'operations.read')) return '/';
-  const priority = ['/campaigns', '/audiences/imports', '/organisations', '/consent-reviews', '/senders', '/reports'];
+  const priority = ['/campaigns', '/audiences/imports', '/organisations', '/consent-reviews', '/admin/users', '/senders', '/reports'];
   const available = availableNavigation(permissions);
   for (const href of priority) {
     if (available.some((item) => item.href === href)) return href;

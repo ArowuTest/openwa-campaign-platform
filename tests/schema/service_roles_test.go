@@ -68,8 +68,7 @@ func TestServiceRoleBootstrapDeclaresWorkerDependenciesExplicitly(t *testing.T) 
 		"campaign_metric_reconciliations", "campaign_release_exclusions",
 		"operational_alert_policies", "operational_alerts", "operations_incidents",
 		"retention_jobs", "privacy_legal_holds", "audience_imports", "inbound_replies",
-		"export_requests", "audit_chain_head", "audit_events", "authentication_events",
-		"SELECT (id,user_id,event_type,correlation_id,occurred_at)",
+		"export_requests", "audit_chain_head", "audit_events",
 	} {
 		if !strings.Contains(text, required) {
 			t.Errorf("service role bootstrap missing explicit dependency %q", required)

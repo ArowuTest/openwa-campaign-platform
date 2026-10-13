@@ -691,15 +691,19 @@ func insertExport(ctx context.Context, exec exportExecer, v ExportRequest) error
 	if strings.TrimSpace(criteria) == "" {
 		criteria = `{}`
 	}
+	var frozen any
+	if len(v.FrozenPayload) > 0 {
+		frozen = string(v.FrozenPayload)
+	}
 	_, err := exec.ExecContext(ctx, `INSERT INTO export_requests(
  id,kind,object_id,format,status,requested_by,reason,criteria,template_version,
  authentication_event_as_of,authentication_event_head_id,watermark_text,
- created_at,updated_at,version
+ created_at,updated_at,version,frozen_payload
 ) VALUES($1::uuid,$2,NULLIF($3,'')::uuid,$4,$5,$6::uuid,$7,$8::jsonb,$9,$10,
- NULLIF($11,'')::uuid,NULLIF($12,''),$13,$14,$15)`,
+ NULLIF($11,'')::uuid,NULLIF($12,''),$13,$14,$15,$16::jsonb)`,
 		v.ID, v.Kind, v.ObjectID, v.Format, v.Status, v.RequestedBy, v.Reason, criteria,
 		v.TemplateVersion, v.AuthenticationEventAsOf, v.AuthenticationEventHeadID, v.WatermarkText,
-		v.CreatedAt, v.UpdatedAt, v.Version)
+		v.CreatedAt, v.UpdatedAt, v.Version, frozen)
 	return err
 }
 

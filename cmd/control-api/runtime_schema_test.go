@@ -43,3 +43,17 @@ func TestControlSchemaReadinessRequiresSenderOperationalMetadataColumns(t *testi
 		}
 	}
 }
+
+func TestControlSchemaReadinessRequiresCommercialEvidenceSchema(t *testing.T) {
+	for _, required := range []string{
+		"to_regclass('public.campaign_commercial_events') IS NOT NULL",
+		"indexrelid=to_regclass('public.campaign_commercial_events_record_time_idx')",
+		"indrelid=to_regclass('public.campaign_commercial_events') AND indisvalid AND indisready",
+		"tgname='campaign_commercial_events_append_only' AND tgrelid=to_regclass('public.campaign_commercial_events') AND NOT tgisinternal AND tgenabled IN ('O','A')",
+		"tgname='campaign_commercial_events_no_truncate' AND tgrelid=to_regclass('public.campaign_commercial_events') AND NOT tgisinternal AND tgenabled IN ('O','A')",
+	} {
+		if !strings.Contains(controlSchemaReadinessQuery, required) {
+			t.Fatalf("schema readiness query does not require commercial evidence component %s", required)
+		}
+	}
+}

@@ -539,6 +539,10 @@ const controlSchemaReadinessQuery = `SELECT
   AND to_regclass('public.audience_profile_conflicts') IS NOT NULL
   AND to_regclass('public.organisation_policy_versions') IS NOT NULL
   AND to_regclass('public.campaign_commercial_approvals') IS NOT NULL
+  AND to_regclass('public.campaign_commercial_events') IS NOT NULL
+  AND EXISTS (SELECT 1 FROM pg_index WHERE indexrelid=to_regclass('public.campaign_commercial_events_record_time_idx') AND indrelid=to_regclass('public.campaign_commercial_events') AND indisvalid AND indisready)
+  AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='campaign_commercial_events_append_only' AND tgrelid=to_regclass('public.campaign_commercial_events') AND NOT tgisinternal AND tgenabled IN ('O','A'))
+  AND EXISTS (SELECT 1 FROM pg_trigger WHERE tgname='campaign_commercial_events_no_truncate' AND tgrelid=to_regclass('public.campaign_commercial_events') AND NOT tgisinternal AND tgenabled IN ('O','A'))
   AND to_regclass('public.audience_materialisation_jobs') IS NOT NULL
   AND to_regclass('public.sender_pacing_policies') IS NOT NULL
   AND to_regclass('public.sender_pacing_runtime') IS NOT NULL

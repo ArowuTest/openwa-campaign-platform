@@ -13,7 +13,9 @@ export type SessionContext = {
 
 export function hasPermission(permissions: readonly string[] | undefined, required: string): boolean {
   if (!permissions || permissions.length === 0 || !required) return false;
-  return permissions.includes('*') || permissions.includes(required);
+  const alternatives = required.split('|').map((value) => value.trim());
+  if (alternatives.some((value) => !value)) return false;
+  return permissions.includes('*') || alternatives.some((value) => permissions.includes(value));
 }
 
 export function safeReturnPath(value: string | null | undefined): string {

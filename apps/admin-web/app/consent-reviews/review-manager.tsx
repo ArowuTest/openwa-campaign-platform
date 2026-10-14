@@ -146,7 +146,15 @@ function buildCreatePayload(data: FormData, scope: ReviewScope) {
   return payload;
 }
 
-export function ConsentReviewManager() {
+export function ConsentReviewManager({ initialReviewId = '' }: { initialReviewId?: string } = {}) {
+  const { session } = useAuth();
+  const canRead = hasPermission(session?.permissions, 'consent.read');
+  const generation = JSON.stringify([initialReviewId, session?.id, session?.sessionId, [...(session?.permissions ?? [])].sort()]);
+  if (!canRead) return <p role="status">Consent review requires consent.read permission.</p>;
+  return <ConsentReviewGeneration key={generation} initialReviewId={initialReviewId} />;
+}
+
+function ConsentReviewGeneration({ initialReviewId }: { initialReviewId: string }) {
   const { session } = useAuth();
   const canWrite = hasPermission(session?.permissions, 'consent.write');
   const canReview = hasPermission(session?.permissions, 'consent.review');
@@ -199,6 +207,22 @@ export function ConsentReviewManager() {
     });
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    if (!initialReviewId) return;
+    let cancelled = false;
+    void apiRequest<ConsentReview>('/v1/consent-reviews/' + encodeURIComponent(initialReviewId))
+      .then((value) => {
+        if (cancelled) return;
+        // Do not overwrite a different record the operator has opened manually.
+        setSelected((current) => current ?? value);
+        setRevisionSource(null);
+      })
+      .catch((error) => {
+        if (!cancelled) setMessage(errorMessage(error, 'The linked consent review could not be opened.'));
+      });
+    return () => { cancelled = true; };
+  }, [initialReviewId]);
 
   async function selectReview(item: ConsentReview) {
     setMessage('');

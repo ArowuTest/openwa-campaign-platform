@@ -9,10 +9,10 @@ The matrix `UI_UX_IMPLEMENTATION_MATRIX.md` was reconciled with the current fron
 
 | Evidence label | Screen IDs | Meaning |
 |---|---:|---|
-| E — bounded source accepted | 11 | Shipped source slice and acceptance tests exist; full operational UAT is still independent |
+| E — bounded source accepted | 12 | Shipped source slice and acceptance tests exist; full operational UAT is still independent |
 | P — partly implemented | 37 | Working source-backed UI exists; specified states/flows or acceptance evidence remain open |
-| M — missing | 17 | No comparable Day-1 operator screen/workflow yet |
-| C — isolated candidate | 2 | Scoped suppression-management work and Alert Centre candidate; neither implies full UAT |
+| M — missing | 15 | No comparable Day-1 operator screen/workflow yet |
+| C — isolated candidate | 3 | Scoped suppression-management, My Work, and Approval Queue; none implies full UAT |
 
 These categories **do not** establish a product completion percentage, WCAG certification, provider UAT or performance certification. They track source-backed coverage only; refresh them after every accepted `main` release.
 
@@ -21,7 +21,7 @@ These categories **do not** establish a product completion percentage, WCAG cert
 ### 0. Release already built work
 - [x] PR #3 inbound review/opt-outs merged to main after source-bound privacy hardening, full feature CI and secure manual suppression.
 - [x] Confirm exact `25638554` on eight Railway application services, both main CI jobs green, public health and anonymous 401; **permitted-operator authenticated smoke remains open**.
-- [ ] Complete candidate `UI-OPS-06` Alert Centre from existing `operations/alerts` APIs: inventory, severity/status filters, history, reasoned versioned acknowledgement. **No new backend**; assignment/resolution remain explicitly outside this candidate.
+- [x] Deliver `UI-OPS-06` Alert Centre from existing `operations/alerts` APIs: PR #4 merged as `7b2c4fe`, main CI green, eight Railway app services exact-SHA SUCCESS. Full authenticated operator UAT and assignment/resolution capability remain separately open.
 
 ### 1. Unblock daily campaign operations — first priority
 - **UI-DASH-02 + UI-CAMP-07**: one permission-aware *My Work / Approval Queue* fed by existing governed campaign, commercial and consent APIs. Route users to authoritative approval detail; no synthetic "approved" state, self-checker shortcut or newly invented claim/reassign operation.

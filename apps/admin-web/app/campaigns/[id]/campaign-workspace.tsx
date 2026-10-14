@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 
 import { StatusBadge } from '../../../components/status-badge';
 import { CampaignDraftEditor } from './campaign-draft-editor';
+import { CampaignClonePanel } from './campaign-clone-panel';
 import { CampaignReadinessPanel } from './campaign-readiness-panel';
 import { CommercialGovernance } from './commercial-governance';
 import { MessageComposer } from './message-composer';
@@ -478,6 +479,7 @@ function CampaignWorkspaceGeneration({ campaignId }: { campaignId: string }) {
 
       {message ? <div className={message.includes('failed') || message.includes('required') ? 'alert alert-danger' : 'alert alert-information'} role="status">{message}</div> : null}
 
+      <CampaignClonePanel key={`${campaign.id}:${campaign.version}`} campaign={campaign} canWrite={canWrite} />
       <CampaignDraftEditor campaign={campaign} onSaved={saved => { if (mounted.current) { setCampaign(saved); setReadinessGeneration(value => value + 1); } }} />
       <CampaignReadinessPanel key={readinessGeneration} campaign={campaign} />
       {['AUDIENCE_VALIDATED','MESSAGE_REVIEW_PENDING','MESSAGE_APPROVED','COMMERCIAL_APPROVED','FINAL_APPROVAL_PENDING','SCHEDULED','DISPATCHING','PAUSED','COMPLETED','COMPLETED_WITH_EXCEPTIONS'].includes(campaign.status)

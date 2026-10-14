@@ -59,6 +59,12 @@ test('unsafe, revoked, missing-purpose and malformed trusted asset responses fai
   expect(await screen.findByText(/Revoked evidence cannot be used to establish consent/)).toBeTruthy();
   expect(await screen.findByText(/Asset purpose does not match consent evidence/)).toBeTruthy();
   expect(await screen.findByText(/Invalid SHA-256 metadata/)).toBeTruthy();
+  // A wrong-purpose or malformed asset can claim status=CLEAN in the server
+  // response, but the UI must not render a reassuring CLEAN badge or digest.
+  expect(screen.getAllByText(/Evidence metadata blocked/)).toHaveLength(3);
+  expect(screen.queryByText('CLEAN')).toBeNull();
+  expect(screen.queryByText('consent-provenance.pdf')).toBeNull();
+  expect(screen.queryByText(digest)).toBeNull();
   expect(screen.queryByText('All evidence verified')).toBeNull();
 });
 

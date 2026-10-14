@@ -152,6 +152,10 @@ function ConsentEvidenceGeneration({
         : null}
       {shown.map((id) => {
         const state = inspections[id];
+        const asset = state?.asset;
+        const acceptableMetadata = Boolean(asset &&
+          asset.purpose === 'CONSENT_EVIDENCE' && asset.status === 'CLEAN' &&
+          sha256Pattern.test(asset.sha256));
         return (
           <article key={id} className="card form-stack" aria-label={'Asset reference ' + id}>
             <div className="section-heading">
@@ -161,19 +165,22 @@ function ConsentEvidenceGeneration({
               </button>
             </div>
             {state?.error ? <p role="alert">{state.error}</p> : null}
-            {state?.asset ? (
+            {asset && !acceptableMetadata ? (
+              <p role="alert">Evidence metadata blocked. {inspectionWarning(asset)} No asset details can be relied on for this consent review.</p>
+            ) : null}
+            {asset && acceptableMetadata ? (
               <div className="form-stack">
                 <dl className="definition-list">
-                  <div><dt>Filename</dt><dd>{state.asset.originalFilename}</dd></div>
-                  <div><dt>Purpose</dt><dd>{state.asset.purpose}</dd></div>
-                  <div><dt>Scan status</dt><dd><StatusBadge status={state.asset.status} /></dd></div>
-                  <div><dt>Media type</dt><dd>{state.asset.mediaType}</dd></div>
-                  <div><dt>File size</dt><dd>{formatSize(state.asset.size)}</dd></div>
-                  <div><dt>SHA-256 digest</dt><dd><code style={{ overflowWrap: 'anywhere' }}>{state.asset.sha256}</code></dd></div>
-                  <div><dt>Asset version</dt><dd>{state.asset.version}</dd></div>
-                  <div><dt>Last updated</dt><dd>{formatDate(state.asset.updatedAt)}</dd></div>
+                  <div><dt>Filename</dt><dd>{asset.originalFilename}</dd></div>
+                  <div><dt>Purpose</dt><dd>{asset.purpose}</dd></div>
+                  <div><dt>Scan status</dt><dd><StatusBadge status={asset.status} /></dd></div>
+                  <div><dt>Media type</dt><dd>{asset.mediaType}</dd></div>
+                  <div><dt>File size</dt><dd>{formatSize(asset.size)}</dd></div>
+                  <div><dt>SHA-256 digest</dt><dd><code style={{ overflowWrap: 'anywhere' }}>{asset.sha256}</code></dd></div>
+                  <div><dt>Asset version</dt><dd>{asset.version}</dd></div>
+                  <div><dt>Last updated</dt><dd>{formatDate(asset.updatedAt)}</dd></div>
                 </dl>
-                <p role="status">{inspectionWarning(state.asset)}</p>
+                <p role="status">{inspectionWarning(asset)}</p>
               </div>
             ) : null}
           </article>

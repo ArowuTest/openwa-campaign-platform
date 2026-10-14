@@ -1,6 +1,10 @@
 'use client';
 
 import { FormEvent, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
+
+import { useAuth } from '../../components/auth-provider';
+import { hasPermission } from '../../lib/session';
 
 import { ControlledExportManager } from '../../components/controlled-export-manager';
 import { StatusBadge } from '../../components/status-badge';
@@ -79,6 +83,7 @@ function MetricMap({ values }: { values: Record<string, number> }) {
 }
 
 export function ReportsConsole() {
+  const { session } = useAuth();
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [organisations, setOrganisations] = useState<Organisation[]>([]);
   const [campaignId, setCampaignId] = useState('');
@@ -206,6 +211,15 @@ export function ReportsConsole() {
         </section>
       ) : null}
 
+      {selectedCampaign && hasPermission(session?.permissions, 'campaign.read') ? (
+        <section className="card">
+          <h2>Completion and reconciliation</h2>
+          <p className="muted">Review campaign delivery obligations, unresolved outcomes and financial evidence before closing the execution lifecycle.</p>
+          <Link href={'/campaigns/' + encodeURIComponent(selectedCampaign.id) + '/reconciliation'}>
+            Open campaign completion and reconciliation
+          </Link>
+        </section>
+      ) : null}
       {selectedCampaign ? <ControlledExportManager campaignId={selectedCampaign.id} campaignName={selectedCampaign.name} /> : null}
 
       {organisationReport ? (

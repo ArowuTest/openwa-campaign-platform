@@ -14,6 +14,7 @@ export const navigation: readonly NavigationItem[] = [
   { label: 'Consent reviews', href: '/consent-reviews', permission: 'consent.read', group: 'Govern', description: 'Offline consent evidence and maker-checker decisions' },
   { label: 'Privacy and legal holds', href: '/privacy', permission: 'privacy.read', group: 'Govern', description: 'Masked data-subject requests, legal holds and governed exports' },
   { label: 'Users', href: '/admin/users', permission: 'identity.admin', group: 'Govern', description: 'Provision named operators, roles, MFA policy and active sessions' },
+  { label: 'My Work', href: '/work', permission: 'campaign.read|consent.read|finance.read', group: 'Operate', description: 'Find pending campaign, consent and commercial reviews' },
   { label: 'Audience imports', href: '/audiences/imports', permission: 'audience.read', group: 'Operate', description: 'Preview, reconcile and approve governed audience intake' },
   { label: 'Audience builder', href: '/audiences/builder', permission: 'audience.read', group: 'Operate', description: 'Build governed cohorts and immutable snapshots' },
   { label: 'Campaigns', href: '/campaigns', permission: 'campaign.read', group: 'Operate', description: 'Prepare, test, approve and execute campaigns' },
@@ -27,13 +28,20 @@ export const navigation: readonly NavigationItem[] = [
 
 const authPaths = ['/login', '/mfa', '/step-up', '/access-denied'];
 
+// Detail routes need their own guard even when the parent work dashboard
+// accepts any one of several read permissions. They are not separate sidebar
+// destinations. Backend endpoints independently enforce this same authority.
+const detailRoutePermissions = [
+  { href: '/work/finance', permission: 'finance.read' }
+] as const;
+
 export function availableNavigation(permissions: readonly string[] | undefined): NavigationItem[] {
   return navigation.filter((item) => hasPermission(permissions, item.permission));
 }
 
 export function permissionForPath(pathname: string): string | undefined {
   if (!pathname || authPaths.some((path) => pathname === path || pathname.startsWith(`${path}/`))) return undefined;
-  const match = [...navigation]
+  const match = [...navigation, ...detailRoutePermissions]
     .filter((item) => item.href === '/' ? pathname === '/' : pathname === item.href || pathname.startsWith(`${item.href}/`))
     .sort((left, right) => right.href.length - left.href.length)[0];
   return match?.permission;

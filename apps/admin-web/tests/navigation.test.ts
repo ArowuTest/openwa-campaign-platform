@@ -6,6 +6,7 @@ import { availableNavigation, defaultLandingPath, permissionForPath } from '../l
 test('availableNavigation exposes only routes backed by the operator permissions', () => {
   const items = availableNavigation(['campaign.read', 'audience.read']);
   assert.deepEqual(items.map((item) => item.href), [
+    '/work',
     '/audiences/imports',
     '/audiences/builder',
     '/campaigns'
@@ -39,6 +40,17 @@ test('Alert Centre navigation inherits operations.read without operations.write'
   assert.equal(permissionForPath('/operations/alerts/event'), 'operations.read');
   assert.equal(availableNavigation(['operations.read']).some((item) => item.href === '/operations/alerts'), true);
   assert.equal(availableNavigation(['campaign.read']).some((item) => item.href === '/operations/alerts'), false);
+});
+
+test('My Work is accessible with any one source permission, but fails closed without all sources', () => {
+  assert.equal(permissionForPath('/work'), 'campaign.read|consent.read|finance.read');
+  assert.equal(permissionForPath('/work/finance/campaign-1'), 'finance.read');
+  assert.equal(availableNavigation(['campaign.read']).some((item) => item.href === '/work/finance'), false);
+  assert.equal(availableNavigation(['finance.read']).some((item) => item.href === '/work'), true);
+  assert.equal(availableNavigation(['consent.read']).some((item) => item.href === '/work'), true);
+  assert.equal(availableNavigation(['campaign.read']).some((item) => item.href === '/work'), true);
+  assert.equal(availableNavigation(['operations.read']).some((item) => item.href === '/work'), false);
+  assert.equal(availableNavigation([]).some((item) => item.href === '/work'), false);
 });
 
 test('wildcard receives the complete internal navigation', () => {

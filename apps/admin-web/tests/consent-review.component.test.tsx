@@ -4,7 +4,7 @@ import { ConsentReviewManager } from '../app/consent-reviews/review-manager';
 
 const auth = vi.hoisted(() => ({ session: { id: 'maker', sessionId: 'session-a', permissions: ['consent.read', 'consent.write', 'consent.review'] } }));
 vi.mock('../components/auth-provider', () => ({ useAuth: () => auth }));
-afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); vi.unstubAllGlobals(); vi.restoreAllMocks(); auth.session = { id:'maker', sessionId:'session-a', permissions:['consent.read','consent.write','consent.review'] }; });
 
 function review(overrides: Record<string, unknown> = {}) {
   return { id: 'review-1', organisationId: 'org-1', scope: 'SOURCE', sourceSystem: 'registration-form',
@@ -128,4 +128,50 @@ test('revises an incomplete draft by creating a superseding governed draft', asy
       permittedCountries: ['NG']
     }
   });
+});
+
+test('an approval-queue consent deep link opens its exact governed review without scanning for it', async () => {
+  const calls: string[] = [];
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
+    const path = String(input).replace('/api', '');
+    calls.push(path);
+    if (path === '/v1/consent-reviews?limit=100') {
+      return new Response(JSON.stringify({ items: [], count: 0, hasMore: false }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    if (path === '/v1/consent-reviews/review-1') {
+      return new Response(JSON.stringify(review({ status: 'PENDING_REVIEW', submittedBy: 'different-maker' })), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    throw new Error('Unexpected path ' + path);
+  });
+  render(<ConsentReviewManager initialReviewId="review-1" />);
+  expect(await screen.findByText('Independent checker decision')).toBeTruthy();
+  expect(calls).toContain('/v1/consent-reviews/review-1');
+  expect(screen.getByRole('button', { name: 'Record approval' })).toBeTruthy();
+});
+
+test('consent deep links and privileged content are reset when the operator or route changes', async () => {
+  let details = 0;
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
+    const path = String(input).replace('/api', '');
+    if (path === '/v1/consent-reviews?limit=100') {
+      return new Response(JSON.stringify({ items: [], count: 0, hasMore: false }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    if (path.startsWith('/v1/consent-reviews/review-')) {
+      details++;
+      const id = path.split('/').at(-1);
+      return new Response(JSON.stringify(review({ id, name: id === 'review-2' ? 'Other consent evidence' : 'Old operator consent evidence', status: 'PENDING_REVIEW' })), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    throw new Error('Unexpected path ' + path);
+  });
+  const view = render(<ConsentReviewManager initialReviewId="review-1" />);
+  expect(await screen.findByText(/Old operator consent evidence/)).toBeTruthy();
+  view.rerender(<ConsentReviewManager initialReviewId="review-2" />);
+  expect(screen.queryByText(/Old operator consent evidence/)).toBeNull();
+  expect(await screen.findByText(/Other consent evidence/)).toBeTruthy();
+  expect(details).toBe(2);
+  auth.session = { id: 'other-operator', sessionId: 'other-session', permissions: [] };
+  view.rerender(<ConsentReviewManager initialReviewId="review-2" />);
+  expect(screen.getByText('Consent review requires consent.read permission.')).toBeTruthy();
+  expect(screen.queryByText(/Other consent evidence/)).toBeNull();
+  expect(details).toBe(2);
 });

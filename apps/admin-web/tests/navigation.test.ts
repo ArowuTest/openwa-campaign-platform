@@ -34,6 +34,13 @@ test('inbound reply workbench requires dedicated inbound.read even beneath opera
   assert.equal(defaultLandingPath(['inbound.read']), '/operations/inbound');
 });
 
+test('Alert Centre navigation inherits operations.read without operations.write', () => {
+  assert.equal(permissionForPath('/operations/alerts'), 'operations.read');
+  assert.equal(permissionForPath('/operations/alerts/event'), 'operations.read');
+  assert.equal(availableNavigation(['operations.read']).some((item) => item.href === '/operations/alerts'), true);
+  assert.equal(availableNavigation(['campaign.read']).some((item) => item.href === '/operations/alerts'), false);
+});
+
 test('wildcard receives the complete internal navigation', () => {
   const items = availableNavigation(['*']);
   assert.ok(items.length >= 9);

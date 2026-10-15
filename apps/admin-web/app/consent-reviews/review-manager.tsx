@@ -1,11 +1,12 @@
 'use client';
 
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useState } from 'react';
 
 import { StatusBadge } from '../../components/status-badge';
 import { useAuth } from '../../components/auth-provider';
 import { apiRequest, collectBoundedPages, type ListEnvelope, APIError } from '../../lib/api';
 import { hasPermission } from '../../lib/session';
+import { ConsentEvidencePanel } from './consent-evidence-panel';
 
 type ReviewScope = 'ORGANISATION' | 'SOURCE' | 'CAMPAIGN';
 
@@ -400,14 +401,6 @@ function ConsentReviewGeneration({ initialReviewId }: { initialReviewId: string 
     }
   }
 
-  const selectedEvidence = useMemo(() => {
-    if (!selected) return [];
-    return [
-      ...(selected.evidenceAssetIds ?? []).map((id) => 'Trusted asset: ' + id),
-      ...(selected.externalEvidenceReferences ?? []).map((value) => value.reference + ' · SHA-256 ' + value.sha256Checksum)
-    ];
-  }, [selected]);
-
   return (
     <div className="workspace-stack">
       {message ? <div className={state === 'error' ? 'alert alert-danger' : 'alert alert-information'} role="status">{message}</div> : null}
@@ -509,12 +502,17 @@ function ConsentReviewGeneration({ initialReviewId }: { initialReviewId: string 
                 <div><dt>Purpose</dt><dd>{selected.purposeDescription} ({selected.purposeCode || 'no code'})</dd></div>
                 <div><dt>Collection</dt><dd>{selected.collectionMethod || '—'} via {selected.consentSource || '—'}</dd></div>
                 <div><dt>Controller / wording</dt><dd>{selected.controllerRole || '—'} · {selected.wordingVersion}</dd></div>
-                <div><dt>Evidence</dt><dd>{selectedEvidence.length ? <ul>{selectedEvidence.map((value) => <li key={value}>{value}</li>)}</ul> : 'No evidence recorded'}</dd></div>
                 <div><dt>Checks</dt><dd>{[selected.privacyNoticeReviewed && 'privacy notice', selected.optOutProcessReviewed && 'opt-out route', selected.sampleRecordsReviewed && 'sample records'].filter(Boolean).join(', ') || 'None complete'}</dd></div>
                 <div><dt>Countries / category</dt><dd>{selected.permittedCountries?.join(', ') || 'None'} · {selected.permittedMessageCategory || '—'}</dd></div>
                 <div><dt>Restrictions</dt><dd>{selected.restrictions || 'None recorded'}</dd></div>
                 <div><dt>Expiry</dt><dd>{displayDate(selected.expiresAt)}</dd></div>
               </dl>
+              <ConsentEvidencePanel
+                reviewId={selected.id}
+                version={selected.version}
+                assetIds={selected.evidenceAssetIds}
+                externalReferences={selected.externalEvidenceReferences}
+              />
 
               {selected.status === 'DRAFT' ? (
                 <fieldset>

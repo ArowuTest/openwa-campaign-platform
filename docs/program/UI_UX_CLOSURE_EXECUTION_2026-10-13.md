@@ -10,8 +10,8 @@ The matrix `UI_UX_IMPLEMENTATION_MATRIX.md` was reconciled with the current fron
 | Evidence label | Screen IDs | Meaning |
 |---|---:|---|
 | E — bounded source accepted | 12 | Shipped source slice and acceptance tests exist; full operational UAT is still independent |
-| P — partly implemented | 37 | Working source-backed UI exists; specified states/flows or acceptance evidence remain open |
-| M — missing | 15 | No comparable Day-1 operator screen/workflow yet |
+| P — partly implemented | 38 | Working source-backed UI exists; specified states/flows or acceptance evidence remain open |
+| M — missing | 14 | No comparable Day-1 operator screen/workflow yet |
 | C — isolated candidate | 3 | Scoped suppression-management, My Work, and Approval Queue; none implies full UAT |
 
 These categories **do not** establish a product completion percentage, WCAG certification, provider UAT or performance certification. They track source-backed coverage only; refresh them after every accepted `main` release.

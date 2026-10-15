@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 
 import { StatusBadge } from '../../../components/status-badge';
 import { CampaignDraftEditor } from './campaign-draft-editor';
+import { CampaignClonePanel } from './campaign-clone-panel';
 import { CampaignReadinessPanel } from './campaign-readiness-panel';
 import { CommercialGovernance } from './commercial-governance';
 import { MessageComposer } from './message-composer';
@@ -461,6 +462,7 @@ function CampaignWorkspaceGeneration({ campaignId }: { campaignId: string }) {
       <section className="card workspace-hero">
         <div>
           <Link className="text-link" href="/campaigns">← Campaign register</Link>
+          {canWrite ? <a className="text-link" href="#clone-campaign-title">Clone this campaign</a> : null}
           <div className="workspace-title-row">
             <div><h2>{campaign.name}</h2><small>{campaign.id}</small></div>
             <StatusBadge status={campaign.status} />
@@ -619,6 +621,7 @@ function CampaignWorkspaceGeneration({ campaignId }: { campaignId: string }) {
           )}
         </article>
       </section>
+      <CampaignClonePanel key={`${campaign.id}:${campaign.version}`} campaign={campaign} canWrite={canWrite} />
     </div>
   );
 }

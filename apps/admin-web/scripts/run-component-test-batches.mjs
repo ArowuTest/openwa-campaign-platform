@@ -12,7 +12,9 @@ const files = readdirSync('tests')
   .filter((name) => name.endsWith('.component.test.tsx'))
   .sort()
   .map((name) => 'tests/' + name);
-const batchSize = 6;
+// Three files per fresh Vitest process bounds jsdom accumulation on the
+// 4-GiB Node heap without reducing the tests or assertions being run.
+const batchSize = 3;
 
 if (files.length === 0) {
   console.error('[admin-web] No component test files discovered; failing closed.');

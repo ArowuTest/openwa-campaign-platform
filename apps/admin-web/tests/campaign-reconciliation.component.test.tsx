@@ -6,7 +6,10 @@ const auth=vi.hoisted(()=>({session:{
   id:'operator-1',sessionId:'session-1',permissions:['campaign.read','campaign.operate','report.read','finance.read','operations.read']
 }}));
 vi.mock('../components/auth-provider',()=>({useAuth:()=>({session:auth.session})}));
-vi.mock('next/navigation',()=>({useRouter:()=>({push:vi.fn()})}));
+// Keep router identity stable as it is in Next.js. Returning a fresh object
+// per render would retrigger the memoised loader/effect indefinitely.
+const navigation=vi.hoisted(()=>({push:vi.fn()}));
+vi.mock('next/navigation',()=>({useRouter:()=>navigation}));
 const cid='campaign-1';
 const campaign={id:cid,name:'Lagos campaign',status:'DISPATCHING',version:7,eligibleAudienceCount:10,updatedAt:'2026-10-13T11:00:00Z'};
 const metrics={authorisedTotal:0,queuedTotal:0,submittedTotal:0,gatewayAcceptedTotal:0,sentTotal:0,

@@ -7,7 +7,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "test": "node --experimental-strip-types --test tests/audience-builder.test.ts tests/audience-import-upload.test.ts tests/hosting.test.ts tests/navigation.test.ts tests/safety.test.ts && vitest run",
+    "test": "node --experimental-strip-types --test tests/audience-builder.test.ts tests/audience-import-upload.test.ts tests/hosting.test.ts tests/navigation.test.ts tests/safety.test.ts && node scripts/run-component-test-batches.mjs",
     "test:components": "vitest run",
     "lint": "eslint . --max-warnings=0",
     "typecheck": "tsc --noEmit"

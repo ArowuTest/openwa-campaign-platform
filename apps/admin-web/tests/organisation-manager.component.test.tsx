@@ -52,3 +52,39 @@ test('status changes require a reason and send the selected expected version', a
   fireEvent.change(screen.getByLabelText('Status reason'), { target: { value: 'Vetting completed and approved' } });
   expect((screen.getByRole('button', { name: 'Set ACTIVE' }) as HTMLButtonElement).disabled).toBe(false);
 });
+
+test('organisation register exposes a direct workspace link alongside the existing edit action', async () => {
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
+    const path = String(input);
+    if (path.includes('/v1/organisations?')) {
+      return new Response(JSON.stringify({
+        items: [{ id:'00000000-0000-4000-8000-000000000121', legalName:'Alpha Limited',
+          status:'ACTIVE',version:1,createdAt:'2026-10-01T00:00:00Z' }],
+        count:1,hasMore:false
+      }), {status:200,headers:{'content-type':'application/json'}});
+    }
+    throw new Error('Unexpected request ' + path);
+  });
+  render(<OrganisationManager />);
+  expect(await screen.findByRole('button', {name:'Alpha Limited'})).toBeTruthy();
+  expect(screen.getByRole('link', {name:'Open organisation workspace Alpha Limited'}).getAttribute('href'))
+    .toBe('/organisations/00000000-0000-4000-8000-000000000121');
+});
+
+test('a governed organisation edit deep link loads the exact record without scanning the register for it', async () => {
+  const orgId = '00000000-0000-4000-8000-000000000121';
+  const paths:string[]=[];
+  vi.stubGlobal('fetch', async (input:RequestInfo|URL) => {
+    const path=String(input).replace('/api','');
+    paths.push(path);
+    if(path==='/v1/organisations?limit=100') return new Response(JSON.stringify({items:[],count:0,hasMore:false}),{status:200,headers:{'content-type':'application/json'}});
+    if(path==='/v1/organisations/'+orgId) return new Response(JSON.stringify({
+      id:orgId, legalName:'Alpha Limited',status:'ACTIVE',version:3,createdAt:'2026-10-01T00:00:00Z'
+    }),{status:200,headers:{'content-type':'application/json'}});
+    throw new Error('Unexpected '+path);
+  });
+  render(<OrganisationManager initialOrganisationId={orgId}/>);
+  await waitFor(()=>expect((screen.getAllByLabelText('Legal name')[1] as HTMLInputElement).value).toBe('Alpha Limited'));
+  expect(paths).toContain('/v1/organisations/'+orgId);
+  expect(paths).toHaveLength(2);
+});

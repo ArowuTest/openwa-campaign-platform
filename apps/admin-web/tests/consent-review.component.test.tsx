@@ -175,3 +175,39 @@ test('consent deep links and privileged content are reset when the operator or r
   expect(screen.queryByText(/Other consent evidence/)).toBeNull();
   expect(details).toBe(2);
 });
+
+test('selected consent review opens governed trusted-asset metadata inspection without downloading evidence', async () => {
+  const calls: string[] = [];
+  const digest = 'abcdef0123456789'.repeat(4);
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL) => {
+    const path = String(input).replace('/api', '');
+    calls.push(path);
+    if (path === '/v1/consent-reviews?limit=100') {
+      return new Response(JSON.stringify({ items: [review()], count: 1, hasMore: false }), {
+        status: 200, headers: { 'content-type': 'application/json' }
+      });
+    }
+    if (path === '/v1/consent-reviews/review-1') {
+      return new Response(JSON.stringify(review()), {
+        status: 200, headers: { 'content-type': 'application/json' }
+      });
+    }
+    if (path === '/v1/assets/asset-1') {
+      return new Response(JSON.stringify({
+        id: 'asset-1', purpose: 'CONSENT_EVIDENCE', originalFilename: 'signed-consent.png',
+        mediaType: 'image/png', size: 512, sha256: digest,
+        status: 'CLEAN', version: 2, createdAt: '2026-10-01T00:00:00Z', updatedAt: '2026-10-02T00:00:00Z'
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    throw new Error('Unexpected request: ' + path);
+  });
+
+  render(<ConsentReviewManager />);
+  fireEvent.click(await screen.findByRole('button', { name: 'Festival consent' }));
+  expect(await screen.findByRole('heading', { name: 'Consent evidence verification' })).toBeTruthy();
+  expect(calls.some((path) => path.startsWith('/v1/assets/'))).toBe(false);
+  fireEvent.click(screen.getByRole('button', { name: 'Inspect metadata for asset-1' }));
+  expect(await screen.findByText('signed-consent.png')).toBeTruthy();
+  expect(calls.filter((path) => path === '/v1/assets/asset-1')).toHaveLength(1);
+  expect(screen.getByText(/Clean scan status alone does not approve consent/)).toBeTruthy();
+});

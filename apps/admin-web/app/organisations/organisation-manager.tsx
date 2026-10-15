@@ -1,6 +1,7 @@
 'use client';
 
-import { FormEvent, useEffect, useMemo, useState } from 'react';
+import { FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import Link from 'next/link';
 import { StatusBadge } from '../../components/status-badge';
 import { useAuth } from '../../components/auth-provider';
 import { APIError, apiRequest, collectBoundedPages, type ListEnvelope } from '../../lib/api';
@@ -56,7 +57,15 @@ function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
 
-export function OrganisationManager() {
+export function OrganisationManager({ initialOrganisationId = '' }: { initialOrganisationId?: string } = {}) {
+  const { session } = useAuth();
+  const canRead = hasPermission(session?.permissions, 'organisation.read');
+  const generation = JSON.stringify([initialOrganisationId, session?.id, session?.sessionId, [...(session?.permissions ?? [])].sort()]);
+  if (!canRead) return <p role="status">Organisation register requires organisation.read permission.</p>;
+  return <OrganisationManagerGeneration key={generation} initialOrganisationId={initialOrganisationId} />;
+}
+
+function OrganisationManagerGeneration({ initialOrganisationId }: { initialOrganisationId: string }) {
   const { session } = useAuth();
   const canWrite = hasPermission(session?.permissions, 'organisation.write');
   const canApprove = hasPermission(session?.permissions, 'organisation.approve');
@@ -69,6 +78,7 @@ export function OrganisationManager() {
   const [statusValue, setStatusValue] = useState('ACTIVE');
   const [state, setState] = useState<'idle' | 'loading' | 'saving' | 'error'>('loading');
   const [message, setMessage] = useState('');
+  const selectionRequest = useRef(0);
 
   async function load() {
     setState('loading');
@@ -102,17 +112,42 @@ export function OrganisationManager() {
     return () => { cancelled = true; };
   }, []);
 
+  useEffect(() => {
+    if (!initialOrganisationId) return;
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(initialOrganisationId)) {
+      // Reject invalid link references without sending them to a server.
+      return;
+    }
+    let cancelled = false;
+    const request = ++selectionRequest.current;
+    void apiRequest<Organisation>('/v1/organisations/' + encodeURIComponent(initialOrganisationId))
+      .then((value) => {
+        if (cancelled || request !== selectionRequest.current) return;
+        if (value.id !== initialOrganisationId) throw new Error('The server returned an organisation that does not match the selected reference.');
+        setSelected(value);
+        setForm(formFromOrganisation(value));
+        setStatusValue(value.status);
+        setReason('');
+        setStatusReason('');
+      }).catch((error) => {
+        if (!cancelled && request === selectionRequest.current) setMessage(errorMessage(error, 'The linked organisation could not be opened.'));
+      });
+    return () => { cancelled = true; };
+  }, [initialOrganisationId]);
+
   async function selectOrganisation(item: Organisation) {
+    const request = ++selectionRequest.current;
     setMessage('');
     try {
       const value = await apiRequest<Organisation>('/v1/organisations/' + encodeURIComponent(item.id));
+      if (request !== selectionRequest.current) return;
       setSelected(value);
       setForm(formFromOrganisation(value));
       setStatusValue(value.status);
       setReason('');
       setStatusReason('');
     } catch (error) {
-      setMessage(errorMessage(error, 'Unable to load organisation detail'));
+      if (request === selectionRequest.current) setMessage(errorMessage(error, 'Unable to load organisation detail'));
     }
   }
 
@@ -204,7 +239,7 @@ export function OrganisationManager() {
         {items.length > 0 ? (
           <div className="table-wrap">
             <table>
-              <thead><tr><th>Organisation</th><th>Country</th><th>Contact</th><th>Status</th><th>Version</th><th>Created</th></tr></thead>
+              <thead><tr><th>Organisation</th><th>Country</th><th>Contact</th><th>Status</th><th>Version</th><th>Created</th><th>Workspace</th></tr></thead>
               <tbody>
                 {items.map((item) => (
                   <tr key={item.id} className={selected?.id === item.id ? 'selected-row' : undefined}>
@@ -214,6 +249,7 @@ export function OrganisationManager() {
                     <td><StatusBadge status={item.status} /></td>
                     <td>{item.version}</td>
                     <td>{item.createdAt ? new Date(item.createdAt).toLocaleDateString() : '—'}</td>
+                    <td><Link href={'/organisations/' + encodeURIComponent(item.id)} aria-label={'Open organisation workspace ' + item.legalName}>Workspace</Link></td>
                   </tr>
                 ))}
               </tbody>

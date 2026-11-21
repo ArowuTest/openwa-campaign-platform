@@ -88,6 +88,10 @@ func validateRuleValues(definition Definition, rule Rule) error {
 	if len(rule.Values) > MaxValuesPerRule {
 		return fmt.Errorf("operator accepts no more than %d values", MaxValuesPerRule)
 	}
+	if definition.Code == ImportCohortCode {
+		_, _, _, err := ParseImportCohort(rule)
+		return err
+	}
 	switch rule.Operator {
 	case OperatorIsKnown, OperatorIsUnknown:
 		if len(rule.Values) != 0 {

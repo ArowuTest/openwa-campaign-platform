@@ -2,6 +2,7 @@
 
 import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { ImportCohorts } from './import-cohorts';
 import { StatusBadge } from '../../../components/status-badge';
 import { APIError, apiRequest, browserAPIBase, collectBoundedPages, ListEnvelope } from '../../../lib/api';
 import {
@@ -1064,6 +1065,11 @@ export function AudienceImportWorkspace() {
           </>
         )}
       </section>
+
+      {importBatch && importBatch.organisationId === organisationId &&
+        ['COMPLETED', 'COMPLETED_WITH_EXCEPTIONS'].includes(importBatch.status) &&
+        reconciliation?.importId === importBatch.id && reconciliation.readyForClosure ?
+        <ImportCohorts key={importBatch.id} source={importBatch} /> : null}
 
       {importBatch?.status === 'PREVIEW_READY' ? (
         <section className="card">

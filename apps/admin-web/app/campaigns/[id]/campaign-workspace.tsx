@@ -9,6 +9,7 @@ import { CampaignDraftEditor } from './campaign-draft-editor';
 import { CampaignClonePanel } from './campaign-clone-panel';
 import { CampaignReadinessPanel } from './campaign-readiness-panel';
 import { CommercialGovernance } from './commercial-governance';
+import { FrozenAudiencePicker, DeliveryMonitor } from './sending-controls';
 import { MessageComposer } from './message-composer';
 import { useAuth } from '../../../components/auth-provider';
 import { APIError, apiRequest, collectBoundedPages, type ListEnvelope } from '../../../lib/api';
@@ -480,6 +481,7 @@ function CampaignWorkspaceGeneration({ campaignId }: { campaignId: string }) {
 
       {message ? <div className={message.includes('failed') || message.includes('required') ? 'alert alert-danger' : 'alert alert-information'} role="status">{message}</div> : null}
 
+      <DeliveryMonitor key={campaign.id + ':' + campaign.version} campaignId={campaign.id} pool={campaign.transport.senderPoolId} status={campaign.status} initial={metrics} />
       <CampaignDraftEditor campaign={campaign} onSaved={saved => { if (mounted.current) { setCampaign(saved); setReadinessGeneration(value => value + 1); } }} />
       <CampaignReadinessPanel key={readinessGeneration} campaign={campaign} />
       {['AUDIENCE_VALIDATED','MESSAGE_REVIEW_PENDING','MESSAGE_APPROVED','COMMERCIAL_APPROVED','FINAL_APPROVAL_PENDING','SCHEDULED','DISPATCHING','PAUSED','COMPLETED','COMPLETED_WITH_EXCEPTIONS'].includes(campaign.status)
@@ -597,7 +599,11 @@ function CampaignWorkspaceGeneration({ campaignId }: { campaignId: string }) {
           {busy ? <span className="pill">{busy}…</span> : null}
         </div>
         <div className="action-grid">
-          {campaign.status === 'COMMERCIAL_APPROVED' && canApprove ? <button className="secondary" type="button" onClick={() => void transition('REQUEST_FINAL_APPROVAL', 'Ready for final campaign approval')}>Request final approval</button> : null}
+          {campaign.status === 'DRAFT' && canWrite && <button type="button" disabled={Boolean(busy)} onClick={() => void transition('SUBMIT_CONSENT_REVIEW', 'Submitted the linked consent review for campaign approval')}>Submit for consent review</button>}
+          {campaign.status === 'CONSENT_REVIEW_PENDING' && canApprove && <button type="button" disabled={Boolean(busy)} onClick={() => void transition('APPROVE_CONSENT', 'Confirmed the linked manual consent review for this campaign')}>Approve linked consent review</button>}
+          {campaign.status === 'CONSENT_APPROVED' && canWrite && <button type="button" disabled={Boolean(busy)} onClick={() => void transition('START_AUDIENCE_BUILD', 'Started audience build for the reviewed cohort')}>Start audience build</button>}
+          {campaign.status === 'AUDIENCE_BUILDING' && canWrite && <FrozenAudiencePicker key={campaign.id + ':' + campaign.version} campaignId={campaign.id} maximum={campaign.maximumUniqueRecipients} busy={Boolean(busy)} validate={id => transition('VALIDATE_AUDIENCE', 'Validated the selected campaign-bound immutable cohort', { audienceSnapshotId: id })} />}
+          {campaign.status === 'COMMERCIAL_APPROVED' && canWrite ? <button className="secondary" type="button" onClick={() => void transition('REQUEST_FINAL_APPROVAL', 'Ready for final campaign approval')}>Request final approval</button> : null}
           {campaign.status === 'FINAL_APPROVAL_PENDING' && canApprove ? <button className="primary" type="button" onClick={() => void transition('APPROVE_FINAL', 'Approved after controlled test and capacity review')}>Final approve</button> : null}
           {campaign.status === 'SCHEDULED' && canOperate ? <button className="secondary" type="button" onClick={() => void release()}>Release recipients</button> : null}
           {campaign.status === 'SCHEDULED' && canOperate ? <button className="primary" type="button" onClick={() => void execute('start')}>Start dispatch</button> : null}

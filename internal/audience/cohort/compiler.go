@@ -120,7 +120,7 @@ func (c *Compiler) compileEligibilityContext(group audiencefilter.Group, eligibi
 		channel:      builder.add(strings.ToUpper(strings.TrimSpace(eligibility.Channel))),
 		asOf:         builder.add(eligibility.AsOf.UTC()),
 	}
-	segmentSQL, err := c.compileGroup(group, builder)
+	segmentSQL, err := c.compileGroup(group, builder, bindings)
 	if err != nil {
 		return nil, eligibilityBindings{}, "", err
 	}
@@ -209,17 +209,17 @@ func notFrequencyCappedPredicate(contactID string, b eligibilityBindings) string
   )`
 }
 
-func (c *Compiler) compileGroup(group audiencefilter.Group, builder *sqlBuilder) (string, error) {
+func (c *Compiler) compileGroup(group audiencefilter.Group, builder *sqlBuilder, bindings eligibilityBindings) (string, error) {
 	parts := make([]string, 0, len(group.Rules)+len(group.Children))
 	for _, rule := range group.Rules {
-		part, err := c.compileRule(rule, builder)
+		part, err := c.compileRule(rule, builder, bindings)
 		if err != nil {
 			return "", err
 		}
 		parts = append(parts, part)
 	}
 	for _, child := range group.Children {
-		part, err := c.compileGroup(child, builder)
+		part, err := c.compileGroup(child, builder, bindings)
 		if err != nil {
 			return "", err
 		}
@@ -228,10 +228,31 @@ func (c *Compiler) compileGroup(group audiencefilter.Group, builder *sqlBuilder)
 	return strings.Join(parts, " "+string(group.Join)+" "), nil
 }
 
-func (c *Compiler) compileRule(rule audiencefilter.Rule, builder *sqlBuilder) (string, error) {
+func (c *Compiler) compileRule(rule audiencefilter.Rule, builder *sqlBuilder, bindings eligibilityBindings) (string, error) {
 	definition, ok := c.registry.Get(strings.ToUpper(strings.TrimSpace(rule.DefinitionCode)))
 	if !ok {
 		return "", fmt.Errorf("unknown filter definition %s", rule.DefinitionCode)
+	}
+	if definition.Code == audiencefilter.ImportCohortCode {
+		importID, part, total, err := audiencefilter.ParseImportCohort(rule)
+		if err != nil {
+			return "", err
+		}
+		// The merge writes a grant per imported contact. Unlike contact_sources,
+		// its source_import_id is not overwritten by a subsequent upload.
+		id, n, slot := builder.add(importID), builder.add(total), builder.add(part-1)
+		return `EXISTS (
+    SELECT 1 FROM consent_grants origin
+    JOIN audience_imports ai ON ai.id = origin.source_import_id
+    WHERE origin.contact_id = c.id AND ai.id = ` + id + `::uuid
+      AND ai.organisation_id = ` + bindings.organisation + `::uuid
+      AND ai.purpose_id::text = ` + bindings.purpose + `
+      AND upper(ai.channel) = ` + bindings.channel + `
+      AND ai.status IN ('COMPLETED','COMPLETED_WITH_EXCEPTIONS')
+      AND origin.organisation_id = ai.organisation_id
+      AND origin.purpose_id = ai.purpose_id::text AND origin.channel = upper(ai.channel)
+      AND origin.source_type = 'AUDIENCE_IMPORT'
+  ) AND (('x' || substr(md5(c.id::text), 1, 8))::bit(32)::bigint % ` + n + `::integer) = ` + slot + `::integer`, nil
 	}
 	if definition.Code == "CONSENT_PURPOSE" {
 		return c.compileConsentPurposeRule(rule, builder)

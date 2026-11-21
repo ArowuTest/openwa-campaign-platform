@@ -42,5 +42,10 @@ func DefaultDefinitions() []Definition {
 			DataType: DataTypeSingleSelect, Operators: []Operator{OperatorIn, OperatorNotIn, OperatorIsKnown, OperatorIsUnknown},
 			Core: true, Storage: StorageCoreColumn, Filterable: true, Reportable: true, QueryableField: "c.preferred_language_code", IndexStrategy: "btree", DisplayOrder: 70, Active: true,
 		},
+		{
+			Code: ImportCohortCode, DisplayName: "Upload cohort", Description: "One stable group within a completed, consent-reviewed upload.",
+			DataType: DataTypeText, Operators: []Operator{OperatorEquals},
+			Core: true, Storage: StorageCoreColumn, Filterable: true, QueryableField: "c.id", IndexStrategy: "btree", DisplayOrder: 80, Active: true,
+		},
 	}
 }

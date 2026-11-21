@@ -93,6 +93,14 @@ jobs:
           PGPASSWORD: postgres
           PGDATABASE: campaign_platform
         run: psql -v ON_ERROR_STOP=1 -f database/bootstrap/002_service_roles.sql
+      - name: Verify reviewed upload partitioning with PostgreSQL
+        env:
+          CGO_ENABLED: '1'
+          POSTGRES_COHORT_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/campaign_platform?sslmode=disable
+        run: |
+          set -o pipefail
+          go test -count=1 -v ./internal/audience/cohort -run '^TestPostgreSQLUploadCohortsPartitionOnlyEligibleImportMembers$' | tee upload-cohorts.log
+          grep -F -- '--- PASS: TestPostgreSQLUploadCohortsPartitionOnlyEligibleImportMembers' upload-cohorts.log
       - name: Verify commercial schema readiness and append-only history
         env:
           CGO_ENABLED: '1'

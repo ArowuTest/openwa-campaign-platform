@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 
+import Link from 'next/link';
 import { StatusBadge } from './status-badge';
 import { apiRequest, collectBoundedPages, type ListEnvelope } from '../lib/api';
 import { filterGroupsEqual, type FilterGroup } from '../lib/audience-builder-model';
@@ -722,7 +723,7 @@ function OrganisationSegmentSnapshotManager({
               <div><dt>Saved segment</dt><dd>{snapshot.segmentId || 'Inline definition'}</dd></div>
             </dl>
             <div className="alert alert-success">
-              Membership is immutable. Recipient identities are intentionally not rendered in this review surface.
+              Membership is immutable. <Link href={'/campaigns/' + encodeURIComponent(snapshot.campaignId)}>Open this campaign to validate the snapshot and prepare its message.</Link>
             </div>
           </div>
         ) : null}

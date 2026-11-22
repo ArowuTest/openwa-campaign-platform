@@ -211,3 +211,26 @@ test('selected consent review opens governed trusted-asset metadata inspection w
   expect(calls.filter((path) => path === '/v1/assets/asset-1')).toHaveLength(1);
   expect(screen.getByText(/Clean scan status alone does not approve consent/)).toBeTruthy();
 });
+
+
+test('explains that external evidence checksums are optional at draft creation and file-specific', async () => {
+  const calls: Array<{ path: string; init: RequestInit }> = [];
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL, init: RequestInit = {}) => {
+    const path = String(input).replace('/api', '');
+    calls.push({ path, init });
+    if (path === '/v1/consent-reviews?limit=100') {
+      return new Response(JSON.stringify({ items: [], count: 0, hasMore: false }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    throw new Error('Unexpected request: ' + path + ' ' + String(init.method));
+  });
+
+  render(<ConsentReviewManager />);
+  await screen.findByRole('heading', { name: 'Record consent assessment' });
+  const field = screen.getByPlaceholderText('consent-policy.pdf | 64-character SHA-256 checksum');
+  expect(screen.getByText(/Optional\. This is one line per evidence file, not per organisation\./)).toBeTruthy();
+  fireEvent.change(field, { target: { value: 'consent-policy.pdf' } });
+  fireEvent.submit(screen.getByRole('button', { name: 'Create draft review' }).closest('form')!);
+
+  await screen.findByText(/External evidence reference must include a 64-character SHA-256 checksum/);
+  expect(calls.some((call) => call.path === '/v1/consent-reviews' && call.init.method === 'POST')).toBe(false);
+});

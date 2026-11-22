@@ -91,6 +91,16 @@ function evidenceReferences(value: FormDataEntryValue | null): ExternalEvidenceR
   });
 }
 
+function externalEvidenceValidationMessage(value: FormDataEntryValue | null): string | undefined {
+  for (const line of lines(value)) {
+    const [reference, checksum, ...extra] = line.split(/\s*\t\s*|\s*\|\s*/).map((part) => part.trim());
+    if (!reference || extra.length > 0 || !checksum || !/^[0-9a-f]{64}$/i.test(checksum)) {
+      return 'External evidence reference must include a 64-character SHA-256 checksum for that specific file, separated by |. Leave this optional field blank when using trusted evidence asset IDs.';
+    }
+  }
+  return undefined;
+}
+
 function errorMessage(error: unknown, fallback: string): string {
   if (error instanceof APIError && error.status === 409) {
     return 'This consent review changed in another session. Reload it before continuing.';
@@ -249,6 +259,12 @@ function ConsentReviewGeneration({ initialReviewId }: { initialReviewId: string 
     const form = event.currentTarget;
     const data = new FormData(form);
     const payload = buildCreatePayload(data, scope);
+    const evidenceError = externalEvidenceValidationMessage(data.get('externalEvidenceReferences'));
+    if (evidenceError) {
+      setMessage(evidenceError);
+      setState('error');
+      return;
+    }
     if (scope === 'SOURCE' && !String(payload.sourceSystem ?? '').trim()) {
       setMessage('Enter the source system for a source-scoped review.');
       return;
@@ -466,7 +482,7 @@ function ConsentReviewGeneration({ initialReviewId }: { initialReviewId: string 
           <label>Exact consent wording<textarea name="exactConsentWording" rows={3} required defaultValue={revisionSource?.exactConsentWording ?? ''} /></label>
           <label>Privacy notice version<input name="privacyNoticeVersion" required defaultValue={revisionSource?.privacyNoticeVersion ?? ''} /></label>
           <label>Trusted evidence asset IDs<small>One clean trusted-asset ID per line.</small><textarea name="evidenceAssetIds" rows={3} placeholder="UUID per line" defaultValue={(revisionSource?.evidenceAssetIds ?? []).join('\n')} /></label>
-          <label>External evidence references<small>One reference and lowercase SHA-256 checksum per line, separated by a tab or |.</small><textarea name="externalEvidenceReferences" rows={3} placeholder="case-2026-08-14 | 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" defaultValue={evidenceReferenceText(revisionSource?.externalEvidenceReferences)} /></label>
+          <label>External evidence references<small>Optional. This is one line per evidence file, not per organisation. Add the 64-character SHA-256 checksum for that exact file, separated by |. Leave blank when using trusted evidence asset IDs.</small><textarea name="externalEvidenceReferences" rows={3} placeholder="consent-policy.pdf | 64-character SHA-256 checksum" defaultValue={evidenceReferenceText(revisionSource?.externalEvidenceReferences)} /></label>
           <fieldset>
             <legend>Permitted countries</legend>
             {countries.map(([code, label]) => (

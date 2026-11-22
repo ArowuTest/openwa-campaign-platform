@@ -105,6 +105,9 @@ function errorMessage(error: unknown, fallback: string): string {
   if (error instanceof APIError && error.status === 409) {
     return 'This consent review changed in another session. Reload it before continuing.';
   }
+  if (error instanceof APIError && error.status === 422) {
+    return 'The server rejected this review. Check that the organisation is active, the date range is valid, the organisation-wide scope has no campaign ID, sample notes contain no phone numbers or email addresses, and external evidence is either blank or entered as reference | the exact file SHA-256.';
+  }
   return error instanceof Error ? error.message : fallback;
 }
 

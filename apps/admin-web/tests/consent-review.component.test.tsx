@@ -231,6 +231,7 @@ test('explains that external evidence checksums are optional at draft creation a
   fireEvent.change(field, { target: { value: 'consent-policy.pdf' } });
   fireEvent.submit(screen.getByRole('button', { name: 'Create draft review' }).closest('form')!);
 
-  await screen.findByText(/External evidence reference must include a 64-character SHA-256 checksum/);
+  expect((await screen.findAllByText(/External evidence reference must include a 64-character SHA-256 checksum/)).length).toBeGreaterThan(0);
+  expect(screen.getByPlaceholderText('consent-policy.pdf | 64-character SHA-256 checksum').getAttribute('aria-invalid')).toBe('true');
   expect(calls.some((call) => call.path === '/v1/consent-reviews' && call.init.method === 'POST')).toBe(false);
 });

@@ -93,6 +93,14 @@ jobs:
           PGPASSWORD: postgres
           PGDATABASE: campaign_platform
         run: psql -v ON_ERROR_STOP=1 -f database/bootstrap/002_service_roles.sql
+      - name: Verify production-shaped consent draft creation on PostgreSQL
+        env:
+          CGO_ENABLED: '1'
+          POSTGRES_PAGINATION_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/campaign_platform?sslmode=disable
+        run: |
+          set -o pipefail
+          go test -count=1 -v ./internal/persistence/postgres -run '^TestPostgreSQLConsentReviewServiceAcceptsProductionShapedDraft$' | tee consent-draft.log
+          grep -F -- '--- PASS: TestPostgreSQLConsentReviewServiceAcceptsProductionShapedDraft' consent-draft.log
       - name: Verify reviewed upload partitioning with PostgreSQL
         env:
           CGO_ENABLED: '1'

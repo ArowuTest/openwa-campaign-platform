@@ -1464,9 +1464,13 @@ func (s *Server) createConsentReview(w http.ResponseWriter, r *http.Request) {
 	}
 	principal, _ := identity.PrincipalFromContext(r.Context())
 	input.CreatedBy = principal.User.ID
+	if issue := validateConsentReviewReferences(input, true); issue != nil {
+		s.writeConsentCreationError(w, r, issue)
+		return
+	}
 	entity, err := s.deps.ConsentReviews.Create(r.Context(), input)
 	if err != nil {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "CONSENT_REVIEW_INVALID", "The consent review could not be created.", map[string]any{"detail": err.Error()})
+		s.writeConsentCreationError(w, r, err)
 		return
 	}
 	httpx.WriteJSON(w, http.StatusCreated, entity)

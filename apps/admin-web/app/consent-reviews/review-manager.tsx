@@ -101,12 +101,46 @@ function externalEvidenceValidationMessage(value: FormDataEntryValue | null): st
   return undefined;
 }
 
-function errorMessage(error: unknown, fallback: string): string {
-  if (error instanceof APIError && error.status === 409) {
-    return 'This consent review changed in another session. Reload it before continuing.';
+const consentInputFields = new Set([
+  'organisationId', 'name', 'scope', 'sourceSystem', 'campaignId', 'channel',
+  'collectionPeriodFrom', 'collectionPeriodTo', 'evidenceAssetIds',
+  'externalEvidenceReferences', 'sampleReviewNotes', 'revisionReason'
+]);
+
+// Only display bounded field messages explicitly returned by the consent API.
+function consentFieldErrors(error: unknown): Record<string, string> {
+  if (!(error instanceof APIError) || (error.status !== 422 && error.status !== 409)) return {};
+  const candidate = error.details?.fields;
+  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return {};
+  const fields: Record<string, string> = {};
+  for (const [name, message] of Object.entries(candidate)) {
+    if (consentInputFields.has(name) && typeof message === 'string' && message.length > 0 && message.length <= 300) {
+      fields[name] = message;
+    }
   }
-  if (error instanceof APIError && error.status === 422) {
-    return 'The server rejected this review. Check that the organisation is active, the date range is valid, the organisation-wide scope has no campaign ID, sample notes contain no phone numbers or email addresses, and external evidence is either blank or entered as reference | the exact file SHA-256.';
+  return fields;
+}
+
+function errorMessage(error: unknown, fallback: string): string {
+  if (error instanceof APIError) {
+    const reference = error.requestId && /^[a-zA-Z0-9_-]{1,128}$/.test(error.requestId)
+      ? ' Reference: ' + error.requestId + '.' : '';
+    if (error.status === 409 && error.code === 'ORGANISATION_NOT_ACTIVE') {
+      return 'The organisation must be active before a consent review can be created.' + reference;
+    }
+    if (error.status === 409 && error.code === 'CONSENT_EVIDENCE_NOT_CLEAN') {
+      return 'Trusted consent evidence has not passed malware scanning.' + reference;
+    }
+    if (error.status === 409) return 'This record is not ready or has changed. Review its status before retrying.' + reference;
+    if (error.status === 422) {
+      return Object.keys(consentFieldErrors(error)).length
+        ? 'Review not saved. Correct the highlighted field and try again.' + reference
+        : 'Review not saved. Check the fields or contact support with the reference.' + reference;
+    }
+    if (error.status >= 500) {
+      return 'The consent-review service could not complete this request. Your form entries are preserved. Reconcile the outcome before retrying.' + reference;
+    }
+    return error.message + reference;
   }
   return error instanceof Error ? error.message : fallback;
 }
@@ -177,6 +211,10 @@ function ConsentReviewGeneration({ initialReviewId }: { initialReviewId: string 
   const [revisionSource, setRevisionSource] = useState<ConsentReview | null>(null);
   const [scope, setScope] = useState<ReviewScope>('ORGANISATION');
   const [message, setMessage] = useState('');
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({});
+  const [formFailed, setFormFailed] = useState(false);
+  const fieldFeedback = (name: string) => formErrors[name]
+    ? <small className="field-error" role="alert">{formErrors[name]}</small> : null;
   const [state, setState] = useState<'loading' | 'idle' | 'saving' | 'error'>('loading');
   const [submitReason, setSubmitReason] = useState('');
   const [decision, setDecision] = useState<'APPROVED' | 'REJECTED'>('APPROVED');
@@ -240,6 +278,8 @@ function ConsentReviewGeneration({ initialReviewId }: { initialReviewId: string 
 
   async function selectReview(item: ConsentReview) {
     setMessage('');
+    setFormErrors({});
+    setFormFailed(false);
     try {
       const value = await apiRequest<ConsentReview>('/v1/consent-reviews/' + encodeURIComponent(item.id));
       setSelected(value);
@@ -259,26 +299,36 @@ function ConsentReviewGeneration({ initialReviewId }: { initialReviewId: string 
   async function create(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!canWrite || state === 'saving') return;
+    setFormErrors({});
+    setFormFailed(false);
     const form = event.currentTarget;
     const data = new FormData(form);
     const payload = buildCreatePayload(data, scope);
     const evidenceError = externalEvidenceValidationMessage(data.get('externalEvidenceReferences'));
     if (evidenceError) {
       setMessage(evidenceError);
+      setFormErrors({ externalEvidenceReferences: evidenceError });
+      setFormFailed(true);
       setState('error');
       return;
     }
     if (scope === 'SOURCE' && !String(payload.sourceSystem ?? '').trim()) {
       setMessage('Enter the source system for a source-scoped review.');
+      setFormErrors({ sourceSystem: 'Enter the source system for a source-scoped review.' });
+      setFormFailed(true);
       return;
     }
     if (scope === 'CAMPAIGN' && !String(payload.campaignId ?? '').trim()) {
       setMessage('Enter the campaign ID for a campaign-scoped review.');
+      setFormErrors({ campaignId: 'Enter the campaign ID for a campaign-scoped review.' });
+      setFormFailed(true);
       return;
     }
     const revisionReason = String(data.get('revisionReason') ?? '').trim();
     if (revisionSource && revisionReason.length < 8) {
       setMessage('Enter a meaningful revision reason (at least 8 characters).');
+      setFormErrors({ revisionReason: 'Enter a meaningful revision reason (at least 8 characters).' });
+      setFormFailed(true);
       return;
     }
     setState('saving');
@@ -294,6 +344,8 @@ function ConsentReviewGeneration({ initialReviewId }: { initialReviewId: string 
             body: JSON.stringify(payload)
           });
       form.reset();
+      setFormErrors({});
+      setFormFailed(false);
       setScope('ORGANISATION');
       setRevisionSource(null);
       setSelected(created);
@@ -303,6 +355,8 @@ function ConsentReviewGeneration({ initialReviewId }: { initialReviewId: string 
       await load();
     } catch (error) {
       setMessage(errorMessage(error, revisionSource ? 'Consent review revision could not be created' : 'Consent review could not be created'));
+      setFormErrors(consentFieldErrors(error));
+      setFormFailed(true);
       setState('error');
     } finally {
       setState('idle');
@@ -422,7 +476,7 @@ function ConsentReviewGeneration({ initialReviewId }: { initialReviewId: string 
 
   return (
     <div className="workspace-stack">
-      {message ? <div className={state === 'error' ? 'alert alert-danger' : 'alert alert-information'} role="status">{message}</div> : null}
+      {message ? <div className={formFailed || state === 'error' ? 'alert alert-danger' : 'alert alert-information'} role={formFailed || state === 'error' ? 'alert' : 'status'}>{message}</div> : null}
 
       <section className="card">
         <div className="section-heading">
@@ -467,41 +521,41 @@ function ConsentReviewGeneration({ initialReviewId }: { initialReviewId: string 
           <p className="muted">{revisionSource
             ? 'Create a corrected draft while preserving the selected draft as superseded audit evidence.'
             : 'Capture the purpose, collection provenance, exact wording and evidence reviewed during client vetting.'}</p>
-          <label>Organisation ID<input name="organisationId" required readOnly={Boolean(revisionSource)} defaultValue={revisionSource?.organisationId ?? ''} /></label>
-          <label>Review name<input name="name" required maxLength={250} placeholder="e.g. Festival registration consent – August 2026" defaultValue={revisionSource?.name ?? ''} /></label>
-          <label>Review scope<select name="scope" value={scope} onChange={(event) => setScope(event.target.value as ReviewScope)}>{scopes.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
-          {scope === 'SOURCE' ? <label>Source system<input name="sourceSystem" required placeholder="CRM export, website form, partner database" defaultValue={revisionSource?.sourceSystem ?? ''} /></label> : null}
-          {scope === 'CAMPAIGN' ? <label>Campaign ID<input name="campaignId" required defaultValue={revisionSource?.campaignId ?? ''} /></label> : null}
-          <label>Permitted purpose description<textarea name="purposeDescription" rows={3} required defaultValue={revisionSource?.purposeDescription ?? ''} /></label>
-          <label>Purpose code<input name="purposeCode" required placeholder="PROMOTIONAL_MESSAGING" defaultValue={revisionSource?.purposeCode ?? ''} /></label>
-          <label>Consent collection source<input name="consentSource" required placeholder="Website registration form or source system" defaultValue={revisionSource?.consentSource ?? ''} /></label>
-          <label>Collection method<input name="collectionMethod" required placeholder="Explicit checkbox, double opt-in, assisted capture" defaultValue={revisionSource?.collectionMethod ?? ''} /></label>
+          <label>Organisation ID<input name="organisationId" aria-invalid={Boolean(formErrors.organisationId)} required readOnly={Boolean(revisionSource)} defaultValue={revisionSource?.organisationId ?? ''} />{fieldFeedback("organisationId")}</label>
+          <label>Review name<input name="name" aria-invalid={Boolean(formErrors.name)} required maxLength={250} placeholder="e.g. Festival registration consent – August 2026" defaultValue={revisionSource?.name ?? ''} />{fieldFeedback("name")}</label>
+          <label>Review scope<select name="scope" aria-invalid={Boolean(formErrors.scope)} value={scope} onChange={(event) => setScope(event.target.value as ReviewScope)}>{scopes.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>{fieldFeedback("scope")}</label>
+          {scope === 'SOURCE' ? <label>Source system<input name="sourceSystem" aria-invalid={Boolean(formErrors.sourceSystem)} required placeholder="CRM export, website form, partner database" defaultValue={revisionSource?.sourceSystem ?? ''} />{fieldFeedback("sourceSystem")}</label> : null}
+          {scope === 'CAMPAIGN' ? <label>Campaign ID<input name="campaignId" aria-invalid={Boolean(formErrors.campaignId)} required defaultValue={revisionSource?.campaignId ?? ''} />{fieldFeedback("campaignId")}</label> : null}
+          <label>Permitted purpose description<textarea name="purposeDescription" aria-invalid={Boolean(formErrors.purposeDescription)} rows={3} required defaultValue={revisionSource?.purposeDescription ?? ''} />{fieldFeedback("purposeDescription")}</label>
+          <label>Purpose code<input name="purposeCode" aria-invalid={Boolean(formErrors.purposeCode)} required placeholder="PROMOTIONAL_MESSAGING" defaultValue={revisionSource?.purposeCode ?? ''} />{fieldFeedback("purposeCode")}</label>
+          <label>Consent collection source<input name="consentSource" aria-invalid={Boolean(formErrors.consentSource)} required placeholder="Website registration form or source system" defaultValue={revisionSource?.consentSource ?? ''} />{fieldFeedback("consentSource")}</label>
+          <label>Collection method<input name="collectionMethod" aria-invalid={Boolean(formErrors.collectionMethod)} required placeholder="Explicit checkbox, double opt-in, assisted capture" defaultValue={revisionSource?.collectionMethod ?? ''} />{fieldFeedback("collectionMethod")}</label>
           <div className="grid grid-2">
-            <label>Collection period from<input name="collectionPeriodFrom" type="date" defaultValue={dateInputValue(revisionSource?.collectionPeriodFrom)} /></label>
-            <label>Collection period to<input name="collectionPeriodTo" type="date" defaultValue={dateInputValue(revisionSource?.collectionPeriodTo)} /></label>
+            <label>Collection period from<input name="collectionPeriodFrom" aria-invalid={Boolean(formErrors.collectionPeriodFrom)} type="date" defaultValue={dateInputValue(revisionSource?.collectionPeriodFrom)} />{fieldFeedback("collectionPeriodFrom")}</label>
+            <label>Collection period to<input name="collectionPeriodTo" aria-invalid={Boolean(formErrors.collectionPeriodTo)} type="date" defaultValue={dateInputValue(revisionSource?.collectionPeriodTo)} />{fieldFeedback("collectionPeriodTo")}</label>
           </div>
-          <label>Controller role<input name="controllerRole" required placeholder="Data controller, joint controller or processor" defaultValue={revisionSource?.controllerRole ?? ''} /></label>
-          <label>Consent wording version<input name="wordingVersion" required defaultValue={revisionSource?.wordingVersion ?? ''} /></label>
-          <label>Exact consent wording<textarea name="exactConsentWording" rows={3} required defaultValue={revisionSource?.exactConsentWording ?? ''} /></label>
-          <label>Privacy notice version<input name="privacyNoticeVersion" required defaultValue={revisionSource?.privacyNoticeVersion ?? ''} /></label>
-          <label>Trusted evidence asset IDs<small>One clean trusted-asset ID per line.</small><textarea name="evidenceAssetIds" rows={3} placeholder="UUID per line" defaultValue={(revisionSource?.evidenceAssetIds ?? []).join('\n')} /></label>
-          <label>External evidence references<small>Optional. This is one line per evidence file, not per organisation. Add the 64-character SHA-256 checksum for that exact file, separated by |. Leave blank when using trusted evidence asset IDs.</small><textarea name="externalEvidenceReferences" rows={3} placeholder="consent-policy.pdf | 64-character SHA-256 checksum" defaultValue={evidenceReferenceText(revisionSource?.externalEvidenceReferences)} /></label>
+          <label>Controller role<input name="controllerRole" aria-invalid={Boolean(formErrors.controllerRole)} required placeholder="Data controller, joint controller or processor" defaultValue={revisionSource?.controllerRole ?? ''} />{fieldFeedback("controllerRole")}</label>
+          <label>Consent wording version<input name="wordingVersion" aria-invalid={Boolean(formErrors.wordingVersion)} required defaultValue={revisionSource?.wordingVersion ?? ''} />{fieldFeedback("wordingVersion")}</label>
+          <label>Exact consent wording<textarea name="exactConsentWording" aria-invalid={Boolean(formErrors.exactConsentWording)} rows={3} required defaultValue={revisionSource?.exactConsentWording ?? ''} />{fieldFeedback("exactConsentWording")}</label>
+          <label>Privacy notice version<input name="privacyNoticeVersion" aria-invalid={Boolean(formErrors.privacyNoticeVersion)} required defaultValue={revisionSource?.privacyNoticeVersion ?? ''} />{fieldFeedback("privacyNoticeVersion")}</label>
+          <label>Trusted evidence asset IDs<small>One clean trusted-asset ID per line.</small><textarea name="evidenceAssetIds" aria-invalid={Boolean(formErrors.evidenceAssetIds)} rows={3} placeholder="UUID per line" defaultValue={(revisionSource?.evidenceAssetIds ?? []).join('\n')} />{fieldFeedback("evidenceAssetIds")}</label>
+          <label>External evidence references<small>Optional. This is one line per evidence file, not per organisation. Add the 64-character SHA-256 checksum for that exact file, separated by |. Leave blank when using trusted evidence asset IDs.</small><textarea name="externalEvidenceReferences" aria-invalid={Boolean(formErrors.externalEvidenceReferences)} rows={3} placeholder="consent-policy.pdf | 64-character SHA-256 checksum" defaultValue={evidenceReferenceText(revisionSource?.externalEvidenceReferences)} />{fieldFeedback("externalEvidenceReferences")}</label>
           <fieldset>
             <legend>Permitted countries</legend>
             {countries.map(([code, label]) => (
               <label className="check" key={code}><input type="checkbox" name="permittedCountries" value={code} defaultChecked={revisionSource?.permittedCountries?.includes(code) ?? false} /> {label}</label>
             ))}
           </fieldset>
-          <label>Permitted message category<input name="permittedMessageCategory" required placeholder="Event promotions" defaultValue={revisionSource?.permittedMessageCategory ?? ''} /></label>
+          <label>Permitted message category<input name="permittedMessageCategory" aria-invalid={Boolean(formErrors.permittedMessageCategory)} required placeholder="Event promotions" defaultValue={revisionSource?.permittedMessageCategory ?? ''} />{fieldFeedback("permittedMessageCategory")}</label>
           <fieldset>
             <legend>Mandatory review checks</legend>
             <label className="check"><input type="checkbox" name="privacyNoticeReviewed" defaultChecked={revisionSource?.privacyNoticeReviewed ?? false} /> Privacy notice reviewed</label>
             <label className="check"><input type="checkbox" name="optOutProcessReviewed" defaultChecked={revisionSource?.optOutProcessReviewed ?? false} /> Opt-out process reviewed</label>
             <label className="check"><input type="checkbox" name="sampleRecordsReviewed" defaultChecked={revisionSource?.sampleRecordsReviewed ?? false} /> Sample consent records reviewed</label>
           </fieldset>
-          <label>Sample review notes<textarea name="sampleReviewNotes" rows={3} maxLength={2000} placeholder="Record what was checked without entering contact PII." defaultValue={revisionSource?.sampleReviewNotes ?? ''} /></label>
-          <label>Restrictions<textarea name="restrictions" rows={3} placeholder="Required for an approved-with-restrictions decision." defaultValue={revisionSource?.restrictions ?? ''} /></label>
-          {revisionSource ? <label>Revision reason<textarea name="revisionReason" rows={2} minLength={8} required placeholder="Explain what evidence or wording is being corrected." /></label> : null}
+          <label>Sample review notes<textarea name="sampleReviewNotes" aria-invalid={Boolean(formErrors.sampleReviewNotes)} rows={3} maxLength={2000} placeholder="Record what was checked without entering contact PII." defaultValue={revisionSource?.sampleReviewNotes ?? ''} />{fieldFeedback("sampleReviewNotes")}</label>
+          <label>Restrictions<textarea name="restrictions" aria-invalid={Boolean(formErrors.restrictions)} rows={3} placeholder="Required for an approved-with-restrictions decision." defaultValue={revisionSource?.restrictions ?? ''} />{fieldFeedback("restrictions")}</label>
+          {revisionSource ? <label>Revision reason<textarea name="revisionReason" aria-invalid={Boolean(formErrors.revisionReason)} rows={2} minLength={8} required placeholder="Explain what evidence or wording is being corrected." />{fieldFeedback("revisionReason")}</label> : null}
           <div className="button-row">
             <button className="primary" disabled={state === 'saving' || !canWrite}>{state === 'saving' ? 'Saving…' : revisionSource ? 'Create corrected draft' : 'Create draft review'}</button>
             {revisionSource ? <button type="button" className="secondary" disabled={state === 'saving'} onClick={() => { setRevisionSource(null); setScope('ORGANISATION'); setMessage('Draft revision cancelled.'); }}>Cancel revision</button> : null}

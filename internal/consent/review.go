@@ -102,6 +102,16 @@ type Review struct {
 	UpdatedAt                     time.Time                   `json:"updatedAt"`
 	Version                       int64                       `json:"version"`
 }
+
+// InputError identifies a safe, operator-correctable consent review field.
+// Persistence, configuration and provider errors must not be represented as input errors.
+type InputError struct {
+	Field  string
+	Reason string
+}
+
+func (e *InputError) Error() string { return e.Reason }
+
 type CreateInput struct {
 	OrganisationID                string                      `json:"organisationId"`
 	Scope                         ReviewScope                 `json:"scope"`
@@ -165,11 +175,17 @@ func NewReview(input CreateInput, now time.Time) (Review, error) {
 	input.Name = strings.TrimSpace(input.Name)
 	input.Channel = strings.ToUpper(strings.TrimSpace(input.Channel))
 	input.CreatedBy = strings.TrimSpace(input.CreatedBy)
-	if input.OrganisationID == "" || input.Name == "" || input.CreatedBy == "" {
-		return Review{}, errors.New("organisation, review name and creator are required")
+	if input.OrganisationID == "" {
+		return Review{}, &InputError{Field: "organisationId", Reason: "organisation is required"}
+	}
+	if input.Name == "" {
+		return Review{}, &InputError{Field: "name", Reason: "review name is required"}
+	}
+	if input.CreatedBy == "" {
+		return Review{}, errors.New("consent review creator is required")
 	}
 	if input.Channel != "WHATSAPP" {
-		return Review{}, errors.New("initial release supports WHATSAPP consent reviews only")
+		return Review{}, &InputError{Field: "channel", Reason: "initial release supports WHATSAPP consent reviews only"}
 	}
 	scope := input.Scope
 	if scope == "" {
@@ -178,21 +194,21 @@ func NewReview(input CreateInput, now time.Time) (Review, error) {
 	switch scope {
 	case ReviewScopeOrganisation:
 		if strings.TrimSpace(input.CampaignID) != "" {
-			return Review{}, errors.New("organisation review cannot reference a campaign")
+			return Review{}, &InputError{Field: "campaignId", Reason: "organisation review cannot reference a campaign"}
 		}
 	case ReviewScopeSource:
 		if strings.TrimSpace(input.SourceSystem) == "" {
-			return Review{}, errors.New("source review requires sourceSystem")
+			return Review{}, &InputError{Field: "sourceSystem", Reason: "source review requires sourceSystem"}
 		}
 	case ReviewScopeCampaign:
 		if strings.TrimSpace(input.CampaignID) == "" {
-			return Review{}, errors.New("campaign review requires campaignId")
+			return Review{}, &InputError{Field: "campaignId", Reason: "campaign review requires campaignId"}
 		}
 	default:
-		return Review{}, errors.New("invalid consent-review scope")
+		return Review{}, &InputError{Field: "scope", Reason: "invalid consent-review scope"}
 	}
 	if input.CollectionPeriodFrom != nil && input.CollectionPeriodTo != nil && input.CollectionPeriodTo.Before(*input.CollectionPeriodFrom) {
-		return Review{}, errors.New("collection period end precedes start")
+		return Review{}, &InputError{Field: "collectionPeriodTo", Reason: "collection period end precedes start"}
 	}
 	externalEvidence, err := normalizeExternalEvidence(input.ExternalEvidenceReferences)
 	if err != nil {
@@ -316,10 +332,10 @@ func normalizeExternalEvidence(values []ExternalEvidenceReference) ([]ExternalEv
 			continue
 		}
 		if reference == "" || len(reference) > 1000 || strings.ContainsAny(reference, "\r\n\x00") {
-			return nil, errors.New("external evidence reference is invalid")
+			return nil, &InputError{Field: "externalEvidenceReferences", Reason: "external evidence reference is invalid"}
 		}
 		if !sha256Pattern.MatchString(checksum) {
-			return nil, errors.New("external evidence reference requires a lowercase SHA-256 checksum")
+			return nil, &InputError{Field: "externalEvidenceReferences", Reason: "external evidence reference requires a lowercase SHA-256 checksum"}
 		}
 		key := reference + "\x00" + checksum
 		if _, exists := seen[key]; exists {
@@ -340,10 +356,10 @@ func normalizeExternalEvidence(values []ExternalEvidenceReference) ([]ExternalEv
 func normalizeSampleReviewNotes(value string) (string, error) {
 	value = strings.TrimSpace(value)
 	if len(value) > 2000 {
-		return "", errors.New("sample review notes exceed 2000 characters")
+		return "", &InputError{Field: "sampleReviewNotes", Reason: "sample review notes exceed 2000 characters"}
 	}
 	if potentialEmailPII.MatchString(value) || potentialPhonePII.MatchString(value) {
-		return "", errors.New("sample review notes must not contain email addresses or telephone numbers")
+		return "", &InputError{Field: "sampleReviewNotes", Reason: "sample review notes must not contain email addresses or telephone numbers"}
 	}
 	return value, nil
 }
@@ -544,7 +560,7 @@ func (s *Service) CreateRevision(ctx context.Context, previousID string, expecte
 	}
 	reason := strings.TrimSpace(input.RevisionReason)
 	if len(reason) < 8 {
-		return Review{}, errors.New("a meaningful revision reason is required")
+		return Review{}, &InputError{Field: "revisionReason", Reason: "a meaningful revision reason is required"}
 	}
 	previous.Status = StatusSuperseded
 	previous.SupersededByID = replacement.ID

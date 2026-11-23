@@ -1060,7 +1060,10 @@ paths:
             schema: { $ref: '#/components/schemas/CreateConsentReview' }
       responses:
         '201': { description: Consent review created in DRAFT state }
+        '409': { description: Organisation inactive, trusted evidence not clean or review conflict }
         '422': { $ref: '#/components/responses/ValidationError' }
+        '500': { description: Internal persistence/service failure; no raw database errors returned }
+        # 422 validation details.fields maps safe input field names to operator guidance.
   /consent-reviews/{id}:
     get:
       operationId: getConsentReview

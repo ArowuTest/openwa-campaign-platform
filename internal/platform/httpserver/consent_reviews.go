@@ -7,8 +7,60 @@ import (
 
 	"campaign-platform/internal/consent"
 	"campaign-platform/internal/identity"
+	"campaign-platform/internal/organisation"
 	"campaign-platform/internal/shared/httpx"
+	"campaign-platform/internal/shared/id"
+	"campaign-platform/internal/storage"
 )
+
+// validateConsentReviewReferences rejects malformed identifiers before SQL casts
+// and avoids exposing PostgreSQL errors as operator validation messages.
+func validateConsentReviewReferences(input consent.CreateInput, requireOrganisation bool) *consent.InputError {
+	if requireOrganisation && !id.IsUUID(input.OrganisationID) {
+		return &consent.InputError{Field: "organisationId", Reason: "organisation ID must be a valid UUID"}
+	}
+	if input.Scope == consent.ReviewScopeCampaign && !id.IsUUID(input.CampaignID) {
+		return &consent.InputError{Field: "campaignId", Reason: "campaign ID must be a valid UUID"}
+	}
+	for _, assetID := range input.EvidenceAssetIDs {
+		if !id.IsUUID(assetID) {
+			return &consent.InputError{Field: "evidenceAssetIds", Reason: "each trusted evidence asset ID must be a valid UUID"}
+		}
+	}
+	return nil
+}
+
+// writeConsentCreationError exposes ONLY allowlisted, typed validation errors.
+// All repository, network, and unexpected failures follow the safe internal error path.
+func (s *Server) writeConsentCreationError(w http.ResponseWriter, r *http.Request, err error) {
+	var inputError *consent.InputError
+	switch {
+	case errors.As(err, &inputError):
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "CONSENT_REVIEW_INVALID",
+			"Correct the indicated consent review field.", map[string]any{"fields": map[string]string{inputError.Field: inputError.Reason}})
+	case errors.Is(err, organisation.ErrNotActive):
+		httpx.WriteError(w, r, http.StatusConflict, "ORGANISATION_NOT_ACTIVE",
+			"The selected organisation must be active before creating a consent review.",
+			map[string]any{"fields": map[string]string{"organisationId": "Select an active organisation."}})
+	case errors.Is(err, organisation.ErrNotFound):
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "ORGANISATION_NOT_FOUND",
+			"The selected organisation was not found.",
+			map[string]any{"fields": map[string]string{"organisationId": "Select an existing organisation."}})
+	case errors.Is(err, storage.ErrAssetNotFound):
+		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "CONSENT_EVIDENCE_NOT_FOUND",
+			"The selected trusted consent evidence asset was not found.",
+			map[string]any{"fields": map[string]string{"evidenceAssetIds": "Use an existing trusted evidence asset ID, or leave it blank to save a draft."}})
+	case errors.Is(err, storage.ErrAssetNotClean):
+		httpx.WriteError(w, r, http.StatusConflict, "CONSENT_EVIDENCE_NOT_CLEAN",
+			"Trusted consent evidence must pass malware scanning before use.",
+			map[string]any{"fields": map[string]string{"evidenceAssetIds": "Choose an asset with a CLEAN scan status."}})
+	case errors.Is(err, consent.ErrDuplicate):
+		httpx.WriteError(w, r, http.StatusConflict, "CONSENT_REVIEW_CONFLICT",
+			"A matching consent review already exists.", nil)
+	default:
+		s.internalError(w, r, err)
+	}
+}
 
 func (s *Server) getConsentReview(w http.ResponseWriter, r *http.Request) {
 	entity, err := s.deps.ConsentReviews.Get(r.Context(), r.PathValue("id"))
@@ -67,6 +119,10 @@ func (s *Server) createConsentReviewRevision(w http.ResponseWriter, r *http.Requ
 	request.Review.CreatedBy = principal.User.ID
 	request.Review.ParentReviewID = r.PathValue("id")
 	request.Review.RevisionReason = request.Reason
+	if issue := validateConsentReviewReferences(request.Review, false); issue != nil {
+		s.writeConsentCreationError(w, r, issue)
+		return
+	}
 	entity, err := s.deps.ConsentReviews.CreateRevision(r.Context(), r.PathValue("id"), request.ExpectedVersion, request.Review)
 	if errors.Is(err, consent.ErrNotFound) {
 		httpx.WriteError(w, r, http.StatusNotFound, "CONSENT_REVIEW_NOT_FOUND", "The consent review was not found.", nil)
@@ -77,7 +133,7 @@ func (s *Server) createConsentReviewRevision(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	if err != nil {
-		httpx.WriteError(w, r, http.StatusUnprocessableEntity, "CONSENT_REVISION_INVALID", "The consent-review revision was rejected.", map[string]any{"detail": err.Error()})
+		s.writeConsentCreationError(w, r, err)
 		return
 	}
 	httpx.WriteJSON(w, http.StatusCreated, entity)
